@@ -1,0 +1,29 @@
+{
+  "first_run": {
+    "rank": 4,
+    "alpha": 8,
+    "dropout": 0.05,
+    "target_modules": ["q_proj", "v_proj"],
+    "learning_rate": 0.0001,
+    "batch_size": 4,
+    "context_length": 256,
+    "steps": 500
+  },
+  "more_capacity": {
+    "rank": 8,
+    "alpha": 16,
+    "dropout": 0.05,
+    "target_modules": ["q_proj", "v_proj", "o_proj"],
+    "learning_rate": 0.0001,
+    "batch_size": 4,
+    "context_length": 256,
+    "steps": 1000
+  },
+  "_notes": {
+    "scale": "lora contribution is scaled by alpha / rank",
+    "init": "A = small random values, B = zeros, so step 0 == base model",
+    "base_model": "use a custom 5M-15M param base trained outside the browser, loaded frozen",
+    "target_expansion_order": "q_proj,v_proj -> add k_proj,o_proj -> maybe mlp_up,mlp_down",
+    "do_not": "do not LoRA every module on day one; overfits faster, harder to debug"
+  }
+}

@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node / browser build
+node_modules/
+dist/
+.vite/
+
+# WASM build artifacts
+*.wasm
+*.wasm.map
+wasm/build/
+dist/tinygpt.js
+dist/tinygpt.simd.js
+
+# Checkpoints & weights (large binary; keep checkpoints/README.md)
+checkpoints/*
+!checkpoints/README.md
+*.f32
+*.bin
+*.pt
+*.ckpt
+
+# Datasets (keep examples/ and READMEs; ignore bulk corpora)
+data/raw/
+data/*.txt
+data/*.jsonl
+!data/examples/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

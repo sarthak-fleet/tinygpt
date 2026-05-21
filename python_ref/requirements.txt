@@ -1,0 +1,4 @@
+# Phase 1-3 — Python reference dependencies.
+# Install into a virtualenv:  python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+torch>=2.2
+numpy>=1.26

@@ -1,0 +1,20 @@
+{
+  "batch_size": 16,
+  "learning_rate": 0.0003,
+  "optimizer": "adamw",
+  "betas": [0.9, 0.95],
+  "eps": 1e-8,
+  "weight_decay": 0.1,
+  "grad_clip": 1.0,
+  "max_steps": 10000,
+  "eval_interval": 100,
+  "sample_interval": 500,
+  "checkpoint_interval": 500,
+  "seed": 42,
+  "_notes": {
+    "initial_loss": "random model loss should sit near ln(256) ~= 5.54",
+    "if_unstable": "lower learning_rate 0.0003 -> 0.0001",
+    "if_too_slow_on_tiny_data": "raise learning_rate 0.0003 -> 0.001, only after verifying gradients",
+    "nan_loss_causes": "learning rate, softmax, gradient explosion, bad init"
+  }
+}

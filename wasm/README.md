@@ -1,0 +1,36 @@
+# wasm/ — Phase 4
+
+C++ tensor ops compiled to WebAssembly with Emscripten. This is the CPU backend
+for browser training — build it correct before touching WebGPU.
+
+## Files
+
+| File               | Kernel |
+| ------------------ | ------ |
+| `src/tensor.cpp`      | Flat float32 tensor type + allocation helpers |
+| `src/matmul.cpp`      | Matrix multiply, forward + backward |
+| `src/layernorm.cpp`   | LayerNorm, forward + backward |
+| `src/attention.cpp`   | Causal multi-head self-attention |
+| `src/adamw.cpp`       | AdamW optimizer step |
+
+No general autograd — each kernel implements its own forward and backward.
+
+## Build
+
+Baseline:
+
+```bash
+emcc src/*.cpp -O3 -s MODULARIZE=1 -s EXPORT_ES6=1 -s ALLOW_MEMORY_GROWTH=1 \
+  -o dist/tinygpt.js
+```
+
+SIMD (verify it matches the scalar build first):
+
+```bash
+emcc src/*.cpp -O3 -msimd128 -s MODULARIZE=1 -s EXPORT_ES6=1 -s ALLOW_MEMORY_GROWTH=1 \
+  -o dist/tinygpt.simd.js
+```
+
+## Status
+
+Documented stubs only. Requires the Emscripten SDK. See `../docs/browser_notes.md`.

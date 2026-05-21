@@ -1,0 +1,19 @@
+{
+  "model_name": "byte-tinygpt-v0",
+  "vocab_size": 256,
+  "context_length": 128,
+  "n_layers": 4,
+  "n_heads": 4,
+  "d_model": 128,
+  "d_mlp": 512,
+  "dropout": 0.0,
+  "tie_embeddings": true,
+  "dtype": "float32",
+  "_notes": {
+    "expected_params": "~0.8M",
+    "tokenizer": "byte-level, 1 byte = 1 token, vocab fixed at 256",
+    "architecture": "pre-LayerNorm transformer; MLP is d_model -> 4*d_model -> d_model",
+    "head_dim": "d_model / n_heads = 32",
+    "goal": "correctness first, not impressive output"
+  }
+}
