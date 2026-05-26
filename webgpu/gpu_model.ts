@@ -47,6 +47,11 @@ interface Layer {
 interface LayerCache {
   blockIn: GpuTensor; ln1o: GpuTensor; m1: GpuTensor; r1s: GpuTensor;
   q: GpuTensor; k: GpuTensor; v: GpuTensor; attn: GpuTensor; ctx: GpuTensor;
+  /** Log-sum-exp from FA2 forward, when that path runs (hd ≤ 64). The FA2
+   * backward kernels reconstruct P = exp(S − L) from q/k/L instead of
+   * reading the attn matrix; if null, backward uses the legacy attn-cached
+   * kernels. */
+  L: GpuTensor | null;
   r1: GpuTensor; ln2o: GpuTensor; m2: GpuTensor; r2s: GpuTensor;
   hpre: GpuTensor; hact: GpuTensor;
 }
@@ -200,6 +205,7 @@ export class GpuModel {
       const v = this.linear(ln1.y, ly.wv, ly.bv, N, C, C);
       const att = this.ops.attentionForward(q, k, v, batch, T, C, H);
       this.keep(att.attn); this.keep(att.ctx);
+      if (att.L) this.keep(att.L);
       const ao = this.linear(att.ctx, ly.wo, ly.bo, N, C, C);
       const r1 = this.keep(this.ops.add(blockIn, ao, N * C));
       const ln2 = this.ops.layernormForward(r1, ly.ln2g.w, ly.ln2b.w, N, C);
@@ -210,7 +216,7 @@ export class GpuModel {
       const r2 = this.keep(this.ops.add(r1, mo, N * C));
       caches.push({
         blockIn, ln1o: ln1.y, m1: ln1.mean, r1s: ln1.rstd, q, k, v,
-        attn: att.attn, ctx: att.ctx, r1, ln2o: ln2.y, m2: ln2.mean,
+        attn: att.attn, ctx: att.ctx, L: att.L, r1, ln2o: ln2.y, m2: ln2.mean,
         r2s: ln2.rstd, hpre, hact,
       });
       x = r2;
@@ -383,7 +389,7 @@ export class GpuModel {
       // r1 = blockIn + ao
       const dao = dr1, dBlockA = dr1;
       const dctx = this.linearBackward(c.ctx, ly.wo, dao, N, C, C, grads, ly.wo, ly.bo);
-      const attBack = this.ops.attentionBackward(c.q, c.k, c.v, c.attn, dctx, batch, T, C, H);
+      const attBack = this.ops.attentionBackward(c.q, c.k, c.v, c.attn, dctx, batch, T, C, H, c.L);
       this.keep(attBack.dq); this.keep(attBack.dk); this.keep(attBack.dv);
       const dx1 = this.linearBackward(c.ln1o, ly.wq, attBack.dq, N, C, C, grads, ly.wq, ly.bq);
       const dx2 = this.linearBackward(c.ln1o, ly.wk, attBack.dk, N, C, C, grads, ly.wk, ly.bk);
