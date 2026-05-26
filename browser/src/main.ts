@@ -206,6 +206,115 @@ let firstRunCelebrated = (() => {
   try { return localStorage.getItem("tinygpt.firstRunCelebrated") === "1"; } catch { return false; }
 })();
 
+/**
+ * Render a post-run "verdict" — what happened + a concrete "do better next
+ * time" suggestion. Goal: the user never has to leave the playground to
+ * figure out *why* the output was bad.
+ */
+function renderRunVerdict(finished: boolean): void {
+  const verdict = document.getElementById("runVerdict");
+  if (!verdict) return;
+  if (!finished || history.length === 0) {
+    verdict.hidden = true;
+    return;
+  }
+
+  const final = history[history.length - 1];
+  const trainLoss = final.trainLoss;
+  const valLoss = final.valLoss;
+  const cfg = readConfig();
+  const params = estimateParams(cfg.layers, cfg.dModel, cfg.ctx);
+  const corpusBytes = els.corpus.value.length;
+  const bytesPerParamSeen = (corpusBytes * 6) / Math.max(params, 1);
+  const valGap = valLoss != null ? valLoss - trainLoss : null;
+
+  // Headline interpretation of the achieved loss.
+  let headline: string;
+  if (trainLoss > 4.0) headline = "Barely moved from random.";
+  else if (trainLoss > 3.0) headline = "Letter pairs learned, no words yet.";
+  else if (trainLoss > 2.3) headline = "Common short words emerging, no grammar.";
+  else if (trainLoss > 1.7) headline = "Word shapes formed, local grammar rough.";
+  else if (trainLoss > 1.2) headline = "Local grammar visible. Generation will read.";
+  else if (trainLoss > 0.8) headline = "Substantial memorisation of the corpus.";
+  else headline = "Near-perfect memorisation.";
+
+  // Pick the single most actionable improvement.
+  const actions: Array<{ label: string; apply: () => void }> = [];
+  let why = "";
+
+  if (trainLoss > 1.8 && bytesPerParamSeen < 5) {
+    why = `Your model has ~${Math.round(params / 1e3)}k params but only saw ~${bytesPerParamSeen.toFixed(1)} bytes per parameter (Chinchilla floor is ~20). The data can't fill the capacity.`;
+    actions.push({
+      label: "Load Tiny Shakespeare (1 MB)",
+      apply: () => {
+        switchTab("url");
+        els.urlInput.value = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt";
+        els.urlLoad.click();
+      },
+    });
+  } else if (trainLoss > 2.3 && cfg.maxSteps < 3000) {
+    why = `${cfg.maxSteps} steps is undertrained for this model. Loss is still falling — give it more.`;
+    actions.push({
+      label: "Continue +2000 steps",
+      apply: () => {
+        els.continueSteps.value = "2000";
+        els.continueBtn.click();
+      },
+    });
+  } else if (valGap != null && valGap > 0.8 && trainLoss < 1.5) {
+    why = `Train loss is ${trainLoss.toFixed(2)} but val is ${valLoss!.toFixed(2)} — you're memorising the training text, not learning patterns. Smaller model or bigger corpus.`;
+    actions.push({
+      label: "Switch to a smaller preset",
+      apply: () => {
+        els.sizePreset.value = "small";
+        els.sizePreset.dispatchEvent(new Event("change"));
+      },
+    });
+  } else if (trainLoss > 2.0 && params < 1_000_000) {
+    why = `${formatParams(params)} params is narrow for the data you have. A bigger model would chew through more of it.`;
+    actions.push({
+      label: "Try Medium preset",
+      apply: () => {
+        els.sizePreset.value = "medium";
+        els.sizePreset.dispatchEvent(new Event("change"));
+      },
+    });
+  } else if (trainLoss < 1.5) {
+    why = `Train loss ${trainLoss.toFixed(2)} is the sweet spot for this size. Generate now — output should look word-shaped.`;
+    actions.push({
+      label: "Generate text →",
+      apply: () => {
+        els.sample.scrollIntoView({ behavior: "smooth", block: "center" });
+        els.sample.click();
+      },
+    });
+  } else {
+    why = `Loss ${trainLoss.toFixed(2)} is "${headline.toLowerCase()}" Try continuing or switching dataset.`;
+    actions.push({
+      label: "Continue +1000 steps",
+      apply: () => {
+        els.continueSteps.value = "1000";
+        els.continueBtn.click();
+      },
+    });
+  }
+
+  const actionHtml = actions
+    .map((_, i) => `<button class="verdict-cta" data-action-idx="${i}">${actions[i].label}</button>`)
+    .join("");
+
+  verdict.innerHTML =
+    `<strong>${headline}</strong> ${why}` +
+    (actionHtml ? `<div class="verdict-actions">${actionHtml}</div>` : "");
+  verdict.hidden = false;
+  verdict.querySelectorAll<HTMLButtonElement>(".verdict-cta").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.dataset.actionIdx || "0", 10);
+      actions[idx]?.apply();
+    });
+  });
+}
+
 function showFirstRunCelebration(): void {
   const final = history[history.length - 1];
   const lossStr = final ? final.trainLoss.toFixed(2) : "?";
@@ -363,10 +472,40 @@ els.start.addEventListener("click", () => {
     setStatus("corpus is very short — add more text", true);
     return;
   }
-  // For the big GPU-only presets, get an explicit confirm — these are
-  // genuinely long runs and we don't want surprise 40-minute commitments.
   const cfg = readConfig();
   const estParams = estimateParams(cfg.layers, cfg.dModel, cfg.ctx);
+  const corpusBytes = text.length;
+  const bytesPerParamSeen = (corpusBytes * 6) / Math.max(estParams, 1);
+
+  // Pre-flight warning when the config is going to disappoint. Catch the
+  // most common mistakes before they cost 20 minutes of compute:
+  //   - data-starved (way more params than bytes can fill)
+  //   - undertrained (big model + low step budget)
+  const warnings: string[] = [];
+  if (bytesPerParamSeen < 5 && estParams > 500_000) {
+    warnings.push(
+      `Your corpus has only ~${bytesPerParamSeen.toFixed(1)} bytes per parameter ` +
+      `(Chinchilla floor is ~20). The model will plateau early; output will be ` +
+      `letter-level, not word-level. Pick a bigger dataset (TinyStories, ` +
+      `Tiny Shakespeare, Wikipedia topic) before running.`,
+    );
+  }
+  if (estParams > 5_000_000 && cfg.maxSteps < 2000) {
+    warnings.push(
+      `${(estParams / 1e6).toFixed(0)}M-param models typically need 3000+ steps to converge. ` +
+      `${cfg.maxSteps} steps will leave it undertrained — loss will look stuck.`,
+    );
+  }
+  if (warnings.length > 0) {
+    const ok = window.confirm(
+      "⚠ Heads up — this config is likely to produce poor output:\n\n" +
+      warnings.map((w, i) => `${i + 1}. ${w}`).join("\n\n") +
+      "\n\nRun anyway?",
+    );
+    if (!ok) return;
+  }
+
+  // For the big presets, also confirm the time cost.
   if (estParams > 5_000_000) {
     const minutes = estimateTrainSeconds(
       cfg.layers, cfg.dModel, cfg.ctx, cfg.batchSize, cfg.maxSteps, cachedCpuProbeMs,
@@ -398,6 +537,11 @@ els.start.addEventListener("click", () => {
   els.stGap.textContent = "–";
   els.stElapsed.textContent = "0.0 s";
   clearMilestone();
+  // Hide any previous run's verdict + reset the time-left label
+  const verdict = document.getElementById("runVerdict");
+  if (verdict) verdict.hidden = true;
+  const timeLabel = document.getElementById("stTimeLabel");
+  if (timeLabel) timeLabel.textContent = "Time left";
   startElapsedClock();
   savedThisRun = false;
   paused = false;
@@ -1673,21 +1817,31 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
     case "restored":
       els.sample.disabled = false;
       break;
-    case "done":
+    case "done": {
       setRunning(false);
       stopElapsedClock();
-      els.stElapsed.textContent = formatElapsed((performance.now() - runStartTime) / 1000);
-      els.stEta.textContent = msg.reason === "finished" ? "done" : "–";
+      const totalSec = (performance.now() - runStartTime) / 1000;
+      const elapsedStr = formatElapsed(totalSec);
+      els.stElapsed.textContent = elapsedStr;
+      // Swap the "Time left" stat to "Trained in" once the run completes —
+      // the elapsed time is the question every user asks after the run.
+      const timeLabel = document.getElementById("stTimeLabel");
       if (msg.reason === "finished") {
         setProgress(1, 1);
-        // First-completed-run dopamine — show a small celebratory toast and
-        // nudge the user toward the Generate button so the loop closes.
+        if (timeLabel) timeLabel.textContent = "Trained in";
+        els.stEta.textContent = elapsedStr;
         if (!firstRunCelebrated) {
           firstRunCelebrated = true;
           try { localStorage.setItem("tinygpt.firstRunCelebrated", "1"); } catch {}
           showFirstRunCelebration();
         }
+      } else {
+        els.stEta.textContent = "–";
+        if (timeLabel) timeLabel.textContent = "Time left";
       }
+      // Show the post-run verdict — concrete interpretation of the final loss
+      // right next to the stats so the user knows what they're looking at.
+      renderRunVerdict(msg.reason === "finished");
       {
         const doneMsg =
           msg.reason !== "finished"
@@ -1699,6 +1853,7 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
         if (msg.reason === "finished") fireDoneNotification(doneMsg);
       }
       break;
+    }
     case "error":
       setRunning(false);
       setStatus(`error: ${msg.message}`, true);

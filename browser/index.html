@@ -1012,20 +1012,27 @@
         .hero-loss canvas#chart { height: 240px; }
       }
 
-      /* Primary stats — 3 big tabular numbers under the chart */
+      /* Primary stats — 4 big tabular numbers under the chart */
       .stats-primary {
         display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
+        grid-template-columns: repeat(4, 1fr);
         gap: 0;
         margin-top: 22px;
         border-top: 1px solid var(--line);
       }
+      @media (max-width: 720px) {
+        .stats-primary { grid-template-columns: 1fr 1fr; }
+        .stat-big:nth-child(2) { border-right: none; }
+        .stat-big:nth-child(1), .stat-big:nth-child(2) { border-bottom: 1px solid var(--line); }
+      }
       .stat-big {
-        padding: 16px 0 14px;
+        padding: 16px 18px 14px 0;
         border-right: 1px solid var(--line);
         text-align: left;
+        min-width: 0;
       }
-      .stat-big:last-child { border-right: none; }
+      .stat-big:not(:first-child) { padding-left: 18px; }
+      .stat-big:last-child { border-right: none; padding-right: 0; }
       .stat-big-label {
         display: block;
         font: 500 10.5px/1 var(--font-mono);
@@ -1036,12 +1043,40 @@
       }
       .stat-big-value {
         display: block;
-        font: 500 32px/1 var(--font-mono);
+        font: 500 26px/1.1 var(--font-mono);
         color: var(--fg);
         font-variant-numeric: tabular-nums;
-        letter-spacing: -0.025em;
+        letter-spacing: -0.02em;
+        overflow: hidden; text-overflow: ellipsis;
       }
       .stat-big-value.flash { color: var(--accent); transition: color 0.25s ease; }
+
+      /* Post-run verdict — interpretation + one-click "do better next time" */
+      .run-verdict {
+        margin-top: 16px;
+        padding: 14px 18px;
+        background: var(--panel-2);
+        border-left: 2px solid var(--accent);
+        border-radius: 0 8px 8px 0;
+        color: var(--muted);
+        font: 400 13.5px/1.6 var(--font-sans);
+        animation: rise-in 0.4s var(--ease-out-expo);
+      }
+      .run-verdict[hidden] { display: none; }
+      .run-verdict strong { color: var(--fg); font-weight: 500; }
+      .run-verdict em { color: var(--accent); font-style: normal; }
+      .verdict-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      .verdict-cta {
+        padding: 8px 14px;
+        background: var(--accent);
+        color: #062019;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        font: 600 12.5px/1 var(--font-sans);
+        cursor: pointer;
+        transition: background 0.15s ease;
+      }
+      .verdict-cta:hover { background: #5cf0d0; }
 
       /* "More metrics" disclosure under the primary three */
       .stats-more {
@@ -2295,15 +2330,19 @@ The goal here is understanding, not a clever model. If you build it yourself, by
               <span class="stat-big-value" id="stTrain">–</span>
             </div>
             <div class="stat-big">
-              <span class="stat-big-label">Time left</span>
+              <span class="stat-big-label" id="stTimeLabel">Time left</span>
               <span class="stat-big-value" id="stEta">–</span>
             </div>
+            <div class="stat-big">
+              <span class="stat-big-label">Elapsed</span>
+              <span class="stat-big-value" id="stElapsed">–</span>
+            </div>
           </div>
+          <div id="runVerdict" class="run-verdict" hidden></div>
           <details class="stats-more">
             <summary><span class="more-label">More metrics</span><span class="more-chev" aria-hidden="true">▸</span></summary>
             <div class="stats stats-secondary">
               <div class="stat"><span class="k">Perplexity<button class="info" data-explain="perplexity">?</button></span><span class="v" id="stPpl">–</span></div>
-              <div class="stat"><span class="k">Elapsed<button class="info" data-explain="elapsed">?</button></span><span class="v" id="stElapsed">–</span></div>
               <div class="stat"><span class="k">Holdout error<button class="info" data-explain="valLoss">?</button></span><span class="v" id="stVal">–</span></div>
               <div class="stat"><span class="k">Best holdout<button class="info" data-explain="bestVal">?</button></span><span class="v" id="stBestVal">–</span></div>
               <div class="stat"><span class="k">Bytes / sec<button class="info" data-explain="tokensPerSec">?</button></span><span class="v" id="stToks">0</span></div>
