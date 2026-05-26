@@ -28,13 +28,41 @@ interface ModuleOpts {
 type Factory = (opts?: ModuleOpts) => Promise<WasmModule>;
 
 /**
- * Where the compiled module is served from (see wasm/build_wasm.sh output).
+ * Where the compiled module is served from (see wasm/build_wasm.sh /
+ * build_wasm64.sh output). We ship two builds:
+ *
+ *   tinygpt64.{js,wasm}  — Memory64 build, 64-bit pointers, heap > 4 GB.
+ *                         Chromium 133+, Firefox 134+. Used by default since
+ *                         we're targeting Chromium-only.
+ *   tinygpt.{js,wasm}    — 32-bit fallback, capped at 4 GB heap (~250M params
+ *                         fp32). Kept as a static-safety net.
+ *
+ * Memory64 detection: WebAssembly.Memory accepts `address: "i64"` only on
+ * runtimes that support it. We probe once and cache.
+ *
  * Files in /public can't be imported from source code under Vite 5+, so we
- * fetch the module text and import it via a blob URL. `locateFile` then tells
- * Emscripten where to find tinygpt.wasm regardless of import.meta.url.
+ * fetch the module text and import it via a blob URL. `locateFile` tells
+ * Emscripten where to find the .wasm regardless of import.meta.url.
  */
-const JS_URL = "/tinygpt.js";
-const WASM_URL = "/tinygpt.wasm";
+const JS_URL_64 = "/tinygpt64.js";
+const WASM_URL_64 = "/tinygpt64.wasm";
+const JS_URL_32 = "/tinygpt.js";
+const WASM_URL_32 = "/tinygpt.wasm";
+
+function supportsMemory64(): boolean {
+  try {
+    // Probe: instantiate a 1-page Memory64 — throws on runtimes without support.
+    new WebAssembly.Memory({ initial: 1, maximum: 1, shared: false, address: "i64" } as WebAssembly.MemoryDescriptor);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const MEM64 = supportsMemory64();
+const JS_URL = MEM64 ? JS_URL_64 : JS_URL_32;
+const WASM_URL = MEM64 ? WASM_URL_64 : WASM_URL_32;
+export const usingMemory64 = MEM64;
 
 let factoryPromise: Promise<Factory> | undefined;
 async function loadFactory(): Promise<Factory> {
@@ -79,7 +107,7 @@ export class TinyGptBackend {
   static async load(): Promise<TinyGptBackend> {
     const factory = await loadFactory();
     const m = await factory({
-      locateFile: (p) => (p === "tinygpt.wasm" ? WASM_URL : p),
+      locateFile: (p) => (p.endsWith(".wasm") ? WASM_URL : p),
       mainScriptUrlOrBlob: JS_URL,
     });
     const N = "number";
@@ -99,11 +127,18 @@ export class TinyGptBackend {
     });
   }
 
+  /** Coerce a Number|BigInt pointer to Number. Memory64 builds (-sWASM_BIGINT)
+   * return BigInt from raw exports like _malloc; cwrap'd functions already
+   * convert. We never expect pointers beyond Number.MAX_SAFE_INTEGER. */
+  private p(x: number | bigint): number {
+    return typeof x === "bigint" ? Number(x) : x;
+  }
+
   /** Raw C = A @ B via the WASM matmul kernel — the WebGPU parity reference. */
   matmul(a: Float32Array, b: Float32Array, M: number, K: number, N: number): Float32Array {
-    const aPtr = this.m._malloc(M * K * 4);
-    const bPtr = this.m._malloc(K * N * 4);
-    const cPtr = this.m._malloc(M * N * 4);
+    const aPtr = this.p(this.m._malloc(M * K * 4));
+    const bPtr = this.p(this.m._malloc(K * N * 4));
+    const cPtr = this.p(this.m._malloc(M * N * 4));
     try {
       this.m.HEAPF32.set(a, aPtr >> 2);
       this.m.HEAPF32.set(b, bPtr >> 2);
@@ -118,7 +153,7 @@ export class TinyGptBackend {
 
   /** Copy a byte buffer into the WASM heap; returns a pointer to free later. */
   private push(bytes: Uint8Array): number {
-    const ptr = this.m._malloc(Math.max(1, bytes.length));
+    const ptr = this.p(this.m._malloc(Math.max(1, bytes.length)));
     this.m.HEAPU8.set(bytes, ptr);
     return ptr;
   }
@@ -196,7 +231,7 @@ export class TinyGptModel {
     seed: number,
   ): Uint8Array {
     const promptPtr = this.push(prompt);
-    const outPtr = this.m._malloc(Math.max(1, maxNew));
+    const outPtr = Number(this.m._malloc(Math.max(1, maxNew)));
     try {
       const n = this.fns.generate(
         this.handle, promptPtr, prompt.length, outPtr, maxNew, temperature,
@@ -212,7 +247,7 @@ export class TinyGptModel {
   /** Serialise weights + AdamW moments + step for checkpointing. */
   exportState(): Uint8Array {
     const bytes = this.fns.stateBytes(this.handle);
-    const ptr = this.m._malloc(bytes);
+    const ptr = Number(this.m._malloc(bytes));
     try {
       this.fns.exportState(this.handle, ptr);
       return this.m.HEAPU8.slice(ptr, ptr + bytes);
