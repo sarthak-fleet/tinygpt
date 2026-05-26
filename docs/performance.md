@@ -108,3 +108,88 @@ headless CI can do. On a real GPU the matmul-heavy work parallelizes hard;
 whether end-to-end training beats WASM depends on how much the small
 elementwise kernels' dispatch overhead costs. That number is genuinely unknown
 until run on hardware — this doc will not guess it.
+
+### Real-device benchmark protocol
+
+A reproducible, copy-pasteable recipe for posting a hardware datapoint. The
+goal is one number — steady-state tokens/sec — that another contributor can
+reproduce on the same machine.
+
+**Prerequisites.** Open the live app at
+[tinygpt.sarthakagrawal.dev](https://tinygpt.sarthakagrawal.dev) (or run
+`cd browser && npm run dev` locally after `bash wasm/build_wasm.sh`). Use a
+desktop Chrome 113+ / Edge 113+ / Safari 18+ build. The app probes the WebGPU
+adapter on load and displays its vendor/device name; check that the displayed
+name is not `swiftshader` / `SwiftShader`. If it is, you are on the software
+path and the number is meaningless (see "Verifying the adapter" below).
+
+**Fixed config** (so numbers compare across machines and across runs):
+
+| Setting       | Value                                                            |
+| ------------- | ---------------------------------------------------------------- |
+| Preset        | `Large (~2.7M params)` — the first preset whose own note says "switch to WebGPU if your browser supports it" |
+| Backend       | WebGPU (then repeat: WASM)                                       |
+| Other knobs   | leave at preset defaults (layers 6, d_model 192, ctx 128, batch 12, 600 steps) |
+| Dataset       | Built-in `tiny-corpus.txt`                                       |
+| Seed          | default (leave unchanged)                                        |
+
+**Steps.**
+
+1. Quit other GPU-heavy apps (Chrome tabs running WebGL, video calls, screen
+   recorders). Plug the laptop in — battery-saver throttles the GPU.
+2. Load the page, scroll to the run-config card. Pick the **Large** preset
+   and set the backend to **WebGPU**. Leave the other knobs at the preset
+   defaults.
+3. Click **Start**. The first ~10 steps include shader compilation and buffer
+   allocation — ignore the initial tokens/sec reading.
+4. Once the step counter passes ~50, the live tokens/sec reading in the
+   sticky stats bar at the top of the page has stabilised. Let it run for
+   another ~150 steps (so you're reading steady-state numbers, not warm-up),
+   then record the tokens/sec value. You can hit **Stop** at that point — no
+   need to run the full 600 steps just for the bench number.
+5. Switch the backend toggle to **WASM**, reload (so buffers are fresh), pick
+   the same preset, click **Start** again, and repeat the measurement.
+6. Repeat the whole pair once more from a fresh page load and average. (One
+   run is enough to be useful; two confirms the number isn't noise.)
+
+**Verifying the adapter.** In the same browser, open `chrome://gpu` (Chrome /
+Edge) or the Safari WebGPU inspector and confirm `WebGPU: Hardware
+accelerated`. If the line says `Software only, hardware acceleration
+unavailable` or the adapter name contains `SwiftShader`, `llvmpipe`, or
+`WARP`, you are on a software fallback — the WebGPU number is not a real-GPU
+measurement and should not be posted as one.
+
+**Output format.** Post results as a short block — paste it into the relevant
+GitHub issue / discussion thread or a PR comment. Keep the field names exactly
+as below so they are greppable:
+
+```
+device:      <vendor + model, e.g. "Apple M5 Pro (14-inch MacBook Pro, 2025)">
+os/browser:  <e.g. "macOS 15.4, Chrome 131.0.6778.86">
+adapter:     <WebGPU adapter name from chrome://gpu, e.g. "Apple M5 Pro">
+preset:      Large (~2.7M params, ctx 128, batch 12)
+steps read:  <step at which tokens/sec was recorded, e.g. "step 200">
+webgpu:      <N> tokens/sec  (steady state, after step 50)
+wasm-simd:   <N> tokens/sec  (steady state, after step 50)
+ratio:       <webgpu / wasm-simd, e.g. "6.8×">
+notes:       <anything unusual — thermal throttling, dGPU vs iGPU, etc.>
+```
+
+Example:
+
+```
+device:      Apple M5 Pro (14-inch MacBook Pro, 2025)
+os/browser:  macOS 15.4, Chrome 131.0.6778.86
+adapter:     Apple M5 Pro
+preset:      Large (~2.7M params, ctx 128, batch 12)
+steps read:  step 200
+webgpu:      2,850 tokens/sec
+wasm-simd:   420 tokens/sec
+ratio:       6.8×
+notes:       plugged in; no other GPU apps running
+```
+
+One real-hardware pair (WebGPU + WASM-SIMD) closes the evidence gap this doc
+currently flags. Multiple pairs across vendors (Apple, NVIDIA discrete, Intel
+integrated, AMD) would let the WebGPU section quote a range instead of a
+single anecdotal number.
