@@ -35,27 +35,39 @@ wiring is expected unless explicitly requested.
 ## Project sequencing (owner's call, do not re-litigate)
 
 The order in which remaining major threads should land, as decided by the
-owner:
+owner. **Polish is treated as a moat, not a finish line** — when a project
+catches a niche social moment, low-effort clones appear within days, and the
+original survives only if it's polished enough that the clones look obviously
+worse. So we spend longer here than the engineering-effort estimate suggests.
 
-1.  **Polish** — editorial passes + UI sweep (low cost, high value-per-hour)
+1.  **Polish** — editorial passes + UI sweep + every rough edge sanded. Owner
+    explicit: clones will appear post-launch; this is what differentiates.
 2.  **Docs / learning** — turn this from "perf demo" into "how to build a
-    GPT from scratch, narrated"
+    GPT from scratch, narrated."
 3.  **Further perf** — small safe pushes (operator fusion, async dispatch,
     workgroup tuning). Capped at 1-2 days.
-4.  **Astro migration** — pure cleanup. Last among the in-session items
-    because it reshuffles everything above.
-5.  **Native macOS app** (`native-mac/`) — comes BEFORE FA2. Larger
+4.  **Astro migration** — chosen for the speed (static-first, partial
+    hydration), Lighthouse scores, MDX content authoring, and the learning
+    value for the owner. Not just cleanup.
+5.  **Deploy + launch** (task #55) — blog post live, HN submission, X/Twitter
+    thread, link from portfolio. After this, decisions become data-driven.
+6.  **PostHog analytics** (task #56) — three events, no PII. Pairs with #5
+    so launch-day data starts flowing immediately.
+7.  **"Watch the model think" view** (task #57) — interactive forward-pass
+    visualization. The teaching-visualization lever; screenshots travel.
+8.  **Native macOS app** (`native-mac/`) — comes BEFORE FA2. Larger
     models become natural here, which makes FA2's payoff worth the
     multi-day effort. See `native-mac/ROADMAP.md`.
-6.  **Flash Attention 2** (task #47) — once big models are real in the
-    Mac app, FA2's long-context win pays off. Before this point it's a
-    speculative bet on what the browser ceiling will be useful for.
-7.  **Pre-trained model gallery** — last. Implicit promise of the gallery
+9.  **Flash Attention 2** (task #47) — once big models are real in the
+    Mac app, FA2's long-context win pays off.
+10. **Pre-trained model gallery** — last. Implicit promise of the gallery
     ("you can train these too") is only honest once the speed + Mac
     paths are both shipped.
 
-If asked to flip this order, ask the owner before acting — they've reasoned
-about it.
+Items 5 + 6 can land in parallel with later polish/docs work — the deploy
+isn't gated on "everything perfect", and analytics is ~30 min once a project
+key is in hand. Items 1-4 are the in-session loop; 5-10 are the launch +
+beyond sequence. If asked to flip this order, ask the owner before acting.
 
 ## Safety rules for heavy GPU / compile loops (macOS host)
 
