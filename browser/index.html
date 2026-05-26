@@ -932,6 +932,12 @@
         transform: rotate(0deg);
         filter: brightness(2) sepia(1) hue-rotate(118deg) saturate(4);
       }
+      /* On narrow screens the three-part summary row (label · hint · chevron)
+         compresses the hint text into an ugly wrap. The HYPERPARAMETERS label
+         + chevron alone communicate "click to expand", so drop the hint. */
+      @media (max-width: 560px) {
+        .hyperparam-details > summary > .hp-hint { display: none; }
+      }
 
       /* Advanced details */
       details.advanced {
