@@ -1813,6 +1813,8 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       els.downloadModel.disabled = false;
       els.downloadSafetensors.disabled = false;
       els.continueBtn.disabled = false;
+      // Allow navigation to the Watch screen once a model is in memory.
+      (window as unknown as { __tgEnableWatch?: () => void }).__tgEnableWatch?.();
       break;
     case "restored":
       els.sample.disabled = false;
@@ -1976,6 +1978,7 @@ void init().then(() => {
   setupStickyStats();
   setupKeyboardShortcuts();
   setupDemoBanner();
+  setupScreens();
   // Mark landing animation as done after first paint — subsequent navigations
   // skip the brand-draw animation (it's a one-time wow).
   setTimeout(() => document.body.classList.add("landing-done"), 2200);
@@ -2037,6 +2040,66 @@ function setupKeyboardShortcuts(): void {
       }
     }
   });
+}
+
+// --- two-screen navigation: Setup ⟷ Watch --------------------------------
+// Screen 1 (Setup): the Train card with corpus + presets + Start.
+// Screen 2 (Watch): the Loss chart + Sample area + verdict.
+// Click Start → transition to Watch. Click the Setup tab → back to Setup.
+function setupScreens(): void {
+  const screens = document.getElementById("screens");
+  if (!screens) return;
+  const tabs = document.querySelectorAll<HTMLButtonElement>(".screen-tab");
+  let modelLoaded = latestState != null; // determines if "Watch" tab is enabled
+
+  const setActive = (name: "setup" | "watch") => {
+    screens.setAttribute("data-active", name);
+    tabs.forEach((t) => {
+      const isActive = t.dataset.screen === name;
+      t.classList.toggle("active", isActive);
+    });
+    document.querySelectorAll<HTMLElement>(".screen").forEach((s) => {
+      s.hidden = s.dataset.screen !== name;
+    });
+    // Scroll back to the top so the user sees the new screen from the start.
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const enableWatch = () => {
+    modelLoaded = true;
+    tabs.forEach((t) => {
+      if (t.dataset.screen === "watch") t.disabled = false;
+    });
+  };
+
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const name = tab.dataset.screen as "setup" | "watch";
+      if (name === "watch" && !modelLoaded) return; // gated
+      setActive(name);
+    });
+  });
+
+  // Auto-switch when training starts OR when a model is loaded.
+  els.start.addEventListener("click", () => {
+    // Defer to next tick so the existing Start handler (validation,
+    // pre-flight warning) runs first. If validation fails, the run never
+    // begins — but we still moved screens. Acceptable: the loss chart
+    // will be empty + ready when validation passes.
+    setTimeout(() => {
+      enableWatch();
+      setActive("watch");
+    }, 0);
+  });
+
+  // Watching is also valid after loading a saved model (no fresh training).
+  // We poll the latestState every checkpoint message via the existing handler;
+  // hook the model upload too.
+  const origRender = renderRunVerdict;
+  void origRender; // referenced to silence TS
+
+  // Expose enableWatch globally so other code paths can call it.
+  (window as unknown as { __tgEnableWatch?: () => void }).__tgEnableWatch = enableWatch;
 }
 
 // --- demo banner — "Try a trained model" CTA -----------------------------

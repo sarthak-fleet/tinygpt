@@ -469,20 +469,84 @@
         font-size: 12.5px;
       }
 
-      /* Train layout — both cards stretch to equal height for visual balance. */
-      .train-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
-        gap: 28px;
-        align-items: stretch;
+      /* Two-screen interface: Setup ⟷ Watch.
+         Screen 1 (Setup) holds the Train card. Screen 2 (Watch) holds the
+         Loss chart + Sample. The user transitions to screen 2 when they
+         click Start; can navigate back via the tabs above. Both screens
+         occupy the same vertical space; we cross-fade between them. */
+      .screen-nav {
+        display: inline-flex; align-items: center; gap: 12px;
+        margin-bottom: 28px;
+        padding: 4px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 999px;
       }
-      @media (max-width: 880px) { .train-grid { grid-template-columns: 1fr; } }
+      .screen-tab {
+        display: inline-flex; align-items: center; gap: 10px;
+        padding: 8px 18px 8px 12px;
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        font: 500 13px/1 var(--font-sans);
+        border-radius: 999px;
+        cursor: pointer;
+        transition: color 0.15s ease, background 0.15s ease;
+      }
+      .screen-tab:disabled { opacity: 0.4; cursor: not-allowed; }
+      .screen-tab:not(:disabled):hover { color: var(--fg); }
+      .screen-tab.active {
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
+      .screen-tab .screen-num {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 22px; height: 22px;
+        background: var(--panel-2);
+        border: 1px solid var(--line-strong);
+        border-radius: 50%;
+        font: 600 11px/1 var(--font-mono);
+        color: var(--muted);
+      }
+      .screen-tab.active .screen-num {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #062019;
+      }
+      .screen-divider {
+        font-size: 14px;
+        color: var(--faint);
+      }
+
+      .screens { position: relative; }
+      .screen {
+        animation: screen-fade-in 0.32s var(--ease-out-expo);
+      }
+      .screen[hidden] { display: none; }
+      @keyframes screen-fade-in {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Hero layout inside each screen — single column, full width. */
+      .train-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 28px;
+      }
       .hero-grid > .card { display: flex; flex-direction: column; }
-      .hero-grid .hero-config { padding: 28px 30px; }
-      .hero-grid .hero-loss { padding: 28px 32px; }
-      /* On wide screens, push controls (Start / Model / Notify) to the
-         bottom of the left card so its overall height matches the right. */
-      .hero-config .controls { margin-top: auto; padding-top: 18px; }
+      .hero-grid .hero-config { padding: 28px 32px; }
+      .hero-grid .hero-loss { padding: 28px 36px; }
+      /* The corpus textarea no longer needs the height padding to balance the
+         loss card — let it size naturally. */
+      .hero-config #corpus { min-height: 140px; }
+      .hero-config .controls { margin-top: 18px; }
+      /* The loss chart canvas can now stretch much wider — make it taller too
+         so its aspect ratio still reads as a chart, not a strip. */
+      .hero-loss canvas#chart { height: 420px; }
+      @media (max-width: 720px) {
+        .hero-loss canvas#chart { height: 220px; }
+      }
 
       /* Form */
       textarea, input[type="number"], input[type="text"], select {
@@ -2049,6 +2113,19 @@
         </p>
       </header>
 
+      <!-- Screen nav: Setup ⟷ Watch -->
+      <div class="screen-nav" id="screenNav">
+        <button class="screen-tab active" data-screen="setup" type="button">
+          <span class="screen-num">1</span>
+          <span>Setup</span>
+        </button>
+        <span class="screen-divider" aria-hidden="true">→</span>
+        <button class="screen-tab" data-screen="watch" type="button" disabled>
+          <span class="screen-num">2</span>
+          <span>Watch &amp; sample</span>
+        </button>
+      </div>
+
       <div id="demoBanner" class="demo-banner" hidden>
         <div class="demo-banner-body">
           <strong>Want to skip the wait?</strong>
@@ -2059,6 +2136,9 @@
         </button>
       </div>
 
+      <div class="screens" data-active="setup" id="screens">
+
+      <section class="screen" data-screen="setup">
       <div class="train-grid hero-grid">
         <!-- LEFT: configure + start -->
         <section class="card hero-config">
@@ -2308,8 +2388,12 @@ The goal here is understanding, not a clever model. If you build it yourself, by
           <div id="modelStatus" class="model-status"></div>
           <div id="status"></div>
         </section>
+      </div>
+      </section>
 
-        <!-- RIGHT: live loss -->
+      <section class="screen" data-screen="watch" hidden>
+      <div class="train-grid hero-grid">
+        <!-- Loss chart card (now full-width on its own screen) -->
         <section class="card loss-card hero-loss">
           <h2 class="card-title hero-title">
             Loss curve
@@ -2413,6 +2497,10 @@ The goal here is understanding, not a clever model. If you build it yourself, by
           </span>
         </div>
       </section>
+      </div>
+      </section>
+
+      </div><!-- /.screens -->
 
       <!-- Unified "Your machine" panel: capability pills + tailored summary,
            collapsible. Replaces the previous trio (machine bar + personalise
