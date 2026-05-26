@@ -181,6 +181,7 @@ builds and tests them with a normal compiler. Full deploy notes:
 - [`docs/performance.md`](docs/performance.md) — the SIMD and WebGPU performance work
 - [`docs/model_guide.md`](docs/model_guide.md) — the model, from scratch
 - [`docs/lora_guide.md`](docs/lora_guide.md) — LoRA fine-tuning
+- [`docs/online_softmax_in_attention.md`](docs/online_softmax_in_attention.md) — why and how, ties to the `attn_fused_sv` kernel
 - [`docs/shared_vs_native.md`](docs/shared_vs_native.md) — browser vs. native boundary
 - [`docs/feature_ideas.md`](docs/feature_ideas.md) — the future-ideas backlog
 
