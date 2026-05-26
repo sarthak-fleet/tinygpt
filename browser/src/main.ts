@@ -8,7 +8,7 @@
  * Guide: docs/browser_notes.md ("Web Worker")
  */
 
-import { benchmarkMatmul, benchmarkMatmulF16, initWebGPU } from "../../webgpu/kernels";
+import { benchmarkMatmul, benchmarkMatmulF16Sweep, initWebGPU } from "../../webgpu/kernels";
 import { TinyGptBackend, usingMemory64 } from "./backend";
 import { HF_CATALOG, HfFetchError, fetchHfText } from "./datasets";
 import { LossChart } from "./charts";
@@ -1523,26 +1523,36 @@ els.bench.addEventListener("click", async () => {
     }
     els.benchOut.textContent = "loading the WASM matmul kernel…";
     const backend = await TinyGptBackend.load();
-    els.benchOut.textContent = "running 384×384 matmul on WebGPU and WASM…";
+    els.benchOut.textContent = "running 384×384 parity check (WASM vs WebGPU)…";
     const ref = (a: Float32Array, b: Float32Array, M: number, K: number, N: number) =>
       backend.matmul(a, b, M, K, N);
     const r = await benchmarkMatmul(device, ref, 384);
-    els.benchOut.textContent = "running f16-packed matmul…";
-    let f16Line = "";
+
+    // Sweep f16/f32 across realistic sizes. Inputs upload outside the timed
+    // loop, so we measure just dispatch — the per-step cost a real training
+    // pipeline pays. The crossover where f16-packed wins should be visible.
+    els.benchOut.textContent = "running f16/f32 size sweep on WebGPU (this takes a few seconds)…";
+    let sweepLine = "";
     try {
-      const rF16 = await benchmarkMatmulF16(device, ref, 384);
-      f16Line = `\nf16-packed WebGPU ${rF16.f16GpuMs.toFixed(1)} ms · ` +
-        `${rF16.f16Speedup.toFixed(2)}× vs f32 WebGPU · ` +
-        `${rF16.parityOk ? "parity OK ✓" : "PARITY FAILED"} ` +
-        `(max abs error ${rF16.maxAbsError.toExponential(2)})`;
+      const sweep = await benchmarkMatmulF16Sweep(device, ref, [256, 512, 1024, 2048]);
+      const rows = sweep.map((s) => {
+        const par = s.size <= 512
+          ? (s.parityOk ? "parity OK ✓" : "PARITY FAILED")
+          : "(parity skipped — size too big)";
+        return `  size ${s.size.toString().padStart(4)}  ` +
+          `f32 ${s.f32GpuMs.toFixed(2)} ms  ` +
+          `f16 ${s.f16GpuMs.toFixed(2)} ms  ` +
+          `→ ${s.f16Speedup.toFixed(2)}× ${par}`;
+      });
+      sweepLine = "\n\nWebGPU f16-packed vs f32 (upload + pack moved outside timed loop):\n" + rows.join("\n");
     } catch (e) {
-      f16Line = `\nf16-packed failed: ${e instanceof Error ? e.message : String(e)}`;
+      sweepLine = `\n\nf16 sweep failed: ${e instanceof Error ? e.message : String(e)}`;
     }
     els.benchOut.textContent =
-      `${r.size}×${r.size} matmul — ${r.parityOk ? "parity OK ✓" : "PARITY FAILED"} ` +
+      `${r.size}×${r.size} parity — ${r.parityOk ? "parity OK ✓" : "PARITY FAILED"} ` +
       `(max abs error ${r.maxAbsError.toExponential(2)})\n` +
       `WASM ${r.refMs.toFixed(1)} ms · WebGPU ${r.gpuMs.toFixed(1)} ms · ` +
-      `${r.speedup.toFixed(1)}× speed-up` + f16Line;
+      `${r.speedup.toFixed(1)}× speed-up` + sweepLine;
   } catch (err) {
     els.benchOut.textContent = `benchmark error: ${
       err instanceof Error ? err.message : String(err)
