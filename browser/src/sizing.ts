@@ -21,6 +21,9 @@ export interface Preset {
   maxSteps: number;
   recommendedBackend: "wasm" | "webgpu";
   note: string;
+  /** True iff this config needs the Memory64 WASM build to allocate at all
+   * (fp32 weights + Adam state exceed the 4 GB 32-bit pointer ceiling). */
+  requiresMemory64?: boolean;
 }
 
 export const PRESETS: Preset[] = [
@@ -80,6 +83,19 @@ export const PRESETS: Preset[] = [
     recommendedBackend: "webgpu",
     note: "ctx 512 — the regime where attention dominates compute and Flash Attention would matter. Long-range coherence becomes possible. Plan ~1.5 h",
   },
+  {
+    // 24 layers, d=1280, ctx=512 → 256·1280 + 512·1280 + 24·12·1280² ≈ 472M
+    // params. Fp32 weights + Adam state ≈ 5.6 GB, which OOMs the 32-bit
+    // WASM build (4 GB tab ceiling) and is the whole point of Memory64.
+    // batch 1 / steps 50 makes the demo finishable on a laptop — this preset
+    // exists to prove the ceiling-break, not to train Shakespeare to fluency.
+    id: "behemoth",
+    label: "Behemoth (~470M params, Memory64)",
+    layers: 24, dModel: 1280, ctx: 512, batch: 1, maxSteps: 50,
+    recommendedBackend: "wasm",
+    requiresMemory64: true,
+    note: "the ceiling-break demo — needs Memory64 (Chromium 133+). Shows the loss curve start to fall on a half-billion-param model in your browser tab. Not meant to finish training; meant to prove the allocator works at this scale.",
+  },
 ];
 
 /**
@@ -88,7 +104,7 @@ export const PRESETS: Preset[] = [
  * d_model values that aren't divisible by 32.
  */
 const HEADS_BY_D: Record<number, number> = {
-  48: 3, 64: 2, 96: 3, 128: 4, 144: 3, 192: 6, 256: 8, 384: 12,
+  48: 3, 64: 2, 96: 3, 128: 4, 144: 3, 192: 6, 256: 8, 384: 12, 1280: 20,
 };
 export function headsFor(dModel: number): number {
   if (HEADS_BY_D[dModel]) return HEADS_BY_D[dModel];

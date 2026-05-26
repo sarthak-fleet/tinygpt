@@ -499,6 +499,20 @@ els.start.addEventListener("click", () => {
       `${cfg.maxSteps} steps will leave it undertrained — loss will look stuck.`,
     );
   }
+  // Memory64 ceiling check: fp32 weights + Adam state ≈ 12 bytes/param. The
+  // 32-bit WASM build caps tab heap near 4 GB (V8) — anything over ~280M
+  // params in fp32 will OOM there. Block the run with a hard error rather
+  // than warning, since this one isn't a "might be slow", it's a "will fail".
+  const fp32BytesNeeded = estParams * 12;
+  if (!usingMemory64 && fp32BytesNeeded > 3.5e9) {
+    window.alert(
+      `This config needs ~${(fp32BytesNeeded / 1e9).toFixed(1)} GB of heap ` +
+      `(${formatParams(estParams)} fp32 params × 12 bytes for weights + AdamW state). ` +
+      `Your browser doesn't expose WebAssembly Memory64, so the heap is capped at ~4 GB ` +
+      `and this run would OOM. Use Chromium 133+ or Firefox 134+, or pick a smaller preset.`,
+    );
+    return;
+  }
   if (warnings.length > 0) {
     const ok = window.confirm(
       "⚠ Heads up — this config is likely to produce poor output:\n\n" +

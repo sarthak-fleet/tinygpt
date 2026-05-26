@@ -9,13 +9,36 @@
  * Guide: docs/browser_notes.md ("WASM backend")
  */
 
-/** The subset of the Emscripten module surface we rely on. */
-interface WasmModule {
+/**
+ * The subset of the Emscripten module surface we rely on.
+ *
+ * Memory64 ABI note: when the module is built with -sMEMORY64=1 + -sWASM_BIGINT,
+ * any C function that takes or returns a pointer (`void*`, `T*`, …) uses i64
+ * for that arg, which JS sees as `BigInt`. Plain `int` / `float` args stay
+ * Number. The wrappers below either bridge those types or operate on the raw
+ * exports directly. `_malloc` happens to return Number even on MEM64 (the
+ * compiler narrows it because the heap fits in safe-integer range).
+ */
+type Ptr = number | bigint;
+interface RawExports {
+  _malloc(bytes: number | bigint): number;
+  _free(ptr: Ptr): void;
+  _tg_model_create(vocab: number, ctx: number, layers: number, heads: number, dModel: number, dMlp: number, seed: number): Ptr;
+  _tg_model_free(handle: Ptr): void;
+  _tg_model_num_params(handle: Ptr): number;
+  _tg_model_step(handle: Ptr): number;
+  _tg_set_data(handle: Ptr, data: Ptr, len: number, trainFrac: number): void;
+  _tg_train_step(handle: Ptr, batch: number, lr: number, gradClip: number): number;
+  _tg_eval(handle: Ptr, split: number, batch: number, nBatches: number): number;
+  _tg_generate(handle: Ptr, prompt: Ptr, plen: number, out: Ptr, maxNew: number, temp: number, topK: number, seed: number): number;
+  _matmul_forward(a: Ptr, b: Ptr, c: Ptr, M: number, K: number, N: number): void;
+  _tg_state_bytes(handle: Ptr): number;
+  _tg_export_state(handle: Ptr, buf: Ptr): void;
+  _tg_import_state(handle: Ptr, buf: Ptr): void;
+}
+interface WasmModule extends RawExports {
   HEAPU8: Uint8Array;
   HEAPF32: Float32Array;
-  _malloc(bytes: number): number;
-  _free(ptr: number): void;
-  cwrap(name: string, ret: string | null, args: string[]): (...a: number[]) => number;
 }
 
 interface ModuleOpts {
@@ -84,24 +107,13 @@ async function loadFactory(): Promise<Factory> {
   return factoryPromise;
 }
 
+/** Pointer argument wrapper. On the 32-bit module pointers are Number; on
+ * Memory64 they're BigInt. _malloc returns Number on both ABIs, so we coerce
+ * before passing to other C functions. */
+const toPtr: (x: number) => Ptr = MEM64 ? (x) => BigInt(x) : (x) => x;
+
 export class TinyGptBackend {
-  private constructor(
-    private readonly m: WasmModule,
-    private readonly fns: {
-      create: (...a: number[]) => number;
-      free: (...a: number[]) => number;
-      numParams: (...a: number[]) => number;
-      step: (...a: number[]) => number;
-      setData: (...a: number[]) => number;
-      trainStep: (...a: number[]) => number;
-      evalLoss: (...a: number[]) => number;
-      generate: (...a: number[]) => number;
-      matmul: (...a: number[]) => number;
-      stateBytes: (...a: number[]) => number;
-      exportState: (...a: number[]) => number;
-      importState: (...a: number[]) => number;
-    },
-  ) {}
+  private constructor(private readonly m: WasmModule) {}
 
   /** Load and instantiate the compiled WASM module. */
   static async load(): Promise<TinyGptBackend> {
@@ -110,52 +122,24 @@ export class TinyGptBackend {
       locateFile: (p) => (p.endsWith(".wasm") ? WASM_URL : p),
       mainScriptUrlOrBlob: JS_URL,
     });
-    const N = "number";
-    return new TinyGptBackend(m, {
-      create: m.cwrap("tg_model_create", N, [N, N, N, N, N, N, N]),
-      free: m.cwrap("tg_model_free", null, [N]),
-      numParams: m.cwrap("tg_model_num_params", N, [N]),
-      step: m.cwrap("tg_model_step", N, [N]),
-      setData: m.cwrap("tg_set_data", null, [N, N, N, N]),
-      trainStep: m.cwrap("tg_train_step", N, [N, N, N, N]),
-      evalLoss: m.cwrap("tg_eval", N, [N, N, N, N]),
-      generate: m.cwrap("tg_generate", N, [N, N, N, N, N, N, N, N]),
-      matmul: m.cwrap("matmul_forward", null, [N, N, N, N, N, N]),
-      stateBytes: m.cwrap("tg_state_bytes", N, [N]),
-      exportState: m.cwrap("tg_export_state", null, [N, N]),
-      importState: m.cwrap("tg_import_state", null, [N, N]),
-    });
-  }
-
-  /** Coerce a Number|BigInt pointer to Number. Memory64 builds (-sWASM_BIGINT)
-   * return BigInt from raw exports like _malloc; cwrap'd functions already
-   * convert. We never expect pointers beyond Number.MAX_SAFE_INTEGER. */
-  private p(x: number | bigint): number {
-    return typeof x === "bigint" ? Number(x) : x;
+    return new TinyGptBackend(m as WasmModule);
   }
 
   /** Raw C = A @ B via the WASM matmul kernel — the WebGPU parity reference. */
   matmul(a: Float32Array, b: Float32Array, M: number, K: number, N: number): Float32Array {
-    const aPtr = this.p(this.m._malloc(M * K * 4));
-    const bPtr = this.p(this.m._malloc(K * N * 4));
-    const cPtr = this.p(this.m._malloc(M * N * 4));
+    const aPtr = this.m._malloc(M * K * 4);
+    const bPtr = this.m._malloc(K * N * 4);
+    const cPtr = this.m._malloc(M * N * 4);
     try {
       this.m.HEAPF32.set(a, aPtr >> 2);
       this.m.HEAPF32.set(b, bPtr >> 2);
-      this.fns.matmul(aPtr, bPtr, cPtr, M, K, N);
+      this.m._matmul_forward(toPtr(aPtr), toPtr(bPtr), toPtr(cPtr), M, K, N);
       return this.m.HEAPF32.slice(cPtr >> 2, (cPtr >> 2) + M * N);
     } finally {
-      this.m._free(aPtr);
-      this.m._free(bPtr);
-      this.m._free(cPtr);
+      this.m._free(toPtr(aPtr));
+      this.m._free(toPtr(bPtr));
+      this.m._free(toPtr(cPtr));
     }
-  }
-
-  /** Copy a byte buffer into the WASM heap; returns a pointer to free later. */
-  private push(bytes: Uint8Array): number {
-    const ptr = this.p(this.m._malloc(Math.max(1, bytes.length)));
-    this.m.HEAPU8.set(bytes, ptr);
-    return ptr;
   }
 
   createModel(cfg: {
@@ -166,60 +150,54 @@ export class TinyGptBackend {
     dMlp: number;
     seed: number;
   }): TinyGptModel {
-    const handle = this.fns.create(
+    const handle = this.m._tg_model_create(
       256, cfg.ctx, cfg.layers, cfg.heads, cfg.dModel, cfg.dMlp, cfg.seed,
     );
-    if (handle === 0) throw new Error("tg_model_create failed (d_model % heads != 0?)");
-    return new TinyGptModel(this.m, this.fns, this.push.bind(this), handle);
+    // handle is Number on 32-bit, BigInt on MEM64. Compare loosely (0 ⇔ 0n).
+    if (handle === 0 || handle === 0n) {
+      throw new Error("tg_model_create failed (d_model % heads != 0?)");
+    }
+    return new TinyGptModel(this.m, handle);
   }
 }
 
-/** A live model handle. One per training run. */
+/** A live model handle. One per training run. Pointer-shaped values
+ * (handle, ptr returns) are typed as `Ptr` because they live in the runtime's
+ * native pointer type — Number on the 32-bit build, BigInt on Memory64.
+ * HEAP slice/index math always operates in Number space via toNum(). */
 export class TinyGptModel {
   constructor(
     private readonly m: WasmModule,
-    private readonly fns: {
-      free: (...a: number[]) => number;
-      numParams: (...a: number[]) => number;
-      step: (...a: number[]) => number;
-      setData: (...a: number[]) => number;
-      trainStep: (...a: number[]) => number;
-      evalLoss: (...a: number[]) => number;
-      generate: (...a: number[]) => number;
-      stateBytes: (...a: number[]) => number;
-      exportState: (...a: number[]) => number;
-      importState: (...a: number[]) => number;
-    },
-    private readonly push: (b: Uint8Array) => number,
-    private readonly handle: number,
+    private readonly handle: Ptr,
   ) {}
 
   numParams(): number {
-    return this.fns.numParams(this.handle);
+    return this.m._tg_model_num_params(this.handle);
   }
 
   step(): number {
-    return this.fns.step(this.handle);
+    return this.m._tg_model_step(this.handle);
   }
 
   /** Attach a byte-token corpus, split train/val by `trainFrac`. */
   setData(tokens: Uint8Array, trainFrac: number): void {
-    const ptr = this.push(tokens);
+    const ptr = this.m._malloc(Math.max(1, tokens.length));
+    this.m.HEAPU8.set(tokens, ptr);
     try {
-      this.fns.setData(this.handle, ptr, tokens.length, trainFrac);
+      this.m._tg_set_data(this.handle, toPtr(ptr), tokens.length, trainFrac);
     } finally {
-      this.m._free(ptr);
+      this.m._free(toPtr(ptr));
     }
   }
 
   /** One AdamW step on a random batch; returns the batch loss. */
   trainStep(batchSize: number, lr: number, gradClip: number): number {
-    return this.fns.trainStep(this.handle, batchSize, lr, gradClip);
+    return this.m._tg_train_step(this.handle, batchSize, lr, gradClip);
   }
 
   /** Average loss over `nBatches`. split: 0 = train, 1 = val. */
   evalLoss(split: 0 | 1, batchSize: number, nBatches: number): number {
-    return this.fns.evalLoss(this.handle, split, batchSize, nBatches);
+    return this.m._tg_eval(this.handle, split, batchSize, nBatches);
   }
 
   /** Autoregressive generation. temperature <= 0 is greedy. */
@@ -230,43 +208,45 @@ export class TinyGptModel {
     topK: number,
     seed: number,
   ): Uint8Array {
-    const promptPtr = this.push(prompt);
-    const outPtr = Number(this.m._malloc(Math.max(1, maxNew)));
+    const promptPtr = this.m._malloc(Math.max(1, prompt.length));
+    this.m.HEAPU8.set(prompt, promptPtr);
+    const outPtr = this.m._malloc(Math.max(1, maxNew));
     try {
-      const n = this.fns.generate(
-        this.handle, promptPtr, prompt.length, outPtr, maxNew, temperature,
-        topK, seed,
+      const n = this.m._tg_generate(
+        this.handle, toPtr(promptPtr), prompt.length, toPtr(outPtr),
+        maxNew, temperature, topK, seed,
       );
       return this.m.HEAPU8.slice(outPtr, outPtr + n);
     } finally {
-      this.m._free(promptPtr);
-      this.m._free(outPtr);
+      this.m._free(toPtr(promptPtr));
+      this.m._free(toPtr(outPtr));
     }
   }
 
   /** Serialise weights + AdamW moments + step for checkpointing. */
   exportState(): Uint8Array {
-    const bytes = this.fns.stateBytes(this.handle);
-    const ptr = Number(this.m._malloc(bytes));
+    const bytes = this.m._tg_state_bytes(this.handle);
+    const ptr = this.m._malloc(bytes);
     try {
-      this.fns.exportState(this.handle, ptr);
+      this.m._tg_export_state(this.handle, toPtr(ptr));
       return this.m.HEAPU8.slice(ptr, ptr + bytes);
     } finally {
-      this.m._free(ptr);
+      this.m._free(toPtr(ptr));
     }
   }
 
   /** Load a state blob from exportState() — model config must match. */
   importState(state: Uint8Array): void {
-    const ptr = this.push(state);
+    const ptr = this.m._malloc(Math.max(1, state.length));
+    this.m.HEAPU8.set(state, ptr);
     try {
-      this.fns.importState(this.handle, ptr);
+      this.m._tg_import_state(this.handle, toPtr(ptr));
     } finally {
-      this.m._free(ptr);
+      this.m._free(toPtr(ptr));
     }
   }
 
   free(): void {
-    this.fns.free(this.handle);
+    this.m._tg_model_free(this.handle);
   }
 }
