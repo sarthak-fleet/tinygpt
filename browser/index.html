@@ -333,12 +333,15 @@
       }
       .machine-chev {
         display: inline-block;
-        width: 8px; height: 12px;
-        background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 12' fill='none' stroke='%23787d88' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='1.5 1 6.5 6 1.5 11'/></svg>") no-repeat center / contain;
+        width: 10px; height: 7px;
+        background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239296a0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='1 1.5 6 6.5 11 1.5'/></svg>") no-repeat center / contain;
+        transform: rotate(-90deg);
         transition: transform 0.18s ease, filter 0.18s ease;
+        font-size: 0;
+        color: transparent;
       }
       .machine-card[open] > summary > .machine-chev {
-        transform: rotate(90deg);
+        transform: rotate(0deg);
         filter: brightness(2) sepia(1) hue-rotate(118deg) saturate(4);
       }
       @media (max-width: 720px) {
@@ -895,15 +898,20 @@
         color: var(--muted);
         flex: 1;
       }
+      /* Same chevron family as <select>, .machine-chev, .chevron — closed
+         points right (rotate -90deg), open rotates back to default v. */
       .hp-chev {
         display: inline-block;
-        width: 8px; height: 12px;
-        background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 12' fill='none' stroke='%23787d88' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='1.5 1 6.5 6 1.5 11'/></svg>") no-repeat center / contain;
+        width: 10px; height: 7px;
+        background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239296a0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='1 1.5 6 6.5 11 1.5'/></svg>") no-repeat center / contain;
+        transform: rotate(-90deg);
         transition: transform 0.18s ease, filter 0.18s ease;
         flex-shrink: 0;
+        font-size: 0;
+        color: transparent;
       }
       .hyperparam-details[open] > summary > .hp-chev {
-        transform: rotate(90deg);
+        transform: rotate(0deg);
         filter: brightness(2) sepia(1) hue-rotate(118deg) saturate(4);
       }
 
@@ -1218,9 +1226,21 @@
       .stats-more > summary::-webkit-details-marker { display: none; }
       .stats-more > summary:hover { color: var(--muted); }
       .stats-more .more-chev {
-        transition: transform 0.18s ease;
+        display: inline-block;
+        width: 10px; height: 7px;
+        background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239296a0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='1 1.5 6 6.5 11 1.5'/></svg>") no-repeat center / contain;
+        transform: rotate(-90deg);
+        transition: transform 0.18s ease, filter 0.18s ease;
+        flex-shrink: 0;
+        vertical-align: middle;
+        margin-left: 4px;
+        font-size: 0;
+        color: transparent;
       }
-      .stats-more[open] > summary > .more-chev { transform: rotate(90deg); color: var(--accent); }
+      .stats-more[open] > summary > .more-chev {
+        transform: rotate(0deg);
+        filter: brightness(2) sepia(1) hue-rotate(118deg) saturate(4);
+      }
       .stats-more[open] > summary { color: var(--accent); }
       .stats-secondary { margin-top: 14px; }
       .stats {
@@ -1904,14 +1924,25 @@
         letter-spacing: 0;
         margin-left: 2px;
       }
+      /* Same SVG chevron family as <select>, .hp-chev, .machine-chev — closed
+         points right (rotate -90 from default v), open rotates to point up.
+         font-size: 0 hides any "▸" text content in legacy HTML markup so we
+         only see the SVG background. */
       .chevron {
-        font: 500 14px/1 var(--font-mono);
-        color: var(--faint);
-        transition: transform 0.18s ease, color 0.12s ease;
         display: inline-block;
+        width: 10px; height: 7px;
+        background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%239296a0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='1 1.5 6 6.5 11 1.5'/></svg>") no-repeat center / contain;
+        transform: rotate(-90deg);
+        transition: transform 0.18s ease, filter 0.18s ease;
+        flex-shrink: 0;
+        font-size: 0;
+        color: transparent;
       }
-      .card.collapsible[open] > summary > .chevron { transform: rotate(90deg); color: var(--accent); }
-      .card.collapsible > summary:hover > .chevron { color: var(--muted); }
+      .card.collapsible[open] > summary > .chevron {
+        transform: rotate(0deg);
+        filter: brightness(2) sepia(1) hue-rotate(118deg) saturate(4);
+      }
+      .card.collapsible > summary:hover > .chevron { filter: brightness(1.25); }
       .card.collapsible > *:not(summary) { padding-left: 22px; padding-right: 22px; }
       .card.collapsible > *:not(summary):first-of-type { padding-top: 18px; }
       .card.collapsible > *:not(summary):last-of-type { padding-bottom: 22px; }
