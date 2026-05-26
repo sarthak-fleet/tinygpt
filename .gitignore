@@ -15,16 +15,21 @@ dist/
 browser/.env
 browser/.env.local
 
-# Compiled WASM module (build artifact of wasm/build_wasm.sh)
-browser/public/tinygpt.js
-browser/public/tinygpt.wasm
+# The compiled WASM modules (browser/public/tinygpt{,64}.{js,wasm}) USED to
+# be gitignored as build artifacts, but Cloudflare Pages does a fresh
+# `git clone` + `npm run build` and never re-builds the WASM — so leaving
+# them ignored 404s the production playground at runtime. They're now
+# committed alongside the C++ source changes. See docs/deploy.md.
+#
+# Re-rebuilding locally: bash wasm/build_wasm.sh && bash wasm/build_wasm64.sh
+# (then commit the diff as part of the same PR as the .cpp change.)
 
-# WASM build artifacts
-*.wasm
-*.wasm.map
+# Build scratch directories
 wasm/build/
 dist/tinygpt.js
 dist/tinygpt.simd.js
+# .wasm.map files are sourcemaps and stay ignored.
+*.wasm.map
 
 # Checkpoints & weights (large binary; keep checkpoints/README.md)
 checkpoints/*
