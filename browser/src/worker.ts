@@ -51,6 +51,7 @@ ctx.onmessage = (e: MessageEvent<ToWorker>) => {
     case "stop": stopped = true; break;
     case "sample": void doSample(msg.prompt, msg.tokens, msg.temperature); break;
     case "restore": void doRestore(msg.state, msg.config); break;
+    case "inspect": void doInspect(msg.prompt, msg.topK); break;
   }
 };
 
@@ -359,6 +360,54 @@ async function doSample(prompt: string, tokens: number, temperature: number): Pr
     return;
   }
   post({ type: "error", message: "train a model before sampling" });
+}
+
+/**
+ * Run one introspection forward pass and post the result back to the UI.
+ *
+ * WebGPU-only for the first cut — the WASM backend doesn't expose attention
+ * weights yet (it would need a sibling `tg_inspect` export). When called with
+ * a WASM-only model in memory, we still return top-K probs by re-using the
+ * existing generate path with maxNew=0… but that's also not exposed, so for
+ * now we send back `unavailable` and the UI shows a friendly note.
+ */
+async function doInspect(prompt: Uint8Array, topK: number): Promise<void> {
+  if (gpuModel) {
+    try {
+      const result = await gpuModel.inspect([...prompt], topK);
+      // Transfer the underlying buffers to keep the post-message cheap.
+      const transfers: Transferable[] = [];
+      for (const row of result.attention) {
+        for (const arr of row) transfers.push(arr.buffer);
+      }
+      post({
+        type: "inspect",
+        result: {
+          tokens: result.tokens,
+          topK: result.topK,
+          attention: result.attention,
+          heads: gpuModel.cfg.heads,
+        },
+      }, transfers);
+    } catch (err) {
+      post({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (model) {
+    post({
+      type: "inspect",
+      result: {
+        tokens: [...prompt],
+        topK: [],
+        attention: [],
+        heads: 0,
+        unavailable: "Switch the backend to WebGPU and re-train to see introspection — the WASM build doesn't expose attention weights yet.",
+      },
+    });
+    return;
+  }
+  post({ type: "error", message: "train a model before inspecting" });
 }
 
 // Rebuild a model from a saved checkpoint (WASM backend only).

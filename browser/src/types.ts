@@ -58,7 +58,24 @@ export type ToWorker =
   | { type: "resume" }
   | { type: "sample"; prompt: string; tokens: number; temperature: number }
   | { type: "stop" }
-  | { type: "restore"; state: ArrayBuffer; config: RunConfig };
+  | { type: "restore"; state: ArrayBuffer; config: RunConfig }
+  // "Watch the model think" — single introspection forward over `prompt`.
+  // Returns top-K next-token probabilities per position + last-layer attention.
+  | { type: "inspect"; prompt: Uint8Array; topK: number };
+
+/** Per-position introspection payload (one entry per token in the inspect prompt). */
+export interface InspectResult {
+  /** byte tokens fed into the model (same length as topK / attention) */
+  tokens: number[];
+  /** top-K next-token candidates per position, sorted by prob desc */
+  topK: { token: number; prob: number }[][];
+  /** attention[t][h] = Float32Array(T) — last-layer head h's weights at position t */
+  attention: Float32Array[][];
+  /** number of heads in the last layer */
+  heads: number;
+  /** present only when the active backend can't produce introspection data */
+  unavailable?: string;
+}
 
 /** worker -> main */
 export type FromWorker =
@@ -68,4 +85,5 @@ export type FromWorker =
   | { type: "checkpoint"; state: ArrayBuffer } // serialized model state for OPFS
   | { type: "restored" } // a saved model was reloaded into the worker
   | { type: "done"; reason: "finished" | "stopped" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "inspect"; result: InspectResult };

@@ -2201,6 +2201,171 @@
         from { opacity: 0; transform: translateY(-8px) scale(0.97); }
         to { opacity: 1; transform: translateY(0) scale(1); }
       }
+
+      /* ---- Watch the model think ----------------------------------------
+         Shown beneath the Sample card once a generation has been clicked
+         on. Each byte of generated text becomes a hoverable chip; clicking
+         one expands a panel with (a) top-K next-token probability bars and
+         (b) a stack of per-head attention thumbnails. */
+      .think-card { margin-top: 18px; }
+      .think-card[hidden] { display: none; }
+      .think-card .think-help {
+        color: var(--muted);
+        font-size: 13.5px;
+        margin: 0 0 14px;
+      }
+      .think-card .think-help code {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+      .think-tokens {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px 16px;
+        font-family: var(--font-mono);
+        font-size: 13.5px;
+        line-height: 1.9;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--fg);
+        max-height: 280px;
+        overflow-y: auto;
+      }
+      .think-token {
+        display: inline;
+        padding: 1px 2px;
+        border-radius: 3px;
+        cursor: pointer;
+        transition: background 0.12s ease, color 0.12s ease;
+      }
+      .think-token:hover {
+        background: var(--accent-glow);
+        color: var(--accent);
+      }
+      .think-token.selected {
+        background: var(--accent);
+        color: #062019;
+      }
+      /* Whitespace/control bytes get a faint outline so they're clickable. */
+      .think-token.ws {
+        outline: 1px dotted var(--line-strong);
+        outline-offset: -1px;
+        min-width: 6px;
+      }
+      .think-detail {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 20px;
+      }
+      @media (max-width: 760px) {
+        .think-detail { grid-template-columns: 1fr; }
+      }
+      .think-panel {
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 14px 16px;
+      }
+      .think-panel-title {
+        font: 500 11px/1.2 var(--font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--faint);
+        margin: 0 0 12px;
+      }
+      .think-panel-title .pick {
+        color: var(--accent);
+        text-transform: none;
+        letter-spacing: 0;
+        font-family: var(--font-mono);
+        margin-left: 6px;
+      }
+      .think-bars { display: flex; flex-direction: column; gap: 6px; }
+      .think-bar-row {
+        display: grid;
+        grid-template-columns: 38px 1fr 56px;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .think-bar-row .tk {
+        text-align: right;
+        color: var(--fg);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .think-bar-row .bar {
+        height: 10px;
+        background: var(--accent-dim);
+        border-radius: 2px;
+        min-width: 1px;
+      }
+      .think-bar-row.chosen .bar {
+        background: var(--accent);
+        box-shadow: 0 0 0 1px var(--accent-glow);
+      }
+      .think-bar-row.chosen .tk { color: var(--accent); }
+      .think-bar-row .pct {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        font-size: 11.5px;
+      }
+      .think-heads { display: flex; flex-direction: column; gap: 6px; }
+      .think-head-row {
+        display: grid;
+        grid-template-columns: 38px 1fr;
+        align-items: center;
+        gap: 8px;
+      }
+      .think-head-row .hd {
+        font: 500 11px/1 var(--font-mono);
+        color: var(--faint);
+        letter-spacing: 0.04em;
+      }
+      .think-head-bars {
+        display: flex;
+        gap: 1px;
+        height: 22px;
+        align-items: stretch;
+      }
+      .think-head-bar {
+        flex: 1 1 0;
+        background: var(--panel);
+        border-radius: 1px;
+        position: relative;
+        overflow: hidden;
+      }
+      .think-head-bar > i {
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        background: var(--accent);
+        display: block;
+      }
+      .think-head-bar.current {
+        outline: 1px solid var(--accent);
+        outline-offset: 0;
+      }
+      .think-empty {
+        color: var(--faint);
+        font-size: 13px;
+        padding: 8px 0;
+      }
+      .think-warn {
+        color: var(--warn);
+        background: rgba(245, 177, 74, 0.08);
+        border: 1px solid rgba(245, 177, 74, 0.3);
+        padding: 10px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+      }
     </style>
   </head>
   <body>
@@ -2622,6 +2787,45 @@ The goal here is understanding, not a clever model. If you build it yourself, by
             on params × bytes seen.
           </span>
         </div>
+      </section>
+
+      <!-- Watch the model think — interactive forward-pass visualization.
+           Hidden until the first generation completes. -->
+      <section class="card think-card" id="thinkCard" hidden>
+        <h2 class="card-title hero-title">
+          Watch the model think
+        </h2>
+        <p class="think-help">
+          Click any byte below to see what the model considered at that
+          position — the <strong>top-10 next-byte probabilities</strong> the
+          last forward pass produced, and the <strong>per-head attention
+          weights</strong> from the final transformer block (which earlier
+          bytes each head was looking at).
+          <br />
+          This is honest: it's the actual distribution that token was sampled
+          from, and the actual softmax weights from the last attention layer.
+          Nothing prettified. <code>·</code> marks bytes that are whitespace
+          or control characters.
+        </p>
+        <div id="thinkTokens" class="think-tokens" aria-live="polite"></div>
+        <div id="thinkDetail" class="think-detail" hidden>
+          <div class="think-panel" id="thinkTopK">
+            <h3 class="think-panel-title">
+              Top-10 candidates<span class="pick" id="thinkPick"></span>
+            </h3>
+            <div class="think-bars" id="thinkBars"></div>
+          </div>
+          <div class="think-panel" id="thinkAttn">
+            <h3 class="think-panel-title">
+              Attention from last layer · per head
+            </h3>
+            <div class="think-heads" id="thinkHeads"></div>
+            <div class="think-empty" id="thinkAttnEmpty" hidden>
+              Switch backend to WebGPU + re-train to see attention weights.
+            </div>
+          </div>
+        </div>
+        <div class="think-warn" id="thinkWarn" hidden></div>
       </section>
       </div>
       </section>

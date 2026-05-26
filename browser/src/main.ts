@@ -31,7 +31,7 @@ import {
 } from "./sizing";
 import { loadRun, loadState, requestDurableStorage, saveRun, saveState } from "./storage";
 import { hasSeenTour, markTourSeen, startTour } from "./tour";
-import { DEFAULT_CONFIG, type FromWorker, type RunConfig, type ToWorker } from "./types";
+import { DEFAULT_CONFIG, type FromWorker, type InspectResult, type RunConfig, type ToWorker } from "./types";
 import {
   initAnalytics,
   trackPlaygroundLoaded,
@@ -1967,6 +1967,9 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
     case "sample": {
       lastSampleText = msg.text;
       typewriteOutput(msg.text);
+      // Kick off an introspection forward pass over the same text so the
+      // "Watch the model think" panel becomes interactive once it shows up.
+      requestInspect(msg.text);
       const last = history.length > 0 ? history[history.length - 1] : null;
       trackSampleGenerated({
         prompt_bytes: lastSampleRequest?.promptBytes ?? 0,
@@ -1981,6 +1984,9 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       lastSampleRequest = null;
       break;
     }
+    case "inspect":
+      renderThinkPanel(msg.result);
+      break;
     case "checkpoint":
       // The worker exported the trained model — persist it to OPFS and stash
       // a copy so the user can download it via the "Download model" button.
@@ -2052,6 +2058,171 @@ worker.onerror = (e) => {
   setRunning(false);
   els.status.textContent = `worker error: ${e.message}`;
 };
+
+// --- "Watch the model think" view ------------------------------------------
+// Single-prompt introspection — re-runs forward over the generated text and
+// surfaces top-K next-token probabilities + last-layer attention per
+// position. The user clicks any byte to drill in.
+let thinkResult: InspectResult | null = null;
+
+/** Request an inspect pass for the given text. */
+function requestInspect(text: string): void {
+  // Limit to the model's ctx if known; the worker will truncate too, but
+  // capping here keeps the UI count consistent.
+  const ctxLimit = lastConfig?.ctx ?? 256;
+  const enc = new TextEncoder().encode(text);
+  const trimmed = enc.length > ctxLimit ? enc.slice(enc.length - ctxLimit) : enc;
+  send({ type: "inspect", prompt: trimmed, topK: 10 });
+}
+
+/** Render a single byte token as a clickable chip — readable label + index. */
+function tokenLabel(byte: number): { text: string; ws: boolean } {
+  if (byte === 0x20) return { text: "·", ws: true }; // space
+  if (byte === 0x0a) return { text: "↵", ws: true }; // newline
+  if (byte === 0x09) return { text: "→", ws: true }; // tab
+  if (byte < 0x20 || byte === 0x7f) return { text: "·", ws: true };
+  if (byte < 0x7f) return { text: String.fromCharCode(byte), ws: false };
+  // Non-ASCII byte — show as hex, multi-byte UTF-8 lands here too.
+  return { text: `·${byte.toString(16)}`, ws: true };
+}
+
+function renderThinkPanel(result: InspectResult): void {
+  thinkResult = result;
+  const card = document.getElementById("thinkCard") as HTMLElement | null;
+  const tokensEl = document.getElementById("thinkTokens") as HTMLElement | null;
+  const detailEl = document.getElementById("thinkDetail") as HTMLElement | null;
+  const warnEl = document.getElementById("thinkWarn") as HTMLElement | null;
+  if (!card || !tokensEl || !detailEl || !warnEl) return;
+  card.hidden = false;
+
+  // Render the clickable byte strip.
+  tokensEl.innerHTML = "";
+  result.tokens.forEach((b, i) => {
+    const span = document.createElement("span");
+    const { text, ws } = tokenLabel(b);
+    span.className = ws ? "think-token ws" : "think-token";
+    span.textContent = text;
+    span.dataset.idx = String(i);
+    span.title = `byte ${b} (0x${b.toString(16).padStart(2, "0")}) · pos ${i}`;
+    tokensEl.appendChild(span);
+  });
+
+  if (result.unavailable) {
+    warnEl.textContent = result.unavailable;
+    warnEl.hidden = false;
+    detailEl.hidden = true;
+    return;
+  }
+  warnEl.hidden = true;
+  detailEl.hidden = true; // shown after first click
+
+  // Auto-select the last position so the panel isn't empty.
+  if (result.tokens.length > 0) {
+    selectThinkPos(result.tokens.length - 1);
+  }
+}
+
+function selectThinkPos(idx: number): void {
+  if (!thinkResult) return;
+  if (idx < 0 || idx >= thinkResult.tokens.length) return;
+  const tokensEl = document.getElementById("thinkTokens");
+  if (tokensEl) {
+    tokensEl.querySelectorAll<HTMLElement>(".think-token").forEach((el) => {
+      el.classList.toggle("selected", el.dataset.idx === String(idx));
+    });
+  }
+  const detailEl = document.getElementById("thinkDetail") as HTMLElement | null;
+  const barsEl = document.getElementById("thinkBars");
+  const headsEl = document.getElementById("thinkHeads");
+  const pickEl = document.getElementById("thinkPick");
+  const attnEmpty = document.getElementById("thinkAttnEmpty");
+  if (!detailEl || !barsEl || !headsEl) return;
+  detailEl.hidden = false;
+
+  // Pick label — the byte that was actually chosen at this position is
+  // whatever appears at position idx+1 in the sample (the next byte). For
+  // the last position we don't know "what was sampled next", so show the
+  // current byte's top candidate instead.
+  const nextIdx = idx + 1;
+  const chosen = nextIdx < thinkResult.tokens.length ? thinkResult.tokens[nextIdx] : null;
+  if (pickEl) {
+    pickEl.textContent = chosen != null
+      ? `· chose "${tokenLabel(chosen).text}"`
+      : "";
+  }
+
+  // Top-K bars.
+  barsEl.innerHTML = "";
+  const top = thinkResult.topK[idx] || [];
+  const maxProb = top.reduce((m, x) => Math.max(m, x.prob), 0) || 1;
+  for (const { token, prob } of top) {
+    const row = document.createElement("div");
+    row.className = "think-bar-row" + (token === chosen ? " chosen" : "");
+    const tk = document.createElement("span");
+    tk.className = "tk";
+    const { text } = tokenLabel(token);
+    tk.textContent = text;
+    tk.title = `byte ${token} (0x${token.toString(16).padStart(2, "0")})`;
+    const bar = document.createElement("span");
+    bar.className = "bar";
+    bar.style.width = `${Math.max(1, (prob / maxProb) * 100)}%`;
+    const pct = document.createElement("span");
+    pct.className = "pct";
+    pct.textContent = prob >= 0.01
+      ? `${(prob * 100).toFixed(1)}%`
+      : `${(prob * 100).toFixed(2)}%`;
+    row.append(tk, bar, pct);
+    barsEl.appendChild(row);
+  }
+
+  // Per-head attention thumbnails.
+  headsEl.innerHTML = "";
+  const headRows = thinkResult.attention[idx] || [];
+  if (headRows.length === 0) {
+    if (attnEmpty) attnEmpty.hidden = false;
+  } else {
+    if (attnEmpty) attnEmpty.hidden = true;
+    headRows.forEach((row, h) => {
+      const tot = row.length;
+      // Normalize so the tallest bar in this row is full-height.
+      let max = 0;
+      for (let i = 0; i <= idx && i < tot; i++) if (row[i] > max) max = row[i];
+      if (max <= 0) max = 1;
+      const headDiv = document.createElement("div");
+      headDiv.className = "think-head-row";
+      const label = document.createElement("span");
+      label.className = "hd";
+      label.textContent = `H${h}`;
+      const bars = document.createElement("div");
+      bars.className = "think-head-bars";
+      // Show bars only up to and including idx — beyond that it's masked.
+      const len = Math.min(idx + 1, tot);
+      for (let i = 0; i < len; i++) {
+        const cell = document.createElement("div");
+        cell.className = "think-head-bar" + (i === idx ? " current" : "");
+        const fill = document.createElement("i");
+        fill.style.height = `${Math.max(2, (row[i] / max) * 100)}%`;
+        fill.style.opacity = String(Math.max(0.15, row[i] / max));
+        cell.appendChild(fill);
+        cell.title = `key pos ${i} · weight ${row[i].toFixed(3)}`;
+        bars.appendChild(cell);
+      }
+      headDiv.append(label, bars);
+      headsEl.appendChild(headDiv);
+    });
+  }
+}
+
+// Delegated click handler on the token strip.
+document.addEventListener("click", (e) => {
+  const t = e.target as HTMLElement | null;
+  if (!t) return;
+  const tok = t.closest<HTMLElement>(".think-token");
+  if (!tok) return;
+  const idx = parseInt(tok.dataset.idx || "-1", 10);
+  if (!Number.isFinite(idx) || idx < 0) return;
+  selectThinkPos(idx);
+});
 
 // --- analytics wiring -----------------------------------------------------
 // PostHog init runs as the very first thing on load — but every call site

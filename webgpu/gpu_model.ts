@@ -265,6 +265,79 @@ export class GpuModel {
     return ids;
   }
 
+  /**
+   * Introspection forward pass — used by the "Watch the model think" panel.
+   *
+   * Runs a single forward over `promptIds` (B=1), then returns, per token
+   * position t:
+   *   - topK probability bars (the actual distribution over next-byte for
+   *     position t, softmaxed without temperature), top `k` entries
+   *   - attention weights from the LAST block: one Float32Array per head,
+   *     length T, representing which earlier tokens that head looked at
+   *     when producing position t. Future positions are zero (causal mask
+   *     handled by the WGSL kernel).
+   *
+   * Cost: one forward over the prompt. No backward, no training.
+   * Memory: the full attn buffer is [B=1, H, T, T] — at T=64 H=4 that's
+   * 64 KB. Fine to download.
+   */
+  async inspect(
+    promptIds: number[], k: number,
+  ): Promise<{
+    tokens: number[];
+    topK: { token: number; prob: number }[][];
+    attention: Float32Array[][];
+  }> {
+    const { vocab: V, ctx, heads: H, layers: L } = this.cfg;
+    if (promptIds.length === 0) {
+      return { tokens: [], topK: [], attention: [] };
+    }
+    const T = Math.min(promptIds.length, ctx);
+    const window = new Float32Array(promptIds.slice(promptIds.length - T));
+    this.ops.beginBatch();
+    const fwd = this.forward(window, 1, T);
+    this.ops.endBatch();
+    const logits = await fwd.logits.download();
+    // Last block's attn — shape [B=1, H, T, T]
+    const lastAttn = await fwd.caches[L - 1].attn.download();
+
+    const tokens = Array.from(window).map((x) => x | 0);
+    const topK: { token: number; prob: number }[][] = [];
+    const attention: Float32Array[][] = [];
+
+    for (let t = 0; t < T; t++) {
+      // Softmax logits[t, :] (no temperature — show the raw model belief).
+      const base = t * V;
+      let mx = -1e30;
+      for (let v = 0; v < V; v++) if (logits[base + v] > mx) mx = logits[base + v];
+      const probs = new Float64Array(V);
+      let sum = 0;
+      for (let v = 0; v < V; v++) {
+        const p = Math.exp(logits[base + v] - mx);
+        probs[v] = p;
+        sum += p;
+      }
+      for (let v = 0; v < V; v++) probs[v] /= sum;
+
+      // Top-k by probability.
+      const indexed = Array.from(probs, (p, v) => ({ token: v, prob: p }));
+      indexed.sort((a, b) => b.prob - a.prob);
+      topK.push(indexed.slice(0, k));
+
+      // Attention per head for query position t — slice [h, t, :].
+      const headRows: Float32Array[] = [];
+      for (let h = 0; h < H; h++) {
+        // Layout: [B=1, H, T, T] -> offset = ((0*H + h)*T + t) * T
+        const off = (h * T + t) * T;
+        headRows.push(lastAttn.slice(off, off + T));
+      }
+      attention.push(headRows);
+    }
+
+    this.freeScratch();
+    return { tokens, topK, attention };
+  }
+
   /** One training step: forward, cross-entropy, backward, AdamW. Returns loss. */
   async trainStep(
     ids: Float32Array, targets: Float32Array, batch: number, lr: number,
