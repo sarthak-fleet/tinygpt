@@ -1762,6 +1762,22 @@ async function init(): Promise<void> {
   // Live JS-heap usage (Chromium only — performance.memory is non-standard).
   startHeapPoll();
 
+  // If WebGPU is available, default the backend dropdown to it — measured
+  // ~7× faster on Apple M-series and increasingly accurate elsewhere. Users
+  // who explicitly want WASM can switch back; this just changes the default.
+  if (caps.webgpu) {
+    const backendSel = byId<HTMLSelectElement>("backend");
+    // Only override if the user hasn't already touched it (i.e. it's still
+    // on the HTML-default "wasm" value).
+    if (backendSel.value === "wasm" && backendSel.dataset.userPicked !== "1") {
+      backendSel.value = "webgpu";
+      refreshEstimate("");
+    }
+    backendSel.addEventListener("change", () => {
+      backendSel.dataset.userPicked = "1";
+    });
+  }
+
   byId<HTMLButtonElement>("applyRec").addEventListener("click", () => {
     applyRecommendation(rec);
     byId<HTMLButtonElement>("applyRec").textContent = "Applied ✓";
