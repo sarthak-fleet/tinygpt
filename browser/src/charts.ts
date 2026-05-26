@@ -196,6 +196,28 @@ export class LossChart {
     ctx.font = "10px ui-monospace, monospace";
     ctx.fillText("random  ln(256) = 5.55", pad.l + plotW - 132, y(LN_256) - 4);
 
+    // Quality threshold bands — tells the user what each loss level actually
+    // means in human terms. Drawn only when they're within the visible y range.
+    const drawThreshold = (lossLevel: number, color: string, label: string) => {
+      if (lossLevel > maxLoss) return;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 5]);
+      ctx.beginPath();
+      ctx.moveTo(pad.l, y(lossLevel));
+      ctx.lineTo(pad.l + plotW, y(lossLevel));
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = color;
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillText(label, pad.l + 8, y(lossLevel) - 4);
+    };
+    // Loss = 2.0 — words start forming below this line.
+    drawThreshold(2.0, "rgba(245, 208, 74, 0.65)", "loss 2.0  ↓ words form");
+    // Loss = 1.5 — grammar emerges below this line.
+    drawThreshold(1.5, "rgba(72, 229, 194, 0.7)", "loss 1.5  ↓ grammar emerges");
+
     // Train: filled gradient area + line.
     this.drawTrainArea(x, y, pad, plotH);
     this.drawSeries(x, y, (p) => p.trainLoss, COLOR_TRAIN, false);

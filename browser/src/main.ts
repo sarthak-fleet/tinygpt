@@ -47,6 +47,7 @@ const els = {
   output: byId<HTMLDivElement>("output"),
   stStep: byId<HTMLElement>("stStep"),
   stTrain: byId<HTMLElement>("stTrain"),
+  stLossMeaning: byId<HTMLElement>("stLossMeaning"),
   stVal: byId<HTMLElement>("stVal"),
   stToks: byId<HTMLElement>("stToks"),
   stEta: byId<HTMLElement>("stEta"),
@@ -713,6 +714,8 @@ byId<HTMLButtonElement>("reset").addEventListener("click", () => {
   setOutput("Train a model, then generate text here.", true);
   els.stStep.textContent = "0";
   els.stTrain.textContent = "–";
+  els.stLossMeaning.textContent = "";
+  els.stLossMeaning.className = "stat-big-tag";
   els.stEta.textContent = "–";
   els.stPpl.textContent = "–";
   els.stElapsed.textContent = "–";
@@ -803,6 +806,37 @@ function applyPreset(id: string): void {
  * best loss reached. This replaces a static "garbled is expected" paragraph
  * with something the user can read against the actual numbers in front of them.
  */
+/**
+ * One-line live interpretation of the current loss. The thresholds are the
+ * project's house rules for byte-level GPT loss in natural-language nats:
+ *
+ *   > 4.0  random / barely learning   (initial loss near ln(256) = 5.55)
+ *   > 3.0  letter-pair statistics only — no recognisable words
+ *   > 2.0  short n-grams; letters look right but words don't form
+ *   > 1.5  words start forming — but grammar is still random
+ *   < 1.5  real grammar emerges — sentences start being parseable
+ *   < 1.0  fluent local grammar — watch the train↔val gap for memorisation
+ *   < 0.7  memorisation regime on tiny corpora
+ *
+ * Returns a tuple of (copy, css-class) so the colour can shift to match.
+ */
+function describeLoss(loss: number): { text: string; cls: string } {
+  if (!Number.isFinite(loss) || loss <= 0) return { text: "", cls: "" };
+  if (loss > 4.0) return { text: "still mostly random — keep going", cls: "t-random" };
+  if (loss > 3.0) return { text: "letter pairs only · no words yet", cls: "t-letters" };
+  if (loss > 2.0) return { text: "letters + short n-grams · words won't form until <2.0", cls: "t-letters" };
+  if (loss > 1.5) return { text: "words forming · grammar won't kick in until <1.5", cls: "t-words" };
+  if (loss > 1.0) return { text: "grammar emerging · sentences start parsing", cls: "t-grammar" };
+  if (loss > 0.7) return { text: "fluent local grammar · watch for memorisation", cls: "t-grammar" };
+  return { text: "memorisation regime · trust val loss now", cls: "t-memorize" };
+}
+
+function updateLossMeaning(loss: number): void {
+  const { text, cls } = describeLoss(loss);
+  els.stLossMeaning.textContent = text;
+  els.stLossMeaning.className = `stat-big-tag ${cls}`;
+}
+
 function refreshSampleNote(): void {
   const noteEl = document.getElementById("sampleNoteContent");
   if (!noteEl) return;
@@ -1304,6 +1338,7 @@ async function loadModelFromFile(file: File, label = file.name): Promise<void> {
       const final = meta.finalLoss;
       els.stStep.textContent = `${last.step} / ${last.step}`;
       els.stTrain.textContent = last.trainLoss.toFixed(4);
+      updateLossMeaning(last.trainLoss);
       els.stEta.textContent = "done";
       const timeLabel = document.getElementById("stTimeLabel");
       if (timeLabel) timeLabel.textContent = "Trained";
@@ -1877,6 +1912,7 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       chart.addPoint({ step: p.step, trainLoss: p.trainLoss, valLoss: p.valLoss });
       flashStat(els.stStep, `${p.step} / ${p.maxSteps}`);
       flashStat(els.stTrain, p.trainLoss.toFixed(4));
+      updateLossMeaning(p.trainLoss);
       flashStat(els.stVal, p.valLoss?.toFixed(4) ?? "–");
       flashStat(els.stToks, Math.round(p.tokensPerSecond).toLocaleString());
       els.stBackend.textContent = p.backend;
@@ -2074,6 +2110,7 @@ async function init(): Promise<void> {
     const last = history[history.length - 1];
     els.stStep.textContent = String(last.step);
     els.stTrain.textContent = last.trainLoss.toFixed(4);
+    updateLossMeaning(last.trainLoss);
     els.stVal.textContent = last.valLoss?.toFixed(4) ?? "–";
   }
   if (prev && prevState) {

@@ -172,6 +172,10 @@ export const EXPLAINERS: Record<string, Explainer> = {
       label: "WASM SIMD proposal",
     },
   },
+  lossMeaning: {
+    title: "What the loss number actually means",
+    body: "TinyGPT predicts one byte at a time, so loss is in natural-log nats per byte. Random guessing on a 256-byte vocab is ln(256) ≈ 5.55. Useful thresholds for this codebase:\n\n• > 3.0 — letter-pair statistics only, no recognisable words\n• > 2.0 — short n-grams, letters look right but words don't form\n• > 1.5 — words start forming, grammar still random\n• < 1.5 — real grammar emerges, sentences start parsing\n• < 1.0 — fluent local grammar; on tiny corpora this is usually memorisation, so watch the train↔val gap\n\nIf you want grammatical English, aim for val loss below 1.5 — that's the bar. Below that you're in the regime where the prose starts looking like prose.",
+  },
   memory64: {
     title: "WebAssembly Memory64",
     body: "64-bit pointers in the WASM module. Without it, the tab heap is capped at 4 GB (~250M fp32 params with Adam state); with it, the cap rises into the tens of GB — enough to host the Behemoth preset. Chromium 133+, Firefox 134+. When this pill is on, you're loading tinygpt64.wasm.",
