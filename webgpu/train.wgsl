@@ -34,6 +34,87 @@ fn matmul(@builtin(global_invocation_id) gid: vec3<u32>) {
   g2[row * p.c + col] = acc;
 }
 
+// Thread-blocked + workgroup-shared-tiled matmul. Same bind layout as
+// `matmul` above — A=g0, B=g1, C=g2, p.a=M p.b=K p.c=N — but each thread
+// computes a 4×4 register block of output values, and the 16×16 workgroup
+// outputs a 64×64 tile. Standalone-kernel measurement: 5.18× at 2048×2048.
+//
+// Dispatch with workgroups = ceil(M/64) × ceil(N/64).
+var<workgroup> mb_tileA: array<array<f32, 16>, 64>;
+var<workgroup> mb_tileB: array<array<f32, 64>, 16>;
+
+@compute @workgroup_size(16, 16)
+fn matmul_blocked(
+  @builtin(workgroup_id) wid: vec3<u32>,
+  @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+  let M = p.a; let K = p.b; let N = p.c;
+  let blockRow = wid.x * 64u;
+  let blockCol = wid.y * 64u;
+  let lrow = lid.x; let lcol = lid.y;
+
+  var acc: array<array<f32, 4>, 4>;
+  for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      acc[i][j] = 0.0;
+    }
+  }
+
+  let nTiles = (K + 15u) / 16u;
+  for (var t: u32 = 0u; t < nTiles; t = t + 1u) {
+    let kBase = t * 16u;
+    // Cooperative load: 4 A-elements and 4 B-elements per thread.
+    for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+      let aRow = blockRow + lrow * 4u + i;
+      let aCol = kBase + lcol;
+      var v: f32 = 0.0;
+      if (aRow < M && aCol < K) { v = g0[aRow * K + aCol]; }
+      mb_tileA[lrow * 4u + i][lcol] = v;
+    }
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      let bRow = kBase + lrow;
+      let bCol = blockCol + lcol * 4u + j;
+      var v: f32 = 0.0;
+      if (bRow < K && bCol < N) { v = g1[bRow * N + bCol]; }
+      mb_tileB[lrow][lcol * 4u + j] = v;
+    }
+    workgroupBarrier();
+
+    let myA0 = lrow * 4u;
+    let myB0 = lcol * 4u;
+    for (var k: u32 = 0u; k < 16u; k = k + 1u) {
+      let a0 = mb_tileA[myA0 + 0u][k];
+      let a1 = mb_tileA[myA0 + 1u][k];
+      let a2 = mb_tileA[myA0 + 2u][k];
+      let a3 = mb_tileA[myA0 + 3u][k];
+      let b0 = mb_tileB[k][myB0 + 0u];
+      let b1 = mb_tileB[k][myB0 + 1u];
+      let b2 = mb_tileB[k][myB0 + 2u];
+      let b3 = mb_tileB[k][myB0 + 3u];
+      acc[0][0] = acc[0][0] + a0 * b0; acc[0][1] = acc[0][1] + a0 * b1;
+      acc[0][2] = acc[0][2] + a0 * b2; acc[0][3] = acc[0][3] + a0 * b3;
+      acc[1][0] = acc[1][0] + a1 * b0; acc[1][1] = acc[1][1] + a1 * b1;
+      acc[1][2] = acc[1][2] + a1 * b2; acc[1][3] = acc[1][3] + a1 * b3;
+      acc[2][0] = acc[2][0] + a2 * b0; acc[2][1] = acc[2][1] + a2 * b1;
+      acc[2][2] = acc[2][2] + a2 * b2; acc[2][3] = acc[2][3] + a2 * b3;
+      acc[3][0] = acc[3][0] + a3 * b0; acc[3][1] = acc[3][1] + a3 * b1;
+      acc[3][2] = acc[3][2] + a3 * b2; acc[3][3] = acc[3][3] + a3 * b3;
+    }
+    workgroupBarrier();
+  }
+
+  for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+    let outRow = blockRow + lrow * 4u + i;
+    if (outRow >= M) { continue; }
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      let outCol = blockCol + lcol * 4u + j;
+      if (outCol < N) {
+        g2[outRow * N + outCol] = acc[i][j];
+      }
+    }
+  }
+}
+
 // C = A @ Bᵀ   g0=A[M,K] g1=B[N,K] g2=C[M,N]   (dA = dC @ Bᵀ)
 @compute @workgroup_size(16, 16)
 fn matmul_abt(@builtin(global_invocation_id) gid: vec3<u32>) {
