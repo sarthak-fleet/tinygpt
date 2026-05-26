@@ -73,13 +73,18 @@ const JS_URL_32 = "/tinygpt.js";
 const WASM_URL_32 = "/tinygpt.wasm";
 
 function supportsMemory64(): boolean {
-  try {
-    // Probe: instantiate a 1-page Memory64 — throws on runtimes without support.
-    new WebAssembly.Memory({ initial: 1, maximum: 1, shared: false, address: "i64" } as WebAssembly.MemoryDescriptor);
-    return true;
-  } catch {
-    return false;
+  // The Memory64 descriptor field changed names during the proposal. Newer
+  // spec uses `address`; earlier Chromium implementations (and what Playwright
+  // bundles as of late 2026) still ship `index`. Try both.
+  for (const key of ["address", "index"] as const) {
+    try {
+      new WebAssembly.Memory({ initial: 1, maximum: 1, shared: false, [key]: "i64" } as unknown as WebAssembly.MemoryDescriptor);
+      return true;
+    } catch {
+      // Try the next spelling.
+    }
   }
+  return false;
 }
 
 const MEM64 = supportsMemory64();
