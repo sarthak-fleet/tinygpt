@@ -797,7 +797,17 @@ function refreshSampleNote(): void {
   let regime: string;
   let detail: string;
 
-  if (params < 200_000 && corpusBytes < 5000) {
+  // Loaded-checkpoint case: a meaningful model sitting against the textarea's
+  // placeholder text. The corpus-vs-params regime classification doesn't apply
+  // — what they're seeing is the model that was already trained, somewhere
+  // else. Lead with the measured outcome; demote the regime advice to a
+  // footnote so it doesn't read as a critique of the loaded model.
+  const isLoadedCheckpoint = haveTrained && corpusBytes < 5000 && params > 100_000;
+
+  if (isLoadedCheckpoint) {
+    regime = "Pre-trained checkpoint loaded";
+    detail = `${formatParams(params)} params. Generation below uses these weights as-is — no further training needed. If you want to keep training this model on your own corpus, paste it into the box above and hit Start.`;
+  } else if (params < 200_000 && corpusBytes < 5000) {
     regime = "Microscope mode";
     detail = `${formatParams(params)} params on ${corpusLabel} — the model has nothing to chew on. Expect letter shapes and nothing else. The win here is watching the loss curve fall; the prose is incidental.`;
   } else if (params < 1_000_000 && corpusBytes < 50_000) {
@@ -1943,7 +1953,7 @@ async function init(): Promise<void> {
     pill("WASM SIMD", caps.wasmSimd, "wasmSimd") +
     pill("Memory64", usingMemory64, "memory64") +
     pill("cross-origin isolated", caps.crossOriginIsolated, "crossOriginIsolated") +
-    `<span class="pill on">backend: ${caps.active}</span>` +
+    `<span class="pill on" id="backendPill">backend: ${caps.active}</span>` +
     `<span class="pill off">${browser.name}</span>` +
     `<span class="pill off">${hw.cores} cores${ramBit}</span>` +
     `<button type="button" class="pill off pill-btn" id="heapPill" data-explain="heap" title="JS heap used">heap —</button>` +
@@ -1983,6 +1993,16 @@ async function init(): Promise<void> {
       backendSel.dataset.userPicked = "1";
     });
   }
+
+  // Keep the "backend: …" pill in the YOUR MACHINE card in sync with the
+  // dropdown — without this it reads as static even when the user toggles.
+  const backendSelGlobal = byId<HTMLSelectElement>("backend");
+  const syncBackendPill = () => {
+    const pillEl = document.getElementById("backendPill");
+    if (pillEl) pillEl.textContent = `backend: ${backendSelGlobal.value}`;
+  };
+  backendSelGlobal.addEventListener("change", syncBackendPill);
+  syncBackendPill();
 
   byId<HTMLButtonElement>("applyRec").addEventListener("click", () => {
     applyRecommendation(rec);

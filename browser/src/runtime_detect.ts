@@ -216,7 +216,10 @@ export function detectBrowser(): BrowserInfo {
   if (/\bFirefox\//.test(ua))
     return { name: "Firefox", chromium: false,
       note: nonChromium("WebGPU is still rolling out.") };
-  if (/\bChrome\//.test(ua)) return { name: "Chrome", chromium: true, note: chromiumNote };
+  // `Chrome/` and `HeadlessChrome/` (Playwright, Puppeteer): both are
+  // Chromium. We need the looser substring match because "HeadlessChrome"
+  // has no word boundary before "Chrome".
+  if (/Chrome\//.test(ua)) return { name: "Chrome", chromium: true, note: chromiumNote };
   if (/\bSafari\//.test(ua))
     return { name: "Safari", chromium: false,
       note: nonChromium("WebGPU needs Safari 18+ and OPFS needs Safari 17+.") };
