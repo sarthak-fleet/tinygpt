@@ -276,6 +276,73 @@
       .bench-table tbody tr:last-child td { border-bottom: none; }
       .bench-table tbody td:first-child { color: var(--fg); font-weight: 500; }
 
+      /* Speed-evolution chart */
+      .evo-chart {
+        margin-top: 6px;
+        display: grid;
+        gap: 8px;
+      }
+      .evo-row {
+        display: grid;
+        grid-template-columns: 200px 1fr 64px 78px;
+        align-items: center;
+        gap: 12px;
+        font: 500 12.5px/1 var(--font-mono);
+      }
+      .evo-label {
+        color: var(--muted);
+        text-align: right;
+        white-space: nowrap;
+      }
+      .evo-bar {
+        height: 14px;
+        width: var(--w);
+        border-radius: 3px;
+        transition: filter 0.18s ease;
+      }
+      .evo-bar.shipped {
+        background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+        box-shadow: 0 0 12px var(--accent-glow);
+      }
+      .evo-bar.planned {
+        background: repeating-linear-gradient(
+          135deg,
+          #3a3f4a 0px,
+          #3a3f4a 6px,
+          #4a4f5a 6px,
+          #4a4f5a 12px
+        );
+        opacity: 0.78;
+      }
+      .evo-bar:hover { filter: brightness(1.15); }
+      .evo-val {
+        color: var(--fg);
+        font-weight: 500;
+        text-align: right;
+      }
+      .evo-tag {
+        font: 500 10.5px/1 var(--font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--faint);
+        text-align: left;
+      }
+      .evo-row:has(.evo-bar.shipped) .evo-tag {
+        color: var(--accent);
+      }
+      @media (max-width: 720px) {
+        .evo-row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+          padding: 8px 0;
+          border-bottom: 1px dashed var(--line);
+        }
+        .evo-row:last-child { border-bottom: none; }
+        .evo-label { text-align: left; }
+        .evo-bar { width: var(--w); }
+        .evo-val { text-align: left; }
+      }
+
       footer {
         margin-top: 80px;
         padding-top: 32px;
@@ -367,6 +434,77 @@
               from the repo root. Reports ms/step per preset, both forward and backward.
             </span>
           </div>
+        </div>
+      </article>
+
+      <!-- Speed-evolution chart -->
+      <article class="lever speed-evo">
+        <div class="lever-head">
+          <span class="lever-num">●</span>
+          <h2 class="lever-title">Speed evolution — Small preset, normalized to scalar baseline</h2>
+          <span class="status shipped"><span class="dot"></span> Measured + extrapolated</span>
+        </div>
+        <div class="lever-meta">
+          <span>Baseline: <strong>1×</strong> = single-threaded scalar WASM</span>
+          <span>Reading: each bar is the cumulative speedup over baseline</span>
+        </div>
+        <div class="lever-body">
+          <div class="evo-chart" role="img" aria-label="Bar chart showing relative training speed across project phases">
+            <!-- Solid bars = measured. Striped bars = projected from per-lever impact estimates. -->
+            <div class="evo-row">
+              <span class="evo-label">scalar baseline</span>
+              <span class="evo-bar shipped" style="--w: 2%"></span>
+              <span class="evo-val">1.0×</span>
+              <span class="evo-tag">measured</span>
+            </div>
+            <div class="evo-row">
+              <span class="evo-label">+ WASM SIMD</span>
+              <span class="evo-bar shipped" style="--w: 3.2%"></span>
+              <span class="evo-val">1.6×</span>
+              <span class="evo-tag">measured</span>
+            </div>
+            <div class="evo-row">
+              <span class="evo-label">+ multi-thread (4 workers)</span>
+              <span class="evo-bar shipped" style="--w: 6.4%"></span>
+              <span class="evo-val">3.2×</span>
+              <span class="evo-tag">measured</span>
+            </div>
+            <div class="evo-row">
+              <span class="evo-label">+ WebGPU (M-series)</span>
+              <span class="evo-bar shipped" style="--w: 22%"></span>
+              <span class="evo-val">~11×</span>
+              <span class="evo-tag">measured</span>
+            </div>
+            <div class="evo-row">
+              <span class="evo-label">+ WebGPU f16</span>
+              <span class="evo-bar planned" style="--w: 44%"></span>
+              <span class="evo-val">~22×</span>
+              <span class="evo-tag">projected</span>
+            </div>
+            <div class="evo-row">
+              <span class="evo-label">+ WebGPU subgroups</span>
+              <span class="evo-bar planned" style="--w: 62%"></span>
+              <span class="evo-val">~31×</span>
+              <span class="evo-tag">projected</span>
+            </div>
+            <div class="evo-row">
+              <span class="evo-label">+ Flash Attention 2 (ctx 512)</span>
+              <span class="evo-bar planned" style="--w: 100%"></span>
+              <span class="evo-val">~50–100×</span>
+              <span class="evo-tag">projected</span>
+            </div>
+          </div>
+          <p style="margin-top: 18px; color: var(--muted); font-size: 13.5px;">
+            <strong>Solid teal bars</strong> are measured on this codebase. <strong>Striped bars</strong>
+            extrapolate from the per-lever impact estimates in the entries below — each
+            lever's impact multiplied through the prior cumulative number. They're a
+            best-faith projection, not a promise.
+          </p>
+          <p style="margin-top: 8px; color: var(--faint); font-size: 12.5px;">
+            Memory64 doesn't appear on this chart because it lifts the <em>model-size
+            ceiling</em>, not training throughput. At fixed Small-preset size it's a no-op
+            — but it's the gate to running this whole pipeline on a 470M-param model.
+          </p>
         </div>
       </article>
 
