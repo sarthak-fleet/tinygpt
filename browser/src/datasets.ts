@@ -38,6 +38,26 @@ export const HF_CATALOG: HfDataset[] = [
     blurb: "simple short stories — the best fit for a tiny model",
   },
   {
+    id: "tinystories-v2",
+    label: "TinyStories V2 (GPT-4)",
+    dataset: "roneneldan/TinyStoriesV2-GPT4",
+    config: "default",
+    split: "train",
+    textColumn: "text",
+    license: "CDLA-Sharing-1.0",
+    blurb: "the GPT-4-regenerated TinyStories — cleaner prose",
+  },
+  {
+    id: "tiny-shakespeare",
+    label: "Tiny Shakespeare",
+    dataset: "Trelis/tiny-shakespeare",
+    config: "default",
+    split: "train",
+    textColumn: "Text",
+    license: "Public domain",
+    blurb: "the classic Karpathy demo corpus — 1 MB of the Bard",
+  },
+  {
     id: "simplewiki",
     label: "Simple English Wikipedia",
     dataset: "wikimedia/wikipedia",
@@ -48,7 +68,17 @@ export const HF_CATALOG: HfDataset[] = [
     blurb: "encyclopedia articles in simplified English",
   },
   {
-    id: "wikitext",
+    id: "wikipedia-en",
+    label: "Wikipedia (English)",
+    dataset: "wikimedia/wikipedia",
+    config: "20231101.en",
+    split: "train",
+    textColumn: "text",
+    license: "CC-BY-SA",
+    blurb: "the full English Wikipedia — diverse but harder",
+  },
+  {
+    id: "wikitext-2",
     label: "WikiText-2",
     dataset: "Salesforce/wikitext",
     config: "wikitext-2-raw-v1",
@@ -56,6 +86,16 @@ export const HF_CATALOG: HfDataset[] = [
     textColumn: "text",
     license: "CC-BY-SA-3.0",
     blurb: "the classic language-modeling benchmark corpus",
+  },
+  {
+    id: "wikitext-103",
+    label: "WikiText-103",
+    dataset: "Salesforce/wikitext",
+    config: "wikitext-103-raw-v1",
+    split: "train",
+    textColumn: "text",
+    license: "CC-BY-SA-3.0",
+    blurb: "the larger WikiText sibling — more variety",
   },
   {
     id: "quotes",
@@ -67,33 +107,148 @@ export const HF_CATALOG: HfDataset[] = [
     license: "CC-BY-4.0",
     blurb: "short literary quotations",
   },
+  {
+    id: "imdb",
+    label: "IMDB reviews",
+    dataset: "stanfordnlp/imdb",
+    config: "plain_text",
+    split: "train",
+    textColumn: "text",
+    license: "Non-commercial",
+    blurb: "movie reviews — opinionated, varied register",
+  },
+  {
+    id: "ag-news",
+    label: "AG News headlines",
+    dataset: "fancyzhx/ag_news",
+    config: "default",
+    split: "train",
+    textColumn: "text",
+    license: "CC-0",
+    blurb: "short news headlines + summaries",
+  },
+  {
+    id: "dolly-15k",
+    label: "Dolly 15k (responses)",
+    dataset: "databricks/databricks-dolly-15k",
+    config: "default",
+    split: "train",
+    textColumn: "response",
+    license: "CC-BY-SA-3.0",
+    blurb: "human-written instruction responses",
+  },
+  {
+    id: "pg19",
+    label: "PG-19 (Project Gutenberg)",
+    dataset: "deepmind/pg19",
+    config: "default",
+    split: "train",
+    textColumn: "text",
+    license: "Public domain",
+    blurb: "long-form classic books from Project Gutenberg",
+  },
+  {
+    id: "openwebtext-10k",
+    label: "OpenWebText (10k)",
+    dataset: "stas/openwebtext-10k",
+    config: "default",
+    split: "train",
+    textColumn: "text",
+    license: "CC-0",
+    blurb: "10k diverse web pages — the GPT-2 pretraining flavour",
+  },
+  {
+    id: "lyrics",
+    label: "Song lyrics",
+    dataset: "amishshah/song_lyrics",
+    config: "default",
+    split: "train",
+    textColumn: "lyrics",
+    license: "various",
+    blurb: "lyrics from many artists — short, rhythmic, distinctive",
+  },
 ];
 
 const SERVER = "https://datasets-server.huggingface.co";
 
+export class HfFetchError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: "auth" | "not-found" | "ratelimit" | "network" | "empty" | "other",
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = "HfFetchError";
+  }
+}
+
+function diagnoseStatus(status: number, dataset: string): HfFetchError {
+  if (status === 401)
+    return new HfFetchError(
+      `"${dataset}" requires a Hugging Face token — it's either gated (you have to accept its terms) or hitting the anonymous rate limit. Paste a token below to retry, or pick another dataset.`,
+      "auth",
+      401,
+    );
+  if (status === 403)
+    return new HfFetchError(
+      `"${dataset}" is gated — accept its terms on huggingface.co, create a read-only access token, and paste it below.`,
+      "auth",
+      403,
+    );
+  if (status === 404)
+    return new HfFetchError(
+      `"${dataset}" was not found. Check the path is exactly owner/name and the config/split are valid.`,
+      "not-found",
+      404,
+    );
+  if (status === 429)
+    return new HfFetchError(
+      `Hit the anonymous rate limit — wait a minute or paste an HF token below to keep going.`,
+      "ratelimit",
+      429,
+    );
+  return new HfFetchError(`dataset server returned HTTP ${status}`, "other", status);
+}
+
 /**
  * Fetch up to ~maxChars of text from a Hugging Face dataset, paging the
  * datasets-server `rows` endpoint. `onProgress` reports characters so far.
+ * `token`, if provided, is sent as a Bearer token to unlock gated datasets
+ * and lift the anonymous rate limit.
+ *
+ * Default cap raised to 2 MB — the old 120 KB limit was sized for the original
+ * demo corpus, but real training needs real data.
  */
 export async function fetchHfText(
   d: HfDataset,
-  maxChars = 120_000,
+  maxChars = 2_000_000,
   onProgress?: (chars: number) => void,
+  token?: string,
 ): Promise<string> {
   const parts: string[] = [];
   let chars = 0;
   let offset = 0;
   const pageSize = 100;
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
 
-  while (chars < maxChars && offset < 3000) {
+  while (chars < maxChars && offset < 50_000) {
     const url =
       `${SERVER}/rows?dataset=${encodeURIComponent(d.dataset)}` +
       `&config=${encodeURIComponent(d.config)}` +
       `&split=${encodeURIComponent(d.split)}` +
       `&offset=${offset}&length=${pageSize}`;
 
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`dataset server returned HTTP ${resp.status}`);
+    let resp: Response;
+    try {
+      resp = await fetch(url, { headers });
+    } catch (err) {
+      throw new HfFetchError(
+        `couldn't reach huggingface.co — check your connection`,
+        "network",
+      );
+    }
+    if (!resp.ok) throw diagnoseStatus(resp.status, d.dataset);
     const json = (await resp.json()) as {
       rows?: { row: Record<string, unknown> }[];
     };
@@ -109,9 +264,13 @@ export async function fetchHfText(
     }
     onProgress?.(chars);
     offset += rows.length;
-    if (rows.length < pageSize) break; // reached the end of the split
+    if (rows.length < pageSize) break;
   }
 
-  if (parts.length === 0) throw new Error("no text rows were returned");
+  if (parts.length === 0)
+    throw new HfFetchError(
+      `no text was returned — the column "${d.textColumn}" may be wrong, or the split is empty.`,
+      "empty",
+    );
   return parts.join("\n\n").slice(0, maxChars);
 }

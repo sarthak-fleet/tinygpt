@@ -38,17 +38,43 @@ function hasWasmSimd(): boolean {
   }
 }
 
-async function hasWebGpu(): Promise<boolean> {
-  // WebGPU types are not in the standard DOM lib — probe with a minimal shape.
+interface AdapterShape {
+  info?: {
+    vendor?: string;
+    architecture?: string;
+    device?: string;
+    description?: string;
+  };
+  requestAdapterInfo?: () => Promise<AdapterShape["info"]>;
+}
+
+async function probeWebGpu(): Promise<{ available: boolean; gpuName: string | null }> {
   const gpu = (navigator as unknown as {
-    gpu?: { requestAdapter(): Promise<unknown> };
+    gpu?: { requestAdapter(): Promise<AdapterShape | null> };
   }).gpu;
-  if (!gpu) return false;
+  if (!gpu) return { available: false, gpuName: null };
   try {
-    return (await gpu.requestAdapter()) != null;
+    const adapter = await gpu.requestAdapter();
+    if (!adapter) return { available: false, gpuName: null };
+    let info = adapter.info;
+    if (!info && typeof adapter.requestAdapterInfo === "function") {
+      info = await adapter.requestAdapterInfo();
+    }
+    const parts = [info?.vendor, info?.architecture, info?.device, info?.description]
+      .filter((s): s is string => typeof s === "string" && s.length > 0);
+    const gpuName = parts.length ? parts.join(" · ") : null;
+    return { available: true, gpuName };
   } catch {
-    return false;
+    return { available: false, gpuName: null };
   }
+}
+
+async function hasWebGpu(): Promise<boolean> {
+  return (await probeWebGpu()).available;
+}
+
+export async function getGpuName(): Promise<string | null> {
+  return (await probeWebGpu()).gpuName;
 }
 
 /** Probe the browser. `active` is the backend the worker will really use. */

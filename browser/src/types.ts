@@ -53,6 +53,7 @@ export interface TrainingProgress {
 /** main -> worker */
 export type ToWorker =
   | { type: "train"; text: string; config: RunConfig }
+  | { type: "continue"; extraSteps: number }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "sample"; prompt: string; tokens: number; temperature: number }
