@@ -18,10 +18,43 @@ interface WasmModule {
   cwrap(name: string, ret: string | null, args: string[]): (...a: number[]) => number;
 }
 
-type Factory = () => Promise<WasmModule>;
+interface ModuleOpts {
+  locateFile?: (path: string) => string;
+  // Emscripten pthread builds spawn workers via `new Worker(new URL(import.meta.url))`.
+  // When the module is loaded via blob URL, this would point at the blob (one-shot),
+  // breaking thread spawn. Setting `mainScriptUrlOrBlob` overrides it to the real path.
+  mainScriptUrlOrBlob?: string;
+}
+type Factory = (opts?: ModuleOpts) => Promise<WasmModule>;
 
-/** Where the compiled module is served from (see wasm/build_wasm.sh output). */
-const MODULE_URL = "/tinygpt.js";
+/**
+ * Where the compiled module is served from (see wasm/build_wasm.sh output).
+ * Files in /public can't be imported from source code under Vite 5+, so we
+ * fetch the module text and import it via a blob URL. `locateFile` then tells
+ * Emscripten where to find tinygpt.wasm regardless of import.meta.url.
+ */
+const JS_URL = "/tinygpt.js";
+const WASM_URL = "/tinygpt.wasm";
+
+let factoryPromise: Promise<Factory> | undefined;
+async function loadFactory(): Promise<Factory> {
+  if (!factoryPromise) {
+    factoryPromise = (async () => {
+      const res = await fetch(JS_URL);
+      if (!res.ok) throw new Error(`failed to load ${JS_URL}: ${res.status}`);
+      const code = await res.text();
+      const blob = new Blob([code], { type: "application/javascript" });
+      const url = URL.createObjectURL(blob);
+      try {
+        const mod = (await import(/* @vite-ignore */ url)) as { default: Factory };
+        return mod.default;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    })();
+  }
+  return factoryPromise;
+}
 
 export class TinyGptBackend {
   private constructor(
@@ -44,8 +77,11 @@ export class TinyGptBackend {
 
   /** Load and instantiate the compiled WASM module. */
   static async load(): Promise<TinyGptBackend> {
-    const mod = (await import(/* @vite-ignore */ MODULE_URL)) as { default: Factory };
-    const m = await mod.default();
+    const factory = await loadFactory();
+    const m = await factory({
+      locateFile: (p) => (p === "tinygpt.wasm" ? WASM_URL : p),
+      mainScriptUrlOrBlob: JS_URL,
+    });
     const N = "number";
     return new TinyGptBackend(m, {
       create: m.cwrap("tg_model_create", N, [N, N, N, N, N, N, N]),
