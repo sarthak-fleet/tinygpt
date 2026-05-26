@@ -2,7 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="description" content="WebAssembly SIMD vs hand-written WebGPU on the same GPT-2 model — 6.8 s/step down to 0.7 s/step, 9.7× end-to-end, 1.1% loss drift." />
     <title>TinyGPT — the speedup, in one chart</title>
+
+    <!-- Open Graph / Twitter — for when the speedup chart gets shared -->
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="TinyGPT — 9.7× faster in one chart" />
+    <meta property="og:description" content="WASM SIMD: 6.8 s/step. WebGPU with the blocked-4×4 matmul kernel: 0.7 s/step. Same model, same seed, 1.1% loss drift — pure float-reorder noise." />
+    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="TinyGPT — 9.7× faster, in one chart" />
+    <meta name="twitter:description" content="WASM SIMD vs hand-written WebGPU on the same GPT-2 model. 9.7× end-to-end, 1.1% loss drift." />
+    <meta name="twitter:image" content="/og-image.png" />
     <style>
       :root {
         --bg: #0a0c10;
