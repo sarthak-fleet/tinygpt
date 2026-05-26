@@ -11,6 +11,10 @@ dist/
 .vite/
 .wrangler/
 
+# Local environment files (PostHog keys, etc — never committed)
+browser/.env
+browser/.env.local
+
 # Compiled WASM module (build artifact of wasm/build_wasm.sh)
 browser/public/tinygpt.js
 browser/public/tinygpt.wasm
