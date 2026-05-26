@@ -3,178 +3,2507 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>TinyGPT — train a tiny GPT in your browser</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#08090a" />
+    <meta name="description" content="Train a real transformer from scratch in your browser tab — 0.8M to 25M params, hand-written backprop in C++/WASM with a WebGPU path. No server, no install." />
+    <title>TinyGPT — train a real transformer in your browser tab</title>
+
+    <!-- Open Graph / Twitter card -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="TinyGPT — train a real transformer in your browser tab" />
+    <meta property="og:description" content="0.8M to 25M params, hand-written backprop in C++/WASM with a WebGPU path. ~7× faster on GPU, ~2× from multi-threading. No server, no install." />
+    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:url" content="https://tinygpt.sarthakagrawal.dev" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="TinyGPT — train a real transformer in your browser tab" />
+    <meta name="twitter:description" content="0.8M to 25M params. Hand-written backprop, no autograd. 7× faster on GPU, 2× from multi-threading. No server, no install." />
+    <meta name="twitter:image" content="/og-image.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <style>
-      :root { color-scheme: dark; }
+      :root {
+        color-scheme: dark;
+        --base: #08090a;
+        --panel: #0d0e10;
+        --panel-2: #141518;
+        --line: #1d1f23;
+        --line-strong: #2c2f35;
+        --fg: #e7e8ea;
+        --muted: #9296a0;
+        --faint: #787d88;
+        --accent: #48e5c2;
+        --accent-dim: #1f6f5f;
+        --accent-glow: #48e5c233;
+        --warn: #f5b14a;
+        --danger: #ff6868;
+        --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+        --font-mono: "Geist Mono", ui-monospace, "SF Mono", "JetBrains Mono", monospace;
+        --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+      }
       * { box-sizing: border-box; }
+      html, body { background: var(--base); }
       body {
-        margin: 0; padding: 24px;
-        font: 14px/1.5 system-ui, sans-serif;
-        background: #010409; color: #e6edf3;
+        margin: 0;
+        font: 15px/1.55 var(--font-sans);
+        color: var(--fg);
+        -webkit-font-smoothing: antialiased;
       }
-      h1 { font-size: 20px; margin: 0 0 4px; }
-      .sub { color: #7d8590; margin: 0 0 20px; }
-      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-      @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      code, pre { font-family: var(--font-mono); }
+
+      /* Mobile-responsive — tighten everything for narrow viewports */
+      @media (max-width: 720px) {
+        .wrap { padding: 36px 16px 80px; }
+        header { margin-bottom: 36px; }
+        .brand { gap: 10px; }
+        .brand h1 { font-size: 24px; }
+        .brand .tag { display: none; }
+        .header-actions { width: 100%; margin-top: 8px; }
+        .header-btn { padding: 6px 10px; font-size: 11.5px; }
+        .lede { font-size: 14px; }
+        .card { padding: 22px 18px; border-radius: 10px; }
+        .card + .card { margin-top: 22px; }
+        .card-title { font-size: 11px; margin-bottom: 16px; }
+        .machine { padding: 14px 16px; margin-bottom: 32px; }
+        .form-grid { grid-template-columns: 1fr; gap: 14px; }
+        .stats { grid-template-columns: repeat(2, 1fr); gap: 14px; }
+        .train-grid { gap: 22px; }
+        .controls { gap: 8px; }
+        .controls button { padding: 8px 12px; font-size: 12.5px; }
+        .controls-secondary { gap: 6px; }
+        .ghost-btn { padding: 6px 10px; font-size: 11.5px; }
+        .sample-controls { flex-direction: column; align-items: stretch; gap: 10px; }
+        .sample-controls .field.narrow input { width: 100%; }
+        .tab-bar { padding: 0 4px; }
+        .tab-btn { padding: 10px 11px; font-size: 12px; }
+        .tab-body { padding: 12px 14px; }
+        .first-run-toast { left: 16px; right: 16px; transform: none; max-width: none; }
+        .first-run-toast.dismissing,
+        .first-run-toast { animation-name: first-run-mobile-in; }
+        @keyframes first-run-mobile-in {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        dialog#welcome { max-width: calc(100% - 32px); padding: 22px 20px; }
+        .section-divider { margin: 56px 0 28px; }
+        .footer-meta { font-size: 11.5px; gap: 8px; }
+        .resources .res-col h3 { font-size: 10.5px; }
+        .resources .res-col li { font-size: 13px; }
+        canvas#chart { height: 180px; }
+      }
+
+      /* Page background — one deliberate overhead radial wash. */
+      body::before {
+        content: "";
+        position: fixed; inset: 0;
+        background:
+          radial-gradient(ellipse 1100px 600px at 50% -240px, rgba(72, 229, 194, 0.09), transparent 65%);
+        pointer-events: none; z-index: -1;
+      }
+
+      /* Layout — narrower column, more breathing room. */
+      .wrap { max-width: 1060px; margin: 0 auto; padding: 96px 32px 200px; }
+      header { margin-bottom: 96px; }
+      .brand {
+        display: flex; align-items: center; gap: 18px;
+        margin: 0 0 32px;
+        flex-wrap: wrap;
+      }
+      .brand-mark {
+        display: flex; align-items: center;
+        filter: drop-shadow(0 0 12px rgba(72, 229, 194, 0.22));
+        transition: filter 0.3s ease;
+      }
+      .brand-mark svg { width: 46px; height: 46px; }
+      .brand-mark:hover { filter: drop-shadow(0 0 22px rgba(72, 229, 194, 0.45)); }
+      .brand h1 {
+        font-size: 48px; font-weight: 600;
+        letter-spacing: -0.03em;
+        line-height: 1;
+        margin: 0;
+        background: linear-gradient(135deg, var(--fg) 0%, color-mix(in srgb, var(--accent) 82%, var(--fg)) 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .brand .tag {
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--muted);
+        border: 1px solid var(--line-strong);
+        background: transparent;
+        padding: 5px 10px; border-radius: 999px;
+        letter-spacing: 0.08em; text-transform: uppercase;
+      }
+      .header-actions {
+        display: flex; gap: 8px; align-items: center;
+        flex-wrap: wrap;
+      }
+      .header-btn {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 7px 14px;
+        background: transparent;
+        border: 1px solid var(--line-strong);
+        color: var(--muted);
+        font: 500 12px/1 var(--font-sans);
+        border-radius: 999px;
+        cursor: pointer;
+        text-decoration: none;
+        transition: all 0.18s ease;
+      }
+      .header-btn span[aria-hidden] {
+        color: var(--faint);
+        font-size: 13px;
+        line-height: 1;
+        transition: color 0.15s ease;
+      }
+      .header-btn:hover {
+        color: var(--fg);
+        border-color: var(--muted);
+        background: transparent;
+        transform: translateY(-1px);
+      }
+      .header-btn:hover span[aria-hidden] { color: var(--accent); }
+      .header-btn:active { transform: translateY(0); }
+      .header-btn.tour-trigger {
+        border-style: dashed;
+      }
+      .lede {
+        color: var(--muted);
+        max-width: 620px;
+        margin: 0;
+        font-size: 17px; line-height: 1.65;
+      }
+      .lede strong { color: var(--fg); font-weight: 500; }
+      .lede a {
+        color: var(--fg);
+        text-decoration: underline;
+        text-decoration-color: var(--line-strong);
+        text-underline-offset: 4px;
+        transition: text-decoration-color 0.15s ease;
+        white-space: nowrap;
+      }
+      .lede a:hover { text-decoration-color: var(--accent); }
+
+      /* Cards — quieter surfaces, defined by space not lines. */
       .card {
-        background: #0d1117; border: 1px solid #30363d;
-        border-radius: 8px; padding: 16px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 32px 36px;
+        transition: border-color 0.2s ease;
       }
-      .card h2 { font-size: 13px; text-transform: uppercase;
-        letter-spacing: .04em; color: #7d8590; margin: 0 0 12px; }
-      textarea {
-        width: 100%; height: 150px; resize: vertical;
-        background: #010409; color: #e6edf3;
-        border: 1px solid #30363d; border-radius: 6px;
-        padding: 8px; font: 12px/1.45 ui-monospace, monospace;
+      .card:hover { border-color: var(--line-strong); }
+      .card + .card { margin-top: 32px; }
+      .card-title {
+        display: flex; align-items: center; gap: 10px;
+        font: 600 11.5px/1 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        margin: 0 0 24px;
       }
-      label { display: flex; justify-content: space-between;
-        align-items: center; gap: 8px; margin: 6px 0; color: #adbac7; }
-      input[type="number"], select, input[type="text"] {
-        background: #010409; color: #e6edf3;
-        border: 1px solid #30363d; border-radius: 6px;
-        padding: 5px 8px; width: 120px;
+      .card-title .num {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 20px; height: 20px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        color: var(--faint);
+        font: 600 10px/1 var(--font-mono);
       }
-      .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+      .card-title .right { margin-left: auto; }
+      .card-prose {
+        color: var(--muted);
+        font-size: 14px; line-height: 1.65;
+        margin: 0 0 12px;
+      }
+      .card-prose strong { color: var(--fg); font-weight: 500; }
+      .card-prose em { color: var(--accent); font-style: normal; }
+      .card-prose code {
+        font-size: 12.5px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        padding: 1px 5px;
+        border-radius: 3px;
+        color: var(--accent);
+      }
+      .card-prose a {
+        color: var(--accent);
+        text-decoration: underline;
+        text-decoration-color: var(--accent-dim);
+      }
+      .card-prose.card-note {
+        font-size: 13px;
+        padding: 12px 14px;
+        background: var(--panel-2);
+        border-left: 2px solid var(--accent-dim);
+        border-radius: 0 6px 6px 0;
+        margin-top: 14px;
+        margin-bottom: 0;
+      }
+
+      /* Unified machine panel — replaces machine + personalise + intro */
+      .machine-card {
+        margin-top: 48px;
+        margin-bottom: 24px;
+        padding: 0;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        transition: border-color 0.18s ease;
+      }
+      .machine-card:hover { border-color: var(--line-strong); }
+      .machine-card > summary {
+        list-style: none;
+        cursor: pointer;
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        align-items: center;
+        gap: 18px;
+        padding: 16px 22px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .machine-card > summary::-webkit-details-marker { display: none; }
+      .machine-card > summary:hover { background: var(--panel-2); }
+      .machine-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+      .machine-label {
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        flex-shrink: 0;
+      }
+      .machine-pills { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; }
+      .machine-preview {
+        font: 400 12px/1.4 var(--font-mono);
+        color: var(--faint);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 380px;
+      }
+      .machine-chev {
+        font: 500 13px/1 var(--font-mono);
+        color: var(--faint);
+        transition: transform 0.18s ease, color 0.18s ease;
+      }
+      .machine-card[open] > summary > .machine-chev {
+        transform: rotate(90deg);
+        color: var(--accent);
+      }
+      @media (max-width: 720px) {
+        .machine-card > summary { grid-template-columns: 1fr auto; }
+        .machine-preview { display: none; }
+      }
+
+      /* Legacy .machine class kept for now — JS may touch it. */
+      .machine {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 16px; flex-wrap: wrap;
+        padding: 14px 20px;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        margin-top: 40px;
+        margin-bottom: 16px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .machine .label {
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .machine .label {
+        font: 500 11px/1 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-right: 6px;
+      }
+      .machine strong { color: var(--fg); font-weight: 500; }
+      .machine .muted { color: var(--muted); }
+      .machine #caps { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+      #caps .pill {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 8px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font: 500 11px/1.6 var(--font-mono);
+        color: var(--muted);
+      }
+      #caps .pill.on { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-glow); }
+      #caps .pill.off { color: var(--faint); }
+      #caps .pill.warn { color: var(--warn); border-color: #5b4423; }
+      #caps button.pill-btn {
+        font: 500 11px/1.6 var(--font-mono);
+        cursor: help;
+        padding: 2px 8px;
+      }
+      #caps button.pill-btn:hover, #caps button.pill-btn:focus-visible {
+        outline: none;
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      /* Personalised machine interpretation */
+      .machine-personalise {
+        margin: 0 0 12px;
+        padding: 0;
+        background: transparent;
+        border: none;
+      }
+      .machine-personalise > summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex; align-items: center; gap: 12px;
+        padding: 8px 14px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        transition: border-color 0.18s ease;
+      }
+      .machine-personalise > summary::-webkit-details-marker { display: none; }
+      .machine-personalise > summary:hover { border-color: var(--line-strong); }
+      .mp-key {
+        font: 500 11px/1 var(--font-mono);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .mp-preview {
+        flex: 1; min-width: 0;
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .mp-chevron {
+        font: 500 13px/1 var(--font-mono);
+        color: var(--faint);
+        transition: transform 0.18s ease;
+      }
+      .machine-personalise[open] > summary > .mp-chevron { transform: rotate(90deg); color: var(--accent); }
+      .mp-body {
+        margin-top: 14px;
+        padding: 20px 22px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        color: var(--muted);
+        font-size: 14px; line-height: 1.65;
+      }
+      .mp-body p { margin: 0 0 10px; }
+      .mp-body p:last-child { margin-bottom: 0; }
+      .mp-body strong { color: var(--fg); font-weight: 500; }
+      .mp-body em { color: var(--accent); font-style: normal; }
+      .mp-body .mp-row {
+        display: flex; gap: 14px; align-items: baseline;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .mp-body .mp-row:last-child { border-bottom: none; }
+      .mp-body .mp-label {
+        font: 500 11px/1.4 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        min-width: 140px;
+      }
+      .mp-body .mp-value { flex: 1; }
+      .mp-body code {
+        background: var(--base);
+        border: 1px solid var(--line);
+        padding: 1px 5px;
+        border-radius: 3px;
+        color: var(--accent);
+        font-size: 12.5px;
+      }
+
+      /* Train layout — both cards stretch to equal height for visual balance. */
+      .train-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+        gap: 28px;
+        align-items: stretch;
+      }
+      @media (max-width: 880px) { .train-grid { grid-template-columns: 1fr; } }
+      .hero-grid > .card { display: flex; flex-direction: column; }
+      .hero-grid .hero-config { padding: 28px 30px; }
+      .hero-grid .hero-loss { padding: 28px 32px; }
+      /* On wide screens, push controls (Start / Model / Notify) to the
+         bottom of the left card so its overall height matches the right. */
+      .hero-config .controls { margin-top: auto; padding-top: 18px; }
+
+      /* Form */
+      textarea, input[type="number"], input[type="text"], select {
+        background: var(--base);
+        color: var(--fg);
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font: 13px/1.4 var(--font-sans);
+        outline: none;
+        transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+      }
+      textarea:hover, input:hover, select:hover {
+        border-color: var(--muted);
+      }
+      textarea { font: 12.5px/1.55 var(--font-mono); resize: vertical; min-height: 120px; width: 100%; }
+      input[type="number"], input[type="text"], select { width: 100%; }
+      textarea:focus, input:focus, select:focus {
+        border-color: var(--accent-dim);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+      }
+      .corpus-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 10px; flex-wrap: wrap; margin-bottom: 8px;
+      }
+      .corpus-head .hf {
+        display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+      }
+      .corpus-head select { width: auto; min-width: 240px; padding: 5px 8px; font-size: 12.5px; max-width: 100%; }
+      .corpus-head select.fetch-size {
+        min-width: 0; width: auto;
+        font: 500 11.5px/1 var(--font-mono);
+        color: var(--muted);
+        padding: 5px 8px;
+      }
+      #hfStatus { font: 500 11px/1 var(--font-mono); color: var(--faint); }
+      .hf-custom {
+        display: flex; flex-wrap: wrap; gap: 6px;
+        align-items: center;
+        margin: 8px 0;
+        padding: 10px 12px;
+        background: var(--panel-2);
+        border: 1px dashed var(--line-strong);
+        border-radius: 6px;
+      }
+      .hf-custom[hidden] { display: none; }
+      .hf-custom input {
+        width: auto; min-width: 0;
+        padding: 5px 8px; font-size: 12.5px;
+        font-family: var(--font-mono);
+      }
+      .hf-custom input#hfCustomDataset { flex: 1 1 200px; min-width: 200px; }
+      .hf-custom input#hfCustomConfig,
+      .hf-custom input#hfCustomSplit,
+      .hf-custom input#hfCustomColumn { width: 110px; }
+      .hf-custom button { padding: 6px 12px; font-size: 12.5px; }
+      .hf-custom .hf-browse {
+        font: 500 11px/1 var(--font-mono);
+        color: var(--muted);
+        margin-left: auto;
+      }
+      .hf-custom .hf-browse:hover { color: var(--accent); }
+
+      .hf-token {
+        display: flex; flex-wrap: wrap; gap: 10px;
+        align-items: center;
+        margin: 8px 0;
+        padding: 14px 16px;
+        background: var(--accent-glow);
+        border: 1px dashed var(--accent-dim);
+        border-radius: 6px;
+        font-size: 12.5px;
+      }
+      .hf-token[hidden] { display: none; }
+      .hf-token label {
+        display: flex; flex-direction: column; gap: 2px;
+        flex: 0 0 100%;
+      }
+      .hf-token label .label-main { color: var(--accent); font-weight: 500; }
+      .hf-token label .label-jargon { color: var(--muted); font: 400 11px/1.3 var(--font-mono); }
+      .hf-token input {
+        flex: 1 1 240px;
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        padding: 6px 10px;
+      }
+      .hf-token .hf-browse { font-size: 11.5px; }
+      .hf-token .ghost-btn { padding: 6px 12px; font-size: 12.5px; }
+
+      /* Data-source tabs — one widget instead of 5 controls in a row */
+      .corpus-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      .corpus-head-label {
+        display: inline-flex; align-items: center; gap: 6px;
+        font: 500 11px/1 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .corpus-head-controls {
+        display: inline-flex; align-items: center; gap: 8px;
+      }
+      .fetch-size-label {
+        font: 500 11px/1 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .data-tabs {
+        margin: 4px 0 14px;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        border-radius: 10px;
+        overflow: hidden;
+      }
+      .tab-bar {
+        display: flex;
+        gap: 0;
+        border-bottom: 1px solid var(--line);
+        background: var(--base);
+      }
+      .tab-btn {
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 11px 8px;
+        background: transparent;
+        border: none;
+        border-bottom: 2px solid transparent;
+        color: var(--muted);
+        font: 500 12.5px/1 var(--font-sans);
+        cursor: pointer;
+        transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+        white-space: nowrap;
+        text-align: center;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tab-btn:hover { color: var(--fg); background: var(--panel-2); }
+      .tab-btn.active {
+        color: var(--fg);
+        border-bottom-color: var(--accent);
+        background: var(--panel-2);
+      }
+      .tab-body { padding: 14px 16px 12px; }
+      .tab-panel[hidden] { display: none; }
+      .tab-panel {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+      }
+      .tab-panel select#hfDataset { flex: 1 1 320px; }
+      .tab-hint {
+        font: 400 12px/1.4 var(--font-mono);
+        color: var(--faint);
+      }
+      .tab-hint a { color: var(--muted); }
+      .tab-hint a:hover { color: var(--accent); }
+      .tab-panel select#hfDataset {
+        flex: 1 1 280px; min-width: 280px;
+        padding: 8px 12px;
+        font-size: 13px;
+      }
+      .inline-input {
+        display: flex; align-items: stretch; flex: 1 1 360px; min-width: 0;
+      }
+      .inline-input input {
+        flex: 1; min-width: 0;
+        padding: 8px 12px;
+        font: 500 12.5px/1 var(--font-mono);
+        border: 1px solid var(--line-strong);
+        border-right: none;
+        border-radius: 6px 0 0 6px;
+        background: var(--base);
+        color: var(--fg);
+      }
+      .inline-input input:focus {
+        border-color: var(--accent-dim);
+        outline: none;
+      }
+      .inline-input button { border-radius: 0 6px 6px 0; }
+      .primary-btn {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 8px 14px;
+        background: var(--accent-glow);
+        border: 1px solid var(--accent-dim);
+        color: var(--accent);
+        font: 500 12.5px/1 var(--font-sans);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .primary-btn:hover {
+        background: var(--accent);
+        color: #062019;
+        border-color: var(--accent);
+      }
+      .primary-btn:disabled {
+        opacity: 0.5; cursor: not-allowed;
+      }
+      .primary-btn span[aria-hidden] { font-size: 13px; }
+      .custom-hf-grid {
+        display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+        width: 100%;
+      }
+      .custom-hf-grid input {
+        flex: 1 1 140px; min-width: 0;
+        padding: 7px 10px;
+        font: 500 12.5px/1 var(--font-mono);
+      }
+      .custom-hf-grid input:first-child { flex: 2 1 220px; min-width: 200px; }
+      .data-load-status {
+        font: 500 11.5px/1.4 var(--font-mono);
+        color: var(--faint);
+        padding: 0 18px 14px;
+      }
+      .data-load-status:empty { padding: 0; }
+      .data-load-status.ok { color: var(--accent); }
+      .data-load-status.error { color: var(--danger); }
+      .data-load-status[hidden] { display: none; }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px 22px;
+        margin-top: 18px;
+      }
+      .field { display: flex; flex-direction: column; gap: 8px; }
+      .field label {
+        display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+        font: 500 13.5px/1.2 var(--font-sans);
+        color: var(--fg);
+      }
+      .field label .label-main { color: var(--fg); letter-spacing: -0.005em; }
+      .field label .label-jargon {
+        font: 400 11.5px/1 var(--font-mono);
+        color: var(--faint);
+      }
+      .field input, .field select { padding: 9px 12px; font-size: 13px; }
+
+      /* Pre-flight estimate */
+      .estimate {
+        margin-top: 22px;
+        padding: 14px 18px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        font: 500 12px/1.3 var(--font-mono);
+        display: flex; flex-direction: column; gap: 4px;
+      }
+      .estimate .est-row { display: flex; align-items: baseline; gap: 10px; }
+      .estimate .est-k {
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-size: 10.5px;
+        min-width: 130px;
+      }
+      .estimate .est-v { color: var(--fg); font-size: 13px; font-weight: 500; }
+      .estimate .est-note { color: var(--muted); font-weight: 400; font-size: 11.5px; }
+
+      /* Notify toggle */
+      .notify-toggle {
+        display: inline-flex; align-items: center; gap: 7px;
+        margin: 0 0 0 4px;
+        font: 500 12px/1 var(--font-sans);
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .notify-toggle input { width: auto; margin: 0; accent-color: var(--accent); }
+      .notify-toggle:hover span { color: var(--fg); }
+      .notify-status {
+        font: 500 11px/1 var(--font-mono);
+        color: var(--faint);
+      }
+      .notify-status.error { color: var(--danger); }
+      .notify-status.ok { color: var(--accent); }
+
+      /* Hyperparameters disclosure — collapsed by default behind presets */
+      .hyperparam-details { margin-top: 18px; }
+      .hyperparam-details > summary {
+        list-style: none;
+        cursor: pointer;
+        display: inline-flex; align-items: center; gap: 10px;
+        padding: 10px 14px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        user-select: none;
+        transition: border-color 0.15s ease, color 0.15s ease;
+      }
+      .hyperparam-details > summary::-webkit-details-marker { display: none; }
+      .hyperparam-details > summary:hover { border-color: var(--line-strong); }
+      .hyperparam-details[open] > summary { border-color: var(--accent-dim); }
+      .hp-key {
+        font: 500 11px/1 var(--font-mono);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .hp-hint {
+        font: 400 12.5px/1.3 var(--font-sans);
+        color: var(--muted);
+      }
+      .hp-chev {
+        margin-left: auto;
+        font: 500 13px/1 var(--font-mono);
+        color: var(--faint);
+        transition: transform 0.18s ease, color 0.18s ease;
+      }
+      .hyperparam-details[open] > summary > .hp-chev { transform: rotate(90deg); color: var(--accent); }
+
+      /* Advanced details */
+      details.advanced {
+        margin-top: 14px;
+        border-top: 1px dashed var(--line);
+        padding-top: 12px;
+      }
+      details.advanced > summary {
+        cursor: pointer;
+        font: 500 12px/1 var(--font-mono);
+        color: var(--muted);
+        list-style: none;
+        display: inline-flex; align-items: center; gap: 6px;
+        user-select: none;
+      }
+      details.advanced > summary::-webkit-details-marker { display: none; }
+      details.advanced > summary::before {
+        content: "▸"; color: var(--faint); transition: transform 0.15s;
+        display: inline-block;
+      }
+      details.advanced[open] > summary::before { transform: rotate(90deg); }
+      details.advanced > summary:hover { color: var(--fg); }
+
+      /* Buttons */
+      .controls {
+        display: flex; gap: 10px; flex-wrap: wrap; margin-top: 22px;
+        align-items: center;
+      }
       button {
-        background: #238636; color: #fff; border: 0;
-        border-radius: 6px; padding: 7px 14px; cursor: pointer; font-weight: 600;
+        font: 500 13px/1 var(--font-sans);
+        padding: 9px 16px;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
       }
-      button.secondary { background: #21262d; color: #e6edf3;
-        border: 1px solid #30363d; }
-      button:disabled { opacity: .45; cursor: not-allowed; }
-      canvas { width: 100%; height: 220px; border-radius: 6px; display: block; }
-      .stats { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px;
-        font: 12px ui-monospace, monospace; color: #adbac7; }
-      .stats b { color: #e6edf3; }
-      #status { margin-top: 10px; color: #7d8590; font-size: 12px;
-        min-height: 16px; }
-      #output { white-space: pre-wrap; background: #010409;
-        border: 1px solid #30363d; border-radius: 6px; padding: 10px;
-        font: 12px/1.5 ui-monospace, monospace; min-height: 70px;
-        color: #adbac7; margin-top: 8px; }
-      pre { background: #010409; border: 1px solid #30363d; border-radius: 6px;
-        padding: 10px; font: 12px/1.55 ui-monospace, monospace; color: #adbac7;
-        overflow-x: auto; margin: 0; }
-      .pill { display: inline-block; padding: 1px 7px; border-radius: 10px;
-        font-size: 11px; border: 1px solid #30363d; margin-right: 6px; }
-      .pill.on { color: #3fb950; border-color: #238636; }
-      .pill.off { color: #7d8590; }
+      button.primary {
+        background: linear-gradient(180deg, #5cf0d0 0%, var(--accent) 100%);
+        color: #062019;
+        border-color: var(--accent);
+        font-weight: 600;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset, 0 6px 18px -8px var(--accent);
+      }
+      button.primary:hover:not(:disabled) {
+        background: linear-gradient(180deg, #6ff5d8 0%, #5cf0d0 100%);
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset, 0 8px 22px -8px var(--accent);
+      }
+      button.primary:active:not(:disabled) {
+        background: var(--accent);
+        box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2) inset;
+      }
+      button.secondary {
+        background: transparent;
+        color: var(--fg);
+        border-color: var(--line-strong);
+      }
+      button.secondary:hover:not(:disabled) {
+        background: var(--panel-2);
+        border-color: var(--muted);
+      }
+      button.ghost {
+        background: transparent; color: var(--muted);
+        border-color: var(--line);
+        padding: 6px 10px; font-size: 12px;
+      }
+      button.ghost:hover:not(:disabled) { color: var(--fg); border-color: var(--line-strong); }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+      /* Model actions dropdown — collapses Continue/Download/Upload/Reset */
+      .model-menu { position: relative; }
+      .model-menu button.secondary { display: inline-flex; align-items: center; gap: 6px; }
+      .chev-down { font-size: 10px; opacity: 0.7; transition: transform 0.15s ease; }
+      .model-menu[data-open="true"] .chev-down { transform: rotate(180deg); }
+      .model-menu-list {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        z-index: 50;
+        min-width: 280px;
+        background: var(--panel);
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        padding: 6px;
+        box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(72, 229, 194, 0.05);
+        animation: menu-in 0.18s var(--ease-out-expo);
+      }
+      .model-menu-list[hidden] { display: none; }
+      @keyframes menu-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .menu-item {
+        display: grid;
+        grid-template-columns: 18px 1fr auto;
+        column-gap: 10px; row-gap: 2px;
+        align-items: center;
+        padding: 9px 12px;
+        background: transparent;
+        border: none;
+        color: var(--fg);
+        font: 500 13px/1.2 var(--font-sans);
+        text-align: left;
+        cursor: pointer;
+        border-radius: 6px;
+        width: 100%;
+        transition: background 0.12s ease;
+      }
+      .menu-item:hover:not(:disabled) { background: var(--panel-2); }
+      .menu-item:disabled { opacity: 0.4; cursor: not-allowed; }
+      .menu-icon { color: var(--accent); font-size: 13px; line-height: 1; }
+      .menu-label { color: var(--fg); }
+      .menu-hint {
+        grid-column: 2 / -1;
+        font: 400 11.5px/1.3 var(--font-mono);
+        color: var(--faint);
+      }
+      .menu-input {
+        grid-column: auto;
+        grid-row: span 2;
+        width: 64px;
+        padding: 4px 6px;
+        font: 500 12px/1 var(--font-mono);
+        background: var(--base);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        color: var(--fg);
+        text-align: right;
+      }
+      .menu-input:hover, .menu-input:focus {
+        border-color: var(--accent-dim);
+        outline: none;
+      }
+      .menu-suffix {
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--faint);
+        align-self: center;
+      }
+      .menu-divider { height: 1px; background: var(--line); margin: 4px 8px; }
+      .menu-danger .menu-icon { color: var(--danger); }
+      .menu-danger:hover:not(:disabled) { background: rgba(255, 104, 104, 0.06); }
+      .menu-danger .menu-label { color: var(--danger); }
+
+      .upload-btn { cursor: pointer; }
+      .upload-btn input { position: absolute; left: -9999px; }
+      .model-status {
+        font: 500 11.5px/1.4 var(--font-mono);
+        color: var(--faint);
+        margin-top: 10px;
+      }
+      .model-status:empty { margin-top: 0; }
+      .model-status.ok { color: var(--accent); }
+      .model-status.error { color: var(--danger); }
+
+      /* Status */
+      #status {
+        min-height: 18px;
+        margin-top: 10px;
+        font: 500 12px/1.4 var(--font-mono);
+        color: var(--muted);
+      }
+      #status.error { color: var(--danger); }
+
+      /* Hero — the live training surface. Big, dominant, restrained. */
+      .hero-title {
+        font: 600 16px/1 var(--font-sans);
+        color: var(--fg);
+        text-transform: none;
+        letter-spacing: -0.012em;
+        margin-bottom: 24px;
+      }
+      .hero-title .info { margin-left: 6px; }
+      .hero-title .right { font: 500 11px/1 var(--font-mono); color: var(--faint); }
+      .backend-chip {
+        margin-left: auto;
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--faint);
+        background: transparent;
+        border: 1px solid var(--line);
+        padding: 4px 8px;
+        border-radius: 999px;
+        text-transform: lowercase;
+      }
+      .backend-chip span { color: var(--muted); font-weight: 500; }
+
+      /* Loss panel */
+      .loss-card { display: flex; flex-direction: column; position: relative; }
+      .chart-tooltip {
+        position: absolute;
+        pointer-events: none;
+        z-index: 5;
+        padding: 8px 10px;
+        background: var(--panel-2);
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        font: 500 11.5px/1.3 var(--font-mono);
+        color: var(--fg);
+        box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      .chart-tooltip[hidden] { display: none; }
+      .chart-tooltip .tip-step { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+      .chart-tooltip .tip-train { color: var(--accent); }
+      .chart-tooltip .tip-bits { color: var(--faint); font-weight: 400; }
+      .chart-tooltip .tip-val { color: var(--warn); display: block; margin-top: 2px; }
+      canvas#chart {
+        width: 100%; height: 360px;
+        background: var(--base);
+        border: 1px solid var(--line);
+        border-radius: 8px; display: block;
+      }
+      .hero-loss canvas#chart {
+        height: 360px;
+      }
+      @media (max-width: 720px) {
+        .hero-loss canvas#chart { height: 240px; }
+      }
+
+      /* Primary stats — 3 big tabular numbers under the chart */
+      .stats-primary {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 0;
+        margin-top: 22px;
+        border-top: 1px solid var(--line);
+      }
+      .stat-big {
+        padding: 16px 0 14px;
+        border-right: 1px solid var(--line);
+        text-align: left;
+      }
+      .stat-big:last-child { border-right: none; }
+      .stat-big-label {
+        display: block;
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 8px;
+      }
+      .stat-big-value {
+        display: block;
+        font: 500 32px/1 var(--font-mono);
+        color: var(--fg);
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.025em;
+      }
+      .stat-big-value.flash { color: var(--accent); transition: color 0.25s ease; }
+
+      /* "More metrics" disclosure under the primary three */
+      .stats-more {
+        margin-top: 18px;
+        border-top: 1px solid var(--line);
+        padding-top: 14px;
+      }
+      .stats-more > summary {
+        list-style: none;
+        cursor: pointer;
+        display: inline-flex; align-items: center; gap: 6px;
+        font: 500 11px/1 var(--font-mono);
+        color: var(--faint);
+        user-select: none;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        transition: color 0.15s ease;
+      }
+      .stats-more > summary::-webkit-details-marker { display: none; }
+      .stats-more > summary:hover { color: var(--muted); }
+      .stats-more .more-chev {
+        transition: transform 0.18s ease;
+      }
+      .stats-more[open] > summary > .more-chev { transform: rotate(90deg); color: var(--accent); }
+      .stats-more[open] > summary { color: var(--accent); }
+      .stats-secondary { margin-top: 14px; }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px 22px;
+        margin-top: 0;
+        font-family: var(--font-mono);
+      }
+      .stats .stat {
+        display: flex; flex-direction: column; gap: 4px;
+        padding: 8px 0;
+        border-top: 1px solid var(--line);
+      }
+      .stats .stat:nth-child(-n+3) { border-top: none; padding-top: 0; }
+      .stats .stat .v {
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.01em;
+      }
+
+      /* Milestone strip — live training commentary */
+      .milestone {
+        display: flex; align-items: center; gap: 10px;
+        margin-top: 16px;
+        padding: 10px 14px;
+        background: transparent;
+        border-top: 1px solid var(--accent-dim);
+        color: var(--muted);
+        font: 500 12.5px/1.4 var(--font-sans);
+        animation: milestone-in 0.4s ease;
+      }
+      .milestone strong { color: var(--fg); font-weight: 500; }
+      .milestone[hidden] { display: none; }
+      .milestone-dot {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 4px var(--accent-glow);
+        animation: pulse 1.6s ease-in-out infinite;
+        flex-shrink: 0;
+      }
+      @keyframes milestone-in {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.2); opacity: 0.6; }
+      }
+      .stats .stat .k {
+        color: var(--faint);
+        font-size: 10.5px;
+        font-family: var(--font-sans);
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        display: flex; align-items: center; gap: 4px;
+      }
+      .stats .stat .v {
+        color: var(--fg);
+        font-size: 17px;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.005em;
+      }
+
+      /* Progress bar */
+      .progress {
+        height: 6px;
+        background: var(--line);
+        border-radius: 3px;
+        overflow: hidden;
+        margin-top: 14px;
+        position: relative;
+      }
+      .progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+        transition: width 0.4s var(--ease-out-expo, ease-out);
+        position: relative;
+        box-shadow: 0 0 12px -2px var(--accent);
+      }
+      .progress-bar::after {
+        content: "";
+        position: absolute; inset: 0;
+        background: linear-gradient(90deg,
+          transparent 0%,
+          rgba(255, 255, 255, 0.45) 50%,
+          transparent 100%);
+        animation: shimmer 1.8s ease-in-out infinite;
+      }
+      @keyframes shimmer {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(100%); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .progress-bar::after { animation: none; opacity: 0; }
+      }
+
+      /* Stat numbers — tick animation when they change */
+      .stats .stat .v {
+        transition: color 0.2s ease;
+      }
+      .stats .stat .v.flash {
+        color: var(--accent);
+      }
+
+      /* Live badge — pulses while training is running */
+      .live-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        margin-left: auto;
+        padding: 3px 9px;
+        border: 1px solid var(--accent-dim);
+        background: var(--accent-glow);
+        border-radius: 999px;
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .live-badge[hidden] { display: none; }
+      .live-dot {
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: var(--accent);
+        animation: live-pulse 1.4s ease-in-out infinite;
+      }
+      @keyframes live-pulse {
+        0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--accent-glow); }
+        50%      { opacity: 0.55; box-shadow: 0 0 0 6px transparent; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .live-dot { animation: none; }
+      }
+
+      /* Sample */
+      .sample-controls {
+        display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end;
+        margin-bottom: 12px;
+      }
+      .sample-controls .field { min-width: 0; }
+      .sample-controls .field.grow { flex: 1 1 220px; }
+      .sample-controls .field.narrow input { width: 90px; }
+      .sample-output-wrap { position: relative; }
+      #output {
+        white-space: pre-wrap;
+        background: var(--base);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px 18px;
+        font: 13.5px/1.65 var(--font-mono);
+        min-height: 100px;
+        color: var(--fg);
+        letter-spacing: -0.005em;
+      }
+      #output.empty { color: var(--faint); font-style: italic; font-family: var(--font-sans); font-size: 14px; }
+      .copy-output {
+        position: absolute;
+        top: 10px; right: 10px;
+        width: 30px; height: 30px;
+        padding: 0;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        color: var(--muted);
+        border-radius: 6px;
+        font: 500 14px/1 var(--font-sans);
+        cursor: pointer;
+        transition: all 0.15s ease;
+        opacity: 0.6;
+      }
+      .copy-output:hover {
+        opacity: 1;
+        color: var(--accent);
+        border-color: var(--accent-dim);
+        background: var(--accent-glow);
+      }
+      .copy-output.copied { color: var(--accent); border-color: var(--accent); }
+      .copy-output[hidden] { display: none; }
+
+      /* Benchmark + local sections */
+      #benchOut {
+        margin-top: 10px;
+        font: 12.5px/1.5 var(--font-mono);
+        color: var(--muted);
+      }
+      pre {
+        background: var(--base);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 12px 14px;
+        font: 12.5px/1.55 var(--font-mono);
+        color: var(--muted);
+        overflow-x: auto;
+        margin: 10px 0 0;
+      }
+      pre code { color: var(--fg); }
+
+      /* Info button — quiet by default, friendly on hover. */
+      button.info {
+        position: relative;
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 16px; height: 16px;
+        padding: 0; margin-left: 6px;
+        font: 500 10.5px/1 var(--font-mono);
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--faint);
+        border-radius: 50%;
+        cursor: help;
+        vertical-align: middle;
+        transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+      }
+      button.info:hover, button.info:focus-visible {
+        color: var(--fg);
+        border-color: var(--muted);
+        background: var(--panel-2);
+        outline: none;
+      }
+      button.info:active { background: var(--accent-glow); border-color: var(--accent-dim); }
+      /* When the popover is open, mark the trigger so the user can see which
+         info button it belongs to. */
+      button.info.is-open {
+        color: var(--accent);
+        border-color: var(--accent);
+        background: var(--accent-glow);
+      }
+      button.info.is-open:hover { color: var(--accent); background: var(--accent-glow); }
+      [popover].explain-pop {
+        position: fixed; margin: 0; inset: auto;
+        background: var(--panel-2);
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        padding: 14px 16px 12px;
+        color: var(--fg);
+        max-width: 340px;
+        font-size: 13.5px; line-height: 1.55;
+        box-shadow: 0 14px 38px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(72, 229, 194, 0.04);
+        opacity: 0; transform: translateY(-4px) scale(0.98);
+        transition: opacity 0.12s ease, transform 0.12s ease;
+      }
+      [popover].explain-pop:popover-open {
+        opacity: 1; transform: translateY(0) scale(1);
+      }
+      [popover].explain-pop::backdrop { background: transparent; }
+      [popover].explain-pop h4 {
+        margin: 0 0 8px;
+        font: 500 11px/1 var(--font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--accent);
+      }
+      [popover].explain-pop p {
+        margin: 0 0 10px;
+        color: var(--muted);
+      }
+      [popover].explain-pop p:last-child { margin-bottom: 0; }
+      [popover].explain-pop a {
+        display: inline-block;
+        font: 500 12px/1.4 var(--font-mono);
+        color: var(--accent);
+      }
+      [popover].explain-pop a:hover { text-decoration: underline; }
+
+      .brand .spacer { flex: 1; min-width: 12px; }
+
+      /* Intro card — single-sentence "what is this" for first-time visitors */
+      .intro-card {
+        display: flex; align-items: flex-start; gap: 14px;
+        padding: 14px 18px;
+        margin: 16px 0 24px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font-size: 13px;
+        color: var(--muted);
+        animation: rise-in 0.5s var(--ease-out-expo) 0.2s both;
+      }
+      .intro-card[hidden] { display: none; }
+      .intro-icon {
+        color: var(--accent);
+        font-size: 16px;
+        font-family: var(--font-mono);
+        line-height: 1.5;
+      }
+      .intro-text {
+        flex: 1;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .intro-text strong { color: var(--fg); font-weight: 500; }
+      .intro-dismiss {
+        flex-shrink: 0;
+        width: 26px; height: 26px;
+        padding: 0;
+        background: transparent;
+        border: 1px solid var(--line-strong);
+        color: var(--faint);
+        border-radius: 50%;
+        font: 500 14px/1 var(--font-sans);
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .intro-dismiss:hover {
+        color: var(--fg);
+        border-color: var(--muted);
+      }
+
+      /* Sticky mini-stats — fixed at top while training, after scroll past chart */
+      .sticky-stats {
+        position: fixed; top: 0; left: 0; right: 0;
+        z-index: 900;
+        display: flex; align-items: center; gap: 18px;
+        padding: 10px 24px;
+        background: rgba(13, 14, 16, 0.92);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--accent-dim);
+        font: 500 12px/1 var(--font-mono);
+        color: var(--muted);
+        animation: sticky-in 0.22s var(--ease-out-expo);
+      }
+      .sticky-stats[hidden] { display: none; }
+      .sticky-dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+        animation: live-pulse 1.6s ease-in-out infinite;
+      }
+      .sticky-label {
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .sticky-item { color: var(--muted); }
+      .sticky-item strong {
+        color: var(--fg);
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+      .sticky-jump {
+        margin-left: auto;
+        background: transparent;
+        border: 1px solid var(--line-strong);
+        color: var(--muted);
+        padding: 5px 10px;
+        border-radius: 5px;
+        font: 500 11.5px/1 var(--font-mono);
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .sticky-jump:hover {
+        color: var(--accent);
+        border-color: var(--accent-dim);
+        background: var(--accent-glow);
+      }
+      @keyframes sticky-in {
+        from { transform: translateY(-100%); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+      @media (max-width: 720px) {
+        .sticky-stats { padding: 8px 14px; gap: 10px; font-size: 11px; }
+        .sticky-stats .sticky-item:nth-child(n+5) { display: none; }
+      }
+
+      /* Keyboard shortcuts dialog */
+      .shortcuts-dialog {
+        background: var(--panel);
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        padding: 28px 32px 24px;
+        max-width: 460px;
+        color: var(--fg);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+      }
+      .shortcuts-dialog::backdrop {
+        background: rgba(4, 6, 10, 0.72);
+        backdrop-filter: blur(2px);
+      }
+      .shortcuts-dialog h2 {
+        margin: 0 0 18px;
+        font: 600 16px/1 var(--font-sans);
+        color: var(--fg);
+      }
+      .kbd-grid {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 12px 18px;
+        align-items: center;
+      }
+      .kbd-grid > kbd {
+        display: inline-block;
+        padding: 3px 8px;
+        background: var(--panel-2);
+        border: 1px solid var(--line-strong);
+        border-bottom-width: 2px;
+        border-radius: 5px;
+        font: 500 11px/1 var(--font-mono);
+        color: var(--fg);
+        margin-right: 4px;
+      }
+      .kbd-grid > kbd + kbd { margin-left: 2px; }
+      .kbd-grid > span {
+        font-size: 13.5px;
+        color: var(--muted);
+      }
+      .shortcuts-close {
+        margin-top: 22px;
+        padding: 8px 16px;
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        font: 500 12px/1 var(--font-sans);
+        cursor: pointer;
+      }
+      .shortcuts-close:hover { color: var(--fg); border-color: var(--muted); }
+
+      /* Landing animation — brand mark draws itself, lede fades in */
+      .brand-mark svg path {
+        stroke-dasharray: 80;
+        stroke-dashoffset: 80;
+        animation: draw-curve 1.4s var(--ease-out-expo) 0.15s forwards;
+      }
+      .brand-mark svg circle {
+        opacity: 0;
+        animation: dot-in 0.4s ease 1.2s forwards;
+      }
+      .brand h1 {
+        opacity: 0;
+        animation: title-rise 0.55s var(--ease-out-expo) 0.05s forwards;
+      }
+      .brand .tag {
+        opacity: 0;
+        animation: title-rise 0.4s ease 0.3s forwards;
+      }
+      .lede {
+        opacity: 0;
+        animation: title-rise 0.6s var(--ease-out-expo) 0.55s forwards;
+      }
+      .header-actions {
+        opacity: 0;
+        animation: title-rise 0.4s ease 0.45s forwards;
+      }
+      @keyframes draw-curve {
+        from { stroke-dashoffset: 80; }
+        to { stroke-dashoffset: 0; }
+      }
+      @keyframes dot-in {
+        from { opacity: 0; transform: scale(0.5); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      @keyframes title-rise {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .brand-mark svg path,
+        .brand-mark svg circle,
+        .brand h1, .brand .tag, .lede, .header-actions {
+          animation: none;
+          opacity: 1;
+          stroke-dashoffset: 0;
+          transform: none;
+        }
+      }
+      /* Skip the landing animation on subsequent visits — too tiring */
+      body.landing-done .brand-mark svg path,
+      body.landing-done .brand-mark svg circle,
+      body.landing-done .brand h1,
+      body.landing-done .brand .tag,
+      body.landing-done .lede,
+      body.landing-done .header-actions {
+        animation: none;
+        opacity: 1;
+        stroke-dashoffset: 0;
+      }
+
+      /* Subtle entrance on first paint */
+      .card, .machine, header, footer {
+        animation: rise-in 0.5s var(--ease-out-expo, ease-out) both;
+      }
+      .card:nth-of-type(2) { animation-delay: 0.05s; }
+      .card:nth-of-type(3) { animation-delay: 0.10s; }
+      .card:nth-of-type(4) { animation-delay: 0.15s; }
+      @keyframes rise-in {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .card, .machine, header, footer { animation: none; }
+      }
+
+      /* Tour overlay + spotlight */
+      .tour-overlay {
+        position: fixed; inset: 0;
+        pointer-events: none;
+        z-index: 1000;
+      }
+      .tour-spotlight {
+        position: fixed;
+        border-radius: 12px;
+        box-shadow:
+          0 0 0 4px var(--accent-glow),
+          0 0 0 9999px rgba(4, 6, 10, 0.66);
+        transition: top 0.25s var(--ease, ease), left 0.25s ease,
+                    width 0.25s ease, height 0.25s ease;
+        pointer-events: none;
+      }
+      .tour-pop {
+        position: fixed;
+        z-index: 1001;
+        max-width: 360px;
+        background: var(--panel-2);
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        padding: 18px 18px 14px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(72, 229, 194, 0.06);
+        animation: tour-in 0.18s ease;
+      }
+      @keyframes tour-in {
+        from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+      .tour-pop .tour-step {
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 6px;
+      }
+      .tour-pop h3 {
+        margin: 0 0 8px;
+        font: 600 15px/1.3 var(--font-sans);
+        color: var(--fg);
+        letter-spacing: -0.005em;
+      }
+      .tour-pop p {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 13.5px; line-height: 1.55;
+      }
+      .tour-pop .tour-link {
+        display: inline-block;
+        font: 500 12px/1.4 var(--font-mono);
+        color: var(--accent);
+        margin-bottom: 10px;
+      }
+      .tour-pop .tour-await {
+        margin: 6px 0 12px;
+        padding: 8px 10px;
+        background: var(--accent-glow);
+        border: 1px dashed var(--accent-dim);
+        border-radius: 6px;
+        color: var(--accent);
+        font: 500 12px/1.4 var(--font-mono);
+      }
+      .tour-pop .tour-actions {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 8px; margin-top: 6px;
+      }
+      .tour-pop .tour-nav { display: flex; gap: 6px; }
+      .tour-pop button {
+        font: 500 12px/1 var(--font-sans);
+        padding: 7px 12px;
+        border-radius: 5px;
+        border: 1px solid var(--line-strong);
+        cursor: pointer;
+      }
+      .tour-pop .tour-skip {
+        background: transparent;
+        color: var(--faint);
+        border-color: transparent;
+        padding-left: 0;
+      }
+      .tour-pop .tour-skip:hover { color: var(--muted); }
+      .tour-pop .tour-prev {
+        background: transparent;
+        color: var(--muted);
+      }
+      .tour-pop .tour-prev:hover:not(:disabled) {
+        color: var(--fg); border-color: var(--muted);
+      }
+      .tour-pop .tour-prev:disabled { opacity: 0.4; cursor: not-allowed; }
+      .tour-pop .tour-next {
+        background: var(--accent);
+        color: #062019;
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      .tour-pop .tour-next:hover:not(:disabled) { background: #5cf0d0; }
+      .tour-pop .tour-next:disabled { opacity: 0.5; cursor: not-allowed; background: var(--accent-dim); border-color: var(--accent-dim); color: var(--accent); }
+
+      /* Welcome modal */
+      dialog#welcome {
+        background: var(--panel);
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        padding: 28px 28px 24px;
+        max-width: 440px;
+        color: var(--fg);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+      }
+      dialog#welcome::backdrop {
+        background: rgba(4, 6, 10, 0.72);
+        backdrop-filter: blur(2px);
+      }
+      dialog#welcome h2 {
+        margin: 0 0 8px;
+        font: 600 18px/1.3 var(--font-sans);
+        color: var(--fg);
+      }
+      dialog#welcome p {
+        margin: 0 0 18px;
+        color: var(--muted);
+        font-size: 14px; line-height: 1.6;
+      }
+      dialog#welcome .welcome-actions {
+        display: flex; gap: 10px; justify-content: flex-end;
+      }
+      dialog#welcome button.primary {
+        background: var(--accent); color: #062019;
+        border: 1px solid var(--accent); border-radius: 6px;
+        padding: 9px 16px; font: 600 13px/1 var(--font-sans);
+        cursor: pointer;
+      }
+      dialog#welcome button.primary:hover { background: #5cf0d0; }
+      dialog#welcome button.secondary {
+        background: transparent; color: var(--muted);
+        border: 1px solid var(--line-strong); border-radius: 6px;
+        padding: 9px 14px; font: 500 13px/1 var(--font-sans);
+        cursor: pointer;
+      }
+      dialog#welcome button.secondary:hover {
+        color: var(--fg); border-color: var(--muted);
+      }
+
+      /* Section divider between primary flow and reference content */
+      .section-divider {
+        display: flex; align-items: center; gap: 16px;
+        margin: 80px 0 36px;
+        color: var(--faint);
+        font: 500 10.5px/1 var(--font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+      .section-divider::before,
+      .section-divider::after {
+        content: ""; flex: 1; height: 1px;
+        background: var(--line);
+      }
+
+      /* Collapsible reference cards (Fine-tuning, Resources, More) */
+      .card.collapsible {
+        padding: 0;
+        background: var(--panel);
+      }
+      .card.collapsible > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 18px 22px;
+        display: flex; align-items: center; gap: 14px;
+        user-select: none;
+        transition: background 0.12s ease;
+      }
+      .card.collapsible > summary::-webkit-details-marker { display: none; }
+      .card.collapsible > summary:hover { background: var(--panel-2); border-radius: 12px 12px 0 0; }
+      .card.collapsible[open] > summary { border-bottom: 1px solid var(--line); }
+      .card.collapsible > summary > .summary-title {
+        margin: 0;
+        flex: 1;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .summary-sub {
+        color: var(--muted);
+        font: 400 13px/1.4 var(--font-sans);
+        text-transform: none;
+        letter-spacing: 0;
+        margin-left: 2px;
+      }
+      .chevron {
+        font: 500 14px/1 var(--font-mono);
+        color: var(--faint);
+        transition: transform 0.18s ease, color 0.12s ease;
+        display: inline-block;
+      }
+      .card.collapsible[open] > summary > .chevron { transform: rotate(90deg); color: var(--accent); }
+      .card.collapsible > summary:hover > .chevron { color: var(--muted); }
+      .card.collapsible > *:not(summary) { padding-left: 22px; padding-right: 22px; }
+      .card.collapsible > *:not(summary):first-of-type { padding-top: 18px; }
+      .card.collapsible > *:not(summary):last-of-type { padding-bottom: 22px; }
+      .card.collapsible .inline-info { margin: 0 0 12px 22px; }
+      .card.collapsible .res-grid { padding-bottom: 22px; }
+
+      /* Resources card */
+      .resources .res-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 22px 28px;
+      }
+      @media (max-width: 720px) {
+        .resources .res-grid { grid-template-columns: 1fr; }
+      }
+      .resources .res-col h3 {
+        margin: 0 0 12px;
+        font: 500 11px/1 var(--font-mono);
+        color: var(--faint);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+      .resources .res-col ul {
+        margin: 0; padding: 0; list-style: none;
+        display: flex; flex-direction: column; gap: 7px;
+      }
+      .resources .res-col li {
+        font-size: 13.5px; line-height: 1.4;
+      }
+      .resources .res-col li a {
+        color: var(--fg);
+        font-weight: 500;
+        text-decoration: none;
+        border-bottom: 1px solid transparent;
+        transition: color 0.12s ease, border-color 0.12s ease;
+      }
+      .resources .res-col li a:hover {
+        color: var(--accent);
+        border-bottom-color: var(--accent-dim);
+      }
+      .resources .res-col li .muted {
+        color: var(--faint); font-size: 12.5px;
+      }
+
+      /* Sample interpretation callout */
+      .sample-note {
+        margin-top: 20px;
+        padding: 16px 0 0;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px; line-height: 1.65;
+      }
+      .sample-note strong { color: var(--fg); font-weight: 500; }
+      .sample-note a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-dim); }
+
+      /* Speed levers in Diagnostics card */
+      .speed-levers { margin-bottom: 28px; }
+      .speed-levers h3 {
+        margin: 0 0 14px;
+        font: 500 13px/1 var(--font-sans);
+        color: var(--fg);
+      }
+      .speed-levers ol {
+        margin: 0; padding: 0;
+        list-style: none;
+        counter-reset: speed;
+        display: flex; flex-direction: column; gap: 12px;
+      }
+      .speed-levers li {
+        counter-increment: speed;
+        position: relative;
+        padding: 12px 16px 12px 44px;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font-size: 13.5px; line-height: 1.55;
+        color: var(--muted);
+      }
+      .speed-levers li::before {
+        content: counter(speed);
+        position: absolute; left: 14px; top: 12px;
+        width: 22px; height: 22px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        color: var(--faint);
+        font: 600 11px/1 var(--font-mono);
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .speed-levers li strong { color: var(--fg); font-weight: 500; }
+      .speed-levers li code {
+        font-size: 12px;
+        background: var(--base);
+        border: 1px solid var(--line);
+        padding: 1px 5px;
+        border-radius: 3px;
+        color: var(--accent);
+      }
+      .speed-note {
+        margin: 16px 0 0;
+        font: 500 12.5px/1 var(--font-mono);
+        color: var(--faint);
+      }
+      .speed-note a { color: var(--muted); }
+      .speed-note a:hover { color: var(--accent); }
+
+      /* Footer */
+      footer.notes {
+        position: relative;
+        margin-top: 96px;
+        padding-top: 36px;
+        border-top: 1px solid var(--line);
+        color: var(--faint);
+      }
+      .footer-meta { color: var(--faint); font-size: 12px; }
+      .ghost-btn {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 12px;
+        background: transparent;
+        border: 1px solid var(--line-strong);
+        color: var(--fg);
+        font: 500 12px/1 var(--font-sans);
+        border-radius: 6px;
+        cursor: pointer;
+        text-decoration: none;
+        transition: all 0.15s ease;
+      }
+      .ghost-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--accent-glow);
+      }
+      .footer-meta {
+        color: var(--faint);
+        font-size: 12.5px;
+        display: flex; gap: 14px; flex-wrap: wrap;
+      }
+      .footer-meta a { color: var(--muted); }
+      .footer-meta a:hover { color: var(--accent); }
+      /* First-completed-run celebration toast */
+      .first-run-toast {
+        position: fixed;
+        bottom: 32px; left: 50%;
+        transform: translateX(-50%);
+        z-index: 2000;
+        display: flex; align-items: center; gap: 16px;
+        max-width: 540px;
+        padding: 16px 22px;
+        background: linear-gradient(180deg, var(--panel-2), var(--panel));
+        border: 1px solid var(--accent-dim);
+        border-radius: 12px;
+        box-shadow: 0 24px 60px -16px rgba(72, 229, 194, 0.45), 0 0 0 1px rgba(72, 229, 194, 0.1);
+        animation: first-run-in 0.36s var(--ease-out-expo);
+      }
+      .first-run-toast.dismissing { animation: first-run-out 0.5s ease forwards; }
+      .first-run-icon {
+        flex-shrink: 0;
+        width: 38px; height: 38px;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--accent);
+        color: #062019;
+        border-radius: 50%;
+        font: 700 18px/1 var(--font-sans);
+        box-shadow: 0 0 0 6px var(--accent-glow);
+      }
+      .first-run-title {
+        font: 600 14px/1.2 var(--font-sans);
+        color: var(--fg);
+        margin-bottom: 3px;
+      }
+      .first-run-sub {
+        font: 400 12.5px/1.45 var(--font-sans);
+        color: var(--muted);
+      }
+      .first-run-cta {
+        padding: 9px 16px;
+        background: var(--accent);
+        color: #062019;
+        border: none;
+        border-radius: 6px;
+        font: 600 12.5px/1 var(--font-sans);
+        cursor: pointer;
+        transition: background 0.15s ease;
+        flex-shrink: 0;
+      }
+      .first-run-cta:hover { background: #5cf0d0; }
+      @keyframes first-run-in {
+        from { opacity: 0; transform: translate(-50%, 30px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
+      }
+      @keyframes first-run-out {
+        to { opacity: 0; transform: translate(-50%, 20px); }
+      }
+      /* Generate button "nudge" — gentle pulse after the celebration */
+      #sample.nudge {
+        animation: nudge-pulse 1.2s ease;
+      }
+      @keyframes nudge-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+        40% { box-shadow: 0 0 0 8px var(--accent-glow); }
+      }
+
+      .share-toast {
+        position: fixed;
+        top: 24px; right: 24px;
+        z-index: 2000;
+        background: var(--accent);
+        color: #062019;
+        padding: 10px 16px;
+        border-radius: 8px;
+        font: 600 12.5px/1 var(--font-sans);
+        box-shadow: 0 12px 32px -8px var(--accent), 0 0 0 1px rgba(255,255,255,0.1) inset;
+        animation: toast-in 0.22s var(--ease-out-expo, ease-out);
+      }
+      .share-toast[hidden] { display: none; }
+      @keyframes toast-in {
+        from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
     </style>
   </head>
   <body>
-    <h1>TinyGPT</h1>
-    <p class="sub">
-      Train a byte-level GPT from scratch — entirely in your browser, in a Web
-      Worker, on WebAssembly. The UI thread stays responsive throughout.
-    </p>
-
-    <div class="card" style="margin-bottom: 20px">
-      <h2>Your machine — and what it can train</h2>
-      <div id="caps">detecting…</div>
-    </div>
-
-    <div class="grid">
-      <div class="card">
-        <h2>1 · Training corpus</h2>
-        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px">
-          <select id="hfDataset">
-            <option value="">— your own text (below) —</option>
-          </select>
-          <button id="hfLoad" class="secondary" style="padding: 5px 12px">
-            Load from 🤗 Hugging Face
-          </button>
-          <span id="hfStatus" style="font-size: 12px; color: #7d8590"></span>
+    <div class="wrap">
+      <header>
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="36" height="36">
+              <rect width="32" height="32" rx="8" fill="#0d0e10"/>
+              <rect x="0.5" y="0.5" width="31" height="31" rx="7.5" fill="none" stroke="#48e5c2" stroke-opacity="0.35"/>
+              <path d="M 5 7 C 9 7 11 21 17 24 C 21 26 23 26 27 26"
+                    fill="none" stroke="#48e5c2" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="27" cy="26" r="2.6" fill="#48e5c2"/>
+              <circle cx="27" cy="26" r="5.5" fill="#48e5c2" fill-opacity="0.18"/>
+            </svg>
+          </div>
+          <h1>TinyGPT</h1>
+          <span class="tag">in-browser playground</span>
+          <span class="spacer"></span>
+          <div class="header-actions">
+            <button class="header-btn" id="shareBtnTop" type="button" title="Copy a link with your current config">
+              <span aria-hidden="true">⇪</span> Share
+            </button>
+            <a class="header-btn" href="https://github.com/sarthakagrawal927/tinygpt/issues/new" target="_blank" rel="noopener" title="Open an issue on GitHub">
+              <span aria-hidden="true">✦</span> Feedback
+            </a>
+            <button class="header-btn tour-trigger" id="tourBtn" type="button">Take the tour →</button>
+          </div>
         </div>
-        <textarea id="corpus">A small model learns one thing at a time. First it learns that letters follow letters. After a space, another word begins. After a period, a capital letter often comes next.
+        <p class="lede">
+          Train a small <strong>GPT</strong> — the kind of model behind ChatGPT,
+          only ~0.8 million parameters instead of a trillion — from scratch,
+          right here in this tab. No server, no install. Watch the loss curve
+          fall, then ask it to write you a sentence.
+          <a href="https://github.com/sarthakagrawal927/tinygpt">Source ↗</a>
+        </p>
+      </header>
+
+      <div class="train-grid hero-grid">
+        <!-- LEFT: configure + start -->
+        <section class="card hero-config">
+          <h2 class="card-title hero-title">
+            Train
+            <button class="info" data-explain="whatIsTraining">?</button>
+          </h2>
+
+          <div class="corpus-head">
+            <span class="corpus-head-label">
+              Corpus
+              <button class="info" data-explain="corpus">?</button>
+            </span>
+            <div class="corpus-head-controls">
+              <label class="fetch-size-label" for="fetchSize">Fetch</label>
+              <select id="fetchSize" title="How much text to download" class="fetch-size">
+                <option value="200000">200 KB</option>
+                <option value="1000000">1 MB</option>
+                <option value="2000000" selected>2 MB</option>
+                <option value="5000000">5 MB</option>
+                <option value="10000000">10 MB</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="data-tabs">
+            <div class="tab-bar" role="tablist">
+              <button class="tab-btn active" data-tab="curated" type="button" role="tab">Curated</button>
+              <button class="tab-btn" data-tab="upload" type="button" role="tab">Upload</button>
+              <button class="tab-btn" data-tab="wikipedia" type="button" role="tab">Wikipedia</button>
+              <button class="tab-btn" data-tab="url" type="button" role="tab">URL</button>
+              <button class="tab-btn" data-tab="custom" type="button" role="tab">Custom</button>
+            </div>
+            <div class="tab-body">
+              <div class="tab-panel" data-panel="curated">
+                <select id="hfDataset">
+                  <option value="">— pick a curated dataset —</option>
+                </select>
+                <span class="tab-hint">picks load automatically · or paste your own text below</span>
+              </div>
+              <div class="tab-panel" data-panel="upload" hidden>
+                <label class="primary-btn upload-btn" for="uploadCorpus">
+                  <span aria-hidden="true">↑</span> Choose a .txt file
+                  <input id="uploadCorpus" type="file" accept=".txt,text/plain" hidden />
+                </label>
+                <span class="tab-hint">up to 5 MB · UTF-8</span>
+              </div>
+              <div class="tab-panel" data-panel="wikipedia" hidden>
+                <div class="inline-input">
+                  <input id="wikiTitle" type="text" placeholder="any topic — quantum mechanics, jazz, the Renaissance…" />
+                  <button id="wikiLoad" class="primary-btn" type="button">Fetch articles</button>
+                </div>
+                <span class="tab-hint">searches Wikipedia &amp; concatenates the top ~20 results</span>
+              </div>
+              <div class="tab-panel" data-panel="url" hidden>
+                <div class="inline-input">
+                  <input id="urlInput" type="text" placeholder="https://raw.githubusercontent.com/…  or any CORS-friendly URL" />
+                  <button id="urlLoad" class="primary-btn" type="button">Fetch URL</button>
+                </div>
+                <span class="tab-hint">GitHub raw, jsDelivr, gists — anything that serves CORS-open text</span>
+              </div>
+              <div class="tab-panel" data-panel="custom" hidden>
+                <div class="custom-hf-grid">
+                  <input id="hfCustomDataset" type="text" placeholder="owner/dataset" />
+                  <input id="hfCustomConfig" type="text" placeholder="config" value="default" />
+                  <input id="hfCustomSplit" type="text" placeholder="split" value="train" />
+                  <input id="hfCustomColumn" type="text" placeholder="text column" value="text" />
+                  <button id="hfCustomLoad" class="primary-btn" type="button">Load</button>
+                </div>
+                <span class="tab-hint">
+                  <a href="https://huggingface.co/datasets" target="_blank" rel="noopener">Browse Hugging Face ↗</a>
+                </span>
+              </div>
+            </div>
+            <div id="hfStatus" class="data-load-status" hidden></div>
+            <div id="dataLoadStatus" class="data-load-status"></div>
+          </div>
+
+          <div id="hfCustom" hidden></div>
+          <div id="hfTokenRow" class="hf-token" hidden>
+            <label for="hfToken">
+              <span class="label-main">HF access token</span>
+              <span class="label-jargon">optional — unlocks gated datasets &amp; raises rate limit</span>
+            </label>
+            <input id="hfToken" type="password" placeholder="hf_..." autocomplete="off" spellcheck="false" />
+            <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener" class="hf-browse">Create one ↗</a>
+            <button id="hfTokenSave" class="ghost-btn" type="button">Save &amp; retry</button>
+            <button id="hfTokenClear" class="ghost-btn" type="button">Clear</button>
+          </div>
+          <textarea id="corpus">A small model learns one thing at a time. First it learns that letters follow letters. After a space, another word begins. After a period, a capital letter often comes next.
 Then it learns short words. The word "the" appears again and again, and so do "and", "of", "to", and "a". A model that predicts the next byte quickly learns to expect these common words, because guessing them lowers the loss on almost every line.
 Training is slow at the start and fast in the middle. At the start the model knows nothing, so its loss sits near the value of a uniform guess. In the middle the loss falls quickly as the model picks up the easy patterns. Near the end it falls slowly, because what remains is hard.
 The goal here is understanding, not a clever model. If you build it yourself, byte by byte and layer by layer, you will understand how every larger model works.</textarea>
-        <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-top: 12px">
-          <div>
-            <label>context length <input id="ctx" type="number" value="64" min="16" max="128" /></label>
-            <label>layers <input id="layers" type="number" value="3" min="1" max="6" /></label>
-            <label>d_model
+
+          <div class="field" style="margin-top: 14px">
+            <label for="sizePreset">
+              <span class="label-main">Model size</span>
+              <span class="label-jargon">preset</span>
+              <button class="info" data-explain="sizePreset">?</button>
+            </label>
+            <select id="sizePreset">
+              <option value="custom">Custom — edit knobs individually</option>
+            </select>
+          </div>
+
+          <details class="hyperparam-details" id="hyperparamDetails">
+            <summary>
+              <span class="hp-key">Hyperparameters</span>
+              <span class="hp-hint">— preset above sets these. Click to edit individually.</span>
+              <span class="hp-chev" aria-hidden="true">▸</span>
+            </summary>
+          <div class="form-grid">
+            <div class="field">
+              <label for="layers">
+                <span class="label-main">Model depth</span>
+                <span class="label-jargon">layers</span>
+                <button class="info" data-explain="layers">?</button>
+              </label>
+              <input id="layers" type="number" value="3" min="1" max="16" />
+            </div>
+            <div class="field">
+              <label for="dModel">
+                <span class="label-main">Model width</span>
+                <span class="label-jargon">d_model</span>
+                <button class="info" data-explain="dModel">?</button>
+              </label>
               <select id="dModel">
                 <option value="48">48</option>
                 <option value="96" selected>96</option>
+                <option value="128">128</option>
                 <option value="144">144</option>
+                <option value="192">192</option>
+                <option value="256">256</option>
               </select>
-            </label>
-          </div>
-          <div>
-            <label>max steps <input id="maxSteps" type="number" value="1500" min="50" max="20000" step="50" /></label>
-            <label>learning rate <input id="lr" type="number" value="0.003" min="0.0001" max="0.02" step="0.0001" /></label>
-            <label>batch size <input id="batch" type="number" value="16" min="1" max="64" /></label>
-            <label>backend
+            </div>
+            <div class="field">
+              <label for="ctx">
+                <span class="label-main">Bytes the model sees at once</span>
+                <span class="label-jargon">context</span>
+                <button class="info" data-explain="ctx">?</button>
+              </label>
+              <input id="ctx" type="number" value="64" min="16" max="512" />
+            </div>
+            <div class="field">
+              <label for="maxSteps">
+                <span class="label-main">Training steps</span>
+                <span class="label-jargon">max_steps</span>
+                <button class="info" data-explain="maxSteps">?</button>
+              </label>
+              <input id="maxSteps" type="number" value="1500" min="50" max="20000" step="50" />
+            </div>
+            <div class="field">
+              <label for="backend">
+                <span class="label-main">Where it runs</span>
+                <span class="label-jargon">backend</span>
+                <button class="info" data-explain="backend">?</button>
+              </label>
               <select id="backend">
                 <option value="wasm" selected>WASM (CPU)</option>
                 <option value="webgpu">WebGPU (GPU)</option>
               </select>
+            </div>
+            <div class="field">
+              <label for="batch">
+                <span class="label-main">Examples per step</span>
+                <span class="label-jargon">batch_size</span>
+                <button class="info" data-explain="batch">?</button>
+              </label>
+              <input id="batch" type="number" value="16" min="1" max="64" />
+            </div>
+          </div>
+
+          <div class="estimate" id="preflight">
+            <div class="est-row">
+              <span class="est-k">Model</span>
+              <span class="est-v" id="estParams">—</span>
+            </div>
+            <div class="est-row">
+              <span class="est-k">Estimated run time</span>
+              <span class="est-v" id="estTime">—</span>
+              <span class="est-note" id="estNote"></span>
+            </div>
+          </div>
+
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <div class="form-grid">
+              <div class="field">
+                <label for="lr">
+                  <span class="label-main">How fast it learns</span>
+                  <span class="label-jargon">learning_rate</span>
+                  <button class="info" data-explain="lr">?</button>
+                </label>
+                <input id="lr" type="number" value="0.003" min="0.0001" max="0.02" step="0.0001" />
+              </div>
+            </div>
+          </details>
+          </details><!-- /hyperparamDetails -->
+
+          <div class="controls">
+            <button id="start" class="primary">Start training</button>
+            <button id="pause" class="secondary" disabled>Pause</button>
+            <button id="stop" class="secondary" disabled>Stop</button>
+            <div class="model-menu">
+              <button id="modelMenuBtn" class="secondary" type="button" aria-haspopup="menu" aria-expanded="false">
+                Model <span class="chev-down" aria-hidden="true">▾</span>
+              </button>
+              <div id="modelMenu" class="model-menu-list" role="menu" hidden>
+                <button id="continueBtn" class="menu-item" type="button" disabled role="menuitem">
+                  <span class="menu-icon" aria-hidden="true">⟳</span>
+                  <span class="menu-label">Continue training</span>
+                  <input id="continueSteps" type="number" min="50" max="20000" step="50" value="500"
+                         class="menu-input" title="How many more steps" />
+                  <span class="menu-suffix">steps</span>
+                </button>
+                <div class="menu-divider"></div>
+                <button id="downloadModel" class="menu-item" type="button" disabled role="menuitem">
+                  <span class="menu-icon" aria-hidden="true">↓</span>
+                  <span class="menu-label">Download .tinygpt</span>
+                  <span class="menu-hint">portable format with metadata</span>
+                </button>
+                <button id="downloadSafetensors" class="menu-item" type="button" disabled role="menuitem">
+                  <span class="menu-icon" aria-hidden="true">↓</span>
+                  <span class="menu-label">Download .safetensors</span>
+                  <span class="menu-hint">Python-readable</span>
+                </button>
+                <label class="menu-item upload-btn" for="uploadModel" role="menuitem">
+                  <span class="menu-icon" aria-hidden="true">↑</span>
+                  <span class="menu-label">Upload model</span>
+                  <span class="menu-hint">restore a saved run</span>
+                  <input id="uploadModel" type="file" accept=".tinygpt,.bin" hidden />
+                </label>
+                <div class="menu-divider"></div>
+                <button id="reset" class="menu-item menu-danger" type="button" role="menuitem">
+                  <span class="menu-icon" aria-hidden="true">⌫</span>
+                  <span class="menu-label">Reset everything</span>
+                  <span class="menu-hint">clear config, corpus, trained model</span>
+                </button>
+              </div>
+            </div>
+            <label class="notify-toggle">
+              <input id="notify" type="checkbox" />
+              <span>Notify me when done</span>
+              <span id="notifyStatus" class="notify-status"></span>
             </label>
           </div>
-        </div>
-        <div class="controls">
-          <button id="start">Start training</button>
-          <button id="pause" class="secondary" disabled>Pause</button>
-          <button id="stop" class="secondary" disabled>Stop</button>
-        </div>
-        <div id="status"></div>
+          <div id="modelStatus" class="model-status"></div>
+          <div id="status"></div>
+        </section>
+
+        <!-- RIGHT: live loss -->
+        <section class="card loss-card hero-loss">
+          <h2 class="card-title hero-title">
+            Loss curve
+            <button class="info" data-explain="whatIsLoss">?</button>
+            <span class="backend-chip">
+              <span id="stBackend">wasm</span>
+            </span>
+          </h2>
+          <canvas id="chart" width="560" height="360"></canvas>
+          <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+          <div class="stats-primary">
+            <div class="stat-big">
+              <span class="stat-big-label">Step</span>
+              <span class="stat-big-value" id="stStep">0</span>
+            </div>
+            <div class="stat-big">
+              <span class="stat-big-label">Loss</span>
+              <span class="stat-big-value" id="stTrain">–</span>
+            </div>
+            <div class="stat-big">
+              <span class="stat-big-label">Time left</span>
+              <span class="stat-big-value" id="stEta">–</span>
+            </div>
+          </div>
+          <details class="stats-more">
+            <summary><span class="more-label">More metrics</span><span class="more-chev" aria-hidden="true">▸</span></summary>
+            <div class="stats stats-secondary">
+              <div class="stat"><span class="k">Perplexity<button class="info" data-explain="perplexity">?</button></span><span class="v" id="stPpl">–</span></div>
+              <div class="stat"><span class="k">Elapsed<button class="info" data-explain="elapsed">?</button></span><span class="v" id="stElapsed">–</span></div>
+              <div class="stat"><span class="k">Holdout error<button class="info" data-explain="valLoss">?</button></span><span class="v" id="stVal">–</span></div>
+              <div class="stat"><span class="k">Best holdout<button class="info" data-explain="bestVal">?</button></span><span class="v" id="stBestVal">–</span></div>
+              <div class="stat"><span class="k">Bytes / sec<button class="info" data-explain="tokensPerSec">?</button></span><span class="v" id="stToks">0</span></div>
+              <div class="stat"><span class="k">Train ↔ val gap<button class="info" data-explain="trainValGap">?</button></span><span class="v" id="stGap">–</span></div>
+            </div>
+          </details>
+          <div class="milestone" id="milestone" hidden>
+            <span class="milestone-dot"></span>
+            <span class="milestone-text" id="milestoneText"></span>
+          </div>
+        </section>
       </div>
 
-      <div class="card">
-        <h2>2 · Loss</h2>
-        <canvas id="chart" width="560" height="220"></canvas>
-        <div class="stats">
-          <span>step <b id="stStep">0</b></span>
-          <span>train <b id="stTrain">–</b></span>
-          <span>val <b id="stVal">–</b></span>
-          <span><b id="stToks">0</b> tok/s</span>
-          <span>ETA <b id="stEta">–</b></span>
-          <span>backend <b id="stBackend">wasm</b></span>
+      <!-- Sample -->
+      <section class="card" style="margin-top: 18px">
+        <h2 class="card-title hero-title">
+          Sample
+          <button class="info" data-explain="whatIsSampling">?</button>
+          <span class="live-badge" id="liveBadge" hidden>
+            <span class="live-dot"></span>
+            live
+          </span>
+        </h2>
+        <p class="card-prose card-note" style="margin: 0 0 16px">
+          You can <strong>sample while training is still running</strong> —
+          this is the trick. The model is a single instance in a Web Worker;
+          Generate runs a forward pass against the same weights training is
+          mutating, between steps. Sample twice during a run to watch what the
+          model has picked up.
+          <button class="info" data-explain="liveInference">?</button>
+        </p>
+        <div class="sample-controls">
+          <div class="field grow">
+            <label for="prompt">
+              <span class="label-main">Starting text</span>
+              <span class="label-jargon">prompt</span>
+              <button class="info" data-explain="prompt">?</button>
+            </label>
+            <input id="prompt" type="text" value="The model " />
+          </div>
+          <div class="field narrow">
+            <label for="temp">
+              <span class="label-main">Randomness</span>
+              <span class="label-jargon">temperature</span>
+              <button class="info" data-explain="temp">?</button>
+            </label>
+            <input id="temp" type="number" value="0.8" min="0" max="2" step="0.1" />
+          </div>
+          <div class="field narrow">
+            <label for="genTokens">
+              <span class="label-main">How many bytes</span>
+              <span class="label-jargon">tokens</span>
+              <button class="info" data-explain="genTokens">?</button>
+            </label>
+            <input id="genTokens" type="number" value="160" min="16" max="512" />
+          </div>
+          <button id="sample" class="secondary" disabled>Generate</button>
         </div>
+        <div class="sample-output-wrap">
+          <div id="output" class="empty">Train a model, then generate text here.</div>
+          <button id="copyOutput" class="copy-output" type="button" title="Copy generated text" hidden aria-label="Copy generated text">⧉</button>
+        </div>
+        <div class="sample-note" id="sampleNote">
+          <span id="sampleNoteContent">
+            <strong>What to expect:</strong> the model has to be sized to the data.
+            The loss curve falling is the real signal — text quality depends entirely
+            on params × bytes seen.
+          </span>
+        </div>
+      </section>
+
+      <!-- Unified "Your machine" panel: capability pills + tailored summary,
+           collapsible. Replaces the previous trio (machine bar + personalise
+           disclosure + intro card). -->
+      <details class="machine-card" id="machinePanel">
+        <summary>
+          <span class="machine-row">
+            <span class="machine-label">Your machine</span>
+            <span id="caps" class="machine-pills">detecting…</span>
+          </span>
+          <span class="machine-preview" id="mpPreview">computing…</span>
+          <span class="machine-chev" aria-hidden="true">▸</span>
+        </summary>
+        <div class="mp-body" id="mpBody">
+          <p class="mp-loading">computing…</p>
+        </div>
+      </details>
+
+      <div class="section-divider">
+        <span>Want to go further?</span>
       </div>
-    </div>
 
-    <div class="card" style="margin-top: 20px">
-      <h2>3 · Sample from the model</h2>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center">
-        <input id="prompt" type="text" value="The model " style="width: 240px" />
-        <label style="margin: 0">temperature
-          <input id="temp" type="number" value="0.8" min="0" max="2" step="0.1" /></label>
-        <label style="margin: 0">tokens
-          <input id="genTokens" type="number" value="160" min="16" max="512" /></label>
-        <button id="sample" class="secondary" disabled>Generate</button>
-      </div>
-      <div id="output">Train a model, then generate text from it here.</div>
-    </div>
+      <!-- Fine-tuning -->
+      <details class="card collapsible" style="margin-top: 0">
+        <summary>
+          <span class="card-title summary-title">
+            <span class="num">4</span> Fine-tuning
+            <span class="summary-sub">LoRA — teach a trained model new tricks without retraining</span>
+          </span>
+          <span class="chevron" aria-hidden="true">▸</span>
+        </summary>
+        <p class="card-prose">
+          <strong>LoRA</strong> takes an already-trained model, <em>freezes</em>
+          every weight, and inserts tiny trainable matrices into a few attention
+          layers. You only ever train those small adapters — typically 1–10% of
+          the base model's size — so one base model can have many swappable
+          personalities at almost no extra disk cost.
+        </p>
+        <p class="card-prose">
+          The browser playground doesn't carry the adapter math; the Python
+          reference does. Same model, same shape, three commands:
+        </p>
+        <pre><code># 1. Train a base model (Python — anywhere)
+python python_ref/train.py \
+    --data your-base-text.txt --out checkpoints/base
 
-    <div class="card" style="margin-top: 20px">
-      <h2>4 · WebGPU matmul benchmark</h2>
-      <p style="margin: 0 0 10px; color: #7d8590; font-size: 12px">
-        Runs the same matrix multiply on the WebGPU compute kernel and on the
-        WASM kernel, checks they agree, and reports the speed-up. WebGPU-capable
-        browser required (Chrome / Edge 113+).
-      </p>
-      <button id="bench" class="secondary">Run benchmark</button>
-      <div id="benchOut">Not run yet.</div>
-    </div>
+# 2. LoRA fine-tune onto a new corpus
+python python_ref/lora.py --base checkpoints/base \
+    --data your-new-text.txt --out checkpoints/adapter
 
-    <div class="card" style="margin-top: 20px">
-      <h2>5 · Train larger models locally</h2>
-      <p style="margin: 0 0 10px; color: #7d8590; font-size: 13px">
-        In-browser training is single-threaded WebAssembly — comfortable up to
-        roughly <b>1M parameters</b>. To train bigger (5–25M+ is fine on a
-        laptop), run the Python reference locally, where it uses your GPU
-        (Apple&nbsp;MPS / CUDA). <code>bench.py</code> measures what your machine
-        can handle; <code>configs/model.small.json</code> is a ready ~10.8M model.
-      </p>
-      <pre><code>git clone https://github.com/sarthakagrawal927/tinygpt
+# 3. Compare base vs base + adapter
+python python_ref/lora.py --base checkpoints/base \
+    --adapter checkpoints/adapter --compare --prompt "Once "</code></pre>
+        <p class="card-prose card-note">
+          Practical rules of thumb from the project's own
+          <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/lora_guide.md" target="_blank" rel="noopener">LoRA guide</a>:
+          start with rank 4, alpha 8, target <code>q_proj</code> + <code>v_proj</code> only,
+          and aim for <strong>300–1,000 clean examples</strong> from one consistent
+          source. One author with 200 clean posts beats 2,000 mixed posts every time.
+        </p>
+      </details>
+
+      <!-- Resources -->
+      <details class="card collapsible resources" style="margin-top: 18px">
+        <summary>
+          <span class="card-title summary-title">
+            <span class="num">5</span> Resources
+            <span class="summary-sub">curated rabbit holes — 3Blue1Brown, Karpathy, papers, and this repo's own docs</span>
+          </span>
+          <span class="chevron" aria-hidden="true">▸</span>
+        </summary>
+        <div class="res-grid">
+          <div class="res-col">
+            <h3>Start here (visual + intuitive)</h3>
+            <ul>
+              <li><a href="https://www.3blue1brown.com/topics/neural-networks" target="_blank" rel="noopener">3Blue1Brown — Neural Networks</a> <span class="muted">— the maths, visually</span></li>
+              <li><a href="https://jalammar.github.io/illustrated-transformer/" target="_blank" rel="noopener">Jay Alammar — The Illustrated Transformer</a> <span class="muted">— the diagrams everyone has seen</span></li>
+              <li><a href="https://www.youtube.com/watch?v=kCc8FmEb1nY" target="_blank" rel="noopener">Karpathy — Let's build GPT</a> <span class="muted">— a 2 h build, from zero</span></li>
+              <li><a href="https://karpathy.ai/zero-to-hero.html" target="_blank" rel="noopener">Karpathy — Neural Networks: Zero to Hero</a> <span class="muted">— the full lecture series</span></li>
+            </ul>
+          </div>
+          <div class="res-col">
+            <h3>Go deeper (code + papers)</h3>
+            <ul>
+              <li><a href="https://github.com/karpathy/nanoGPT" target="_blank" rel="noopener">karpathy/nanoGPT</a> <span class="muted">— the cleanest small GPT in PyTorch</span></li>
+              <li><a href="https://github.com/karpathy/minGPT" target="_blank" rel="noopener">karpathy/minGPT</a> <span class="muted">— the original minimal build</span></li>
+              <li><a href="https://arxiv.org/abs/1706.03762" target="_blank" rel="noopener">Attention Is All You Need</a> <span class="muted">— Vaswani et al., 2017</span></li>
+              <li><a href="https://arxiv.org/abs/2106.09685" target="_blank" rel="noopener">LoRA: Low-Rank Adaptation</a> <span class="muted">— Hu et al., 2021</span></li>
+              <li><a href="https://arxiv.org/abs/1711.05101" target="_blank" rel="noopener">AdamW</a> <span class="muted">— Loshchilov &amp; Hutter, 2017</span></li>
+            </ul>
+          </div>
+          <div class="res-col">
+            <h3>This project's own write-ups</h3>
+            <ul>
+              <li><a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/notes.md" target="_blank" rel="noopener">docs/notes.md</a> <span class="muted">— how every layer was built &amp; tested</span></li>
+              <li><a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/learn.md" target="_blank" rel="noopener">docs/learn.md</a> <span class="muted">— the guided learning path</span></li>
+              <li><a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/lora_guide.md" target="_blank" rel="noopener">docs/lora_guide.md</a> <span class="muted">— LoRA in detail</span></li>
+              <li><a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/performance.md" target="_blank" rel="noopener">docs/performance.md</a> <span class="muted">— the SIMD &amp; WebGPU speed work</span></li>
+              <li><a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/browser_notes.md" target="_blank" rel="noopener">docs/browser_notes.md</a> <span class="muted">— WASM, Workers, OPFS, WebGPU</span></li>
+            </ul>
+          </div>
+          <div class="res-col">
+            <h3>Related projects</h3>
+            <ul>
+              <li><a href="https://github.com/mlc-ai/web-llm" target="_blank" rel="noopener">mlc-ai/web-llm</a> <span class="muted">— run real LLMs in the browser (inference)</span></li>
+              <li><a href="https://github.com/ml-explore/mlx" target="_blank" rel="noopener">ml-explore/mlx</a> <span class="muted">— Apple Silicon ML framework</span></li>
+              <li><a href="https://huggingface.co/datasets" target="_blank" rel="noopener">Hugging Face datasets</a> <span class="muted">— where the corpus picker pulls from</span></li>
+              <li><a href="https://developer.mozilla.org/en-US/docs/Web/API/WebGPU_API" target="_blank" rel="noopener">MDN — WebGPU</a> <span class="muted">— the API powering the GPU path</span></li>
+            </ul>
+          </div>
+        </div>
+      </details>
+
+      <!-- More: advanced/diagnostic -->
+      <details class="card collapsible" id="sec-diagnostics" style="margin-top: 18px">
+        <summary>
+          <span class="card-title summary-title">
+            <span class="num">6</span> Diagnostics &amp; how to go faster
+            <span class="summary-sub">WebGPU matmul benchmark, the Python CLI for 10M+ models, and what makes training fast</span>
+          </span>
+          <span class="chevron" aria-hidden="true">▸</span>
+        </summary>
+        <div class="speed-levers">
+          <h3>Making it faster — what works, in order of impact</h3>
+          <ol>
+            <li><strong>Train locally with Python (50–100×).</strong> The
+            <code>python_ref/train.py</code> path uses PyTorch with CUDA / Apple MPS
+            and runs on every core. A 10M model trains in ~24 s / 1k steps on an
+            M5 Pro — comfortable iteration speed.</li>
+            <li><strong>WebGPU backend (≈3–10× on real hardware).</strong> The
+            shaders are correct end-to-end (24/24 kernel parity-checked); real-GPU
+            speedup is unmeasured here because the project's CI ran on a software
+            adapter (<code>swiftshader</code>) — see <code>docs/notes.md §10</code>.
+            Try it on your machine and watch tokens/sec.</li>
+            <li><strong>WASM SIMD (1.6× over scalar WASM).</strong> Already on if
+            your browser supports it — the green pill at top confirms. Four floats
+            per cycle in the matmul inner loop instead of one.</li>
+            <li><strong>Bigger batch (sub-linear).</strong> Better cache utilisation
+            per step, fewer kernel dispatches. Memory grows linearly in batch ×
+            ctx; the matmul cost dominates so it's near-free up to your RAM limit.</li>
+            <li><strong>Smaller model (linear).</strong> Throughput scales roughly
+            as 1/params for transformer training, because the matmuls grow as
+            params × batch × ctx. Drop d_model from 96 to 48 and per-step time
+            quarters (d² in the inner kernel).</li>
+            <li><strong>Multi-threaded WASM (4–8×, not implemented here).</strong>
+            Would need <code>SharedArrayBuffer</code> and worker threads. Open box.</li>
+          </ol>
+          <p class="speed-note">
+            Full speed write-up:
+            <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/performance.md" target="_blank" rel="noopener">docs/performance.md ↗</a>
+            · The journey of every lever — shipped, blocked, open, and why:
+            <a href="/roadmap">the performance journey ↗</a>
+          </p>
+        </div>
+
+        <div style="margin-top: 14px">
+          <p style="margin: 0 0 10px; color: var(--muted); font-size: 13px">
+            Runs the same matmul on the WebGPU compute kernel and the WASM kernel,
+            checks they agree, and reports the speedup. Needs Chrome / Edge 113+.
+          </p>
+          <button id="bench" class="secondary">Run WebGPU benchmark</button>
+          <div id="benchOut">Not run yet.</div>
+        </div>
+
+        <div style="margin-top: 22px">
+          <h3 style="font: 500 13px/1 var(--font-sans); margin: 0 0 8px; color: var(--fg)">
+            Train larger models locally
+          </h3>
+          <p style="margin: 0; color: var(--muted); font-size: 13px">
+            In-browser is single-threaded WASM — comfortable up to ~1M params. For
+            5–25M+ (a few minutes on a laptop), run the Python reference where it
+            uses your GPU (Apple MPS / CUDA).
+          </p>
+          <pre><code>git clone https://github.com/sarthakagrawal927/tinygpt
 cd tinygpt
 python -m venv python_ref/.venv &amp;&amp; source python_ref/.venv/bin/activate
 pip install -r python_ref/requirements.txt
 
-# measure how fast your machine trains, at several model sizes:
+# measure how fast your machine trains:
 python python_ref/bench.py
 
 # train a ~10.8M model on your own text:
@@ -183,7 +2512,64 @@ python python_ref/train.py --model-config configs/model.small.json \
 
 # generate from it:
 python python_ref/sample.py --checkpoint checkpoints/run --prompt "Once "</code></pre>
+        </div>
+      </details>
+
+      <footer class="notes">
+        <div class="footer-meta">
+          <span>~0.8M params · byte-level · no autograd anywhere</span>
+          <span>·</span>
+          <a href="https://github.com/sarthakagrawal927/tinygpt">GitHub ↗</a>
+          <span>·</span>
+          <a href="/roadmap">Performance journey ↗</a>
+          <span>·</span>
+          <a href="/webgpu-test">WebGPU kernel parity test ↗</a>
+        </div>
+      </footer>
+
+      <div id="shareToast" class="share-toast" hidden></div>
+
+    <!-- Sticky mini-stats: shows when training and the loss card is offscreen -->
+    <div id="stickyStats" class="sticky-stats" hidden>
+      <span class="sticky-dot"></span>
+      <span class="sticky-label">training</span>
+      <span class="sticky-item">step <strong id="stickyStep">0</strong></span>
+      <span class="sticky-item">loss <strong id="stickyLoss">–</strong></span>
+      <span class="sticky-item"><strong id="stickyToks">0</strong> tok/s</span>
+      <span class="sticky-item">ETA <strong id="stickyEta">–</strong></span>
+      <button class="sticky-jump" id="stickyJump" type="button" title="Jump to the loss chart">↑ chart</button>
     </div>
+
+    <!-- Keyboard shortcuts dialog -->
+    <dialog id="shortcuts" class="shortcuts-dialog">
+      <h2>Keyboard shortcuts</h2>
+      <div class="kbd-grid">
+        <kbd>?</kbd><span>Show this sheet</span>
+        <kbd>Esc</kbd><span>Close any popover / dialog</span>
+        <kbd>⌘ / Ctrl</kbd> <kbd>Enter</kbd><span>Start training</span>
+        <kbd>⌘ / Ctrl</kbd> <kbd>G</kbd><span>Generate from the model</span>
+        <kbd>T</kbd><span>Take the tour</span>
+        <kbd>S</kbd><span>Share this setup</span>
+        <kbd>P</kbd><span>Pause / resume training</span>
+        <kbd>1</kbd>–<kbd>5</kbd><span>Pick a size preset (Tiny → XL)</span>
+      </div>
+      <button class="shortcuts-close" id="shortcutsClose" type="button">close</button>
+    </dialog>
+    </div>
+
+    <dialog id="welcome">
+      <h2>Welcome to TinyGPT</h2>
+      <p>
+        A complete transformer that trains from scratch — right here, in this tab,
+        with no server. The model is ~0.8M parameters, byte-level. Every layer was
+        written by hand. The first time it's running, it helps to have someone
+        walk you through. Want a 90-second tour?
+      </p>
+      <div class="welcome-actions">
+        <button class="secondary" id="welcomeSkip">Just explore</button>
+        <button class="primary" id="welcomeStart">Take the tour</button>
+      </div>
+    </dialog>
 
     <script type="module" src="/src/main.ts"></script>
   </body>
