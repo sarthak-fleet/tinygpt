@@ -32,6 +32,12 @@ import {
 import { loadRun, loadState, requestDurableStorage, saveRun, saveState } from "./storage";
 import { hasSeenTour, markTourSeen, startTour } from "./tour";
 import { DEFAULT_CONFIG, type FromWorker, type RunConfig, type ToWorker } from "./types";
+import {
+  initAnalytics,
+  trackPlaygroundLoaded,
+  trackSampleGenerated,
+  trackTrainStarted,
+} from "./analytics";
 
 const byId = <T extends HTMLElement>(id: string): T =>
   document.getElementById(id) as T;
@@ -597,6 +603,17 @@ els.start.addEventListener("click", () => {
   setRunning(true);
   els.sample.disabled = false;
   lastConfig = readConfig();
+  trackTrainStarted({
+    preset: els.sizePreset.value,
+    backend: lastConfig.backend,
+    layers: lastConfig.layers,
+    d_model: lastConfig.dModel,
+    ctx: lastConfig.ctx,
+    batch: lastConfig.batchSize,
+    max_steps: lastConfig.maxSteps,
+    corpus_bytes: text.length,
+    est_params: estimateParams(lastConfig.layers, lastConfig.dModel, lastConfig.ctx),
+  });
   send({ type: "train", text, config: lastConfig });
 });
 
@@ -757,12 +774,22 @@ els.continueBtn.addEventListener("click", () => {
   send({ type: "continue", extraSteps: extra });
 });
 
+// Cached so we can attach prompt/temp to the `sample_generated` event when the
+// worker comes back. Storing length only — we never track prompt contents.
+let lastSampleRequest: { promptBytes: number; temperature: number } | null = null;
+
 els.sample.addEventListener("click", () => {
+  const promptVal = byId<HTMLInputElement>("prompt").value;
+  const temperatureVal = parseFloat(byId<HTMLInputElement>("temp").value);
+  lastSampleRequest = {
+    promptBytes: promptVal.length,
+    temperature: Number.isFinite(temperatureVal) ? temperatureVal : 0,
+  };
   send({
     type: "sample",
-    prompt: byId<HTMLInputElement>("prompt").value,
+    prompt: promptVal,
     tokens: parseInt(byId<HTMLInputElement>("genTokens").value, 10),
-    temperature: parseFloat(byId<HTMLInputElement>("temp").value),
+    temperature: temperatureVal,
   });
   setOutput("generating…", true);
 });
@@ -1937,10 +1964,23 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       }
       break;
     }
-    case "sample":
+    case "sample": {
       lastSampleText = msg.text;
       typewriteOutput(msg.text);
+      const last = history.length > 0 ? history[history.length - 1] : null;
+      trackSampleGenerated({
+        prompt_bytes: lastSampleRequest?.promptBytes ?? 0,
+        output_bytes: msg.text.length,
+        temperature: lastSampleRequest?.temperature ?? 0,
+        // top_k isn't surfaced in the playground UI yet — record 0 to keep
+        // the schema stable for when it lands.
+        top_k: 0,
+        final_train_loss: last ? last.trainLoss : null,
+        final_val_loss: last ? (last.valLoss ?? null) : null,
+      });
+      lastSampleRequest = null;
       break;
+    }
     case "checkpoint":
       // The worker exported the trained model — persist it to OPFS and stash
       // a copy so the user can download it via the "Download model" button.
@@ -2013,6 +2053,24 @@ worker.onerror = (e) => {
   els.status.textContent = `worker error: ${e.message}`;
 };
 
+// --- analytics wiring -----------------------------------------------------
+// PostHog init runs as the very first thing on load — but every call site
+// further down is a safe no-op if the key isn't set or the user opted out.
+// The actual `playground_loaded` event fires once, after the welcome modal
+// is dismissed (or immediately if the user has already seen the tour).
+initAnalytics();
+
+let playgroundLoadedFired = false;
+let pendingPlaygroundLoadedProps: Parameters<typeof trackPlaygroundLoaded>[0] | null = null;
+
+function maybeFirePlaygroundLoaded(): void {
+  if (playgroundLoadedFired) return;
+  if (!pendingPlaygroundLoadedProps) return;
+  trackPlaygroundLoaded(pendingPlaygroundLoadedProps);
+  playgroundLoadedFired = true;
+  pendingPlaygroundLoadedProps = null;
+}
+
 // --- startup --------------------------------------------------------------
 async function init(): Promise<void> {
   const caps = await detectCapabilities();
@@ -2023,6 +2081,19 @@ async function init(): Promise<void> {
   refreshSampleNote();
   const rec = recommendModel(hw);
   const browser = detectBrowser();
+
+  // Stash analytics props now that the caps / hw / browser values are known;
+  // the actual capture happens once the welcome modal is dismissed (or
+  // immediately from setupTour() if the user has already seen the tour).
+  pendingPlaygroundLoadedProps = {
+    browser: browser.name,
+    has_webgpu: caps.webgpu,
+    has_memory64: usingMemory64,
+    has_wasm_simd: caps.wasmSimd,
+    cores: hw.cores,
+    device_memory_gb: hw.deviceMemoryGB,
+    cpu_probe_ms: hw.cpuProbeMs,
+  };
   const pill = (label: string, on: boolean, explainKey?: string) => {
     const cls = `pill ${on ? "on" : "off"}`;
     const text = `${label} ${on ? "✓" : "—"}`;
@@ -2361,14 +2432,23 @@ function setupTour(): void {
   if (welcome && welcomeStart && welcomeSkip) {
     welcomeStart.addEventListener("click", () => {
       welcome.close();
+      maybeFirePlaygroundLoaded();
       startTour();
     });
     welcomeSkip.addEventListener("click", () => {
       welcome.close();
+      maybeFirePlaygroundLoaded();
       markTourSeen();
     });
     if (!hasSeenTour() && typeof welcome.showModal === "function") {
       welcome.showModal();
+    } else {
+      // Returning visitor — welcome modal stayed hidden, so fire the event
+      // right away rather than waiting for a click that won't happen.
+      maybeFirePlaygroundLoaded();
     }
+  } else {
+    // No welcome modal in the DOM — fire immediately so the event still lands.
+    maybeFirePlaygroundLoaded();
   }
 }
