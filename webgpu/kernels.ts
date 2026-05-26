@@ -14,6 +14,7 @@
  */
 
 import matmulShader from "./matmul.wgsl?raw";
+import matmulTiledShader from "./matmul_tiled.wgsl?raw";
 import matmulF16Shader from "./matmul_f16packed.wgsl?raw";
 
 /** A matmul runner bound to fixed dimensions — pipeline + buffers built once.
@@ -102,6 +103,89 @@ export function createMatmul(
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup);
     // workgroup_size is 16x16 — one workgroup per 16x16 output tile.
+    pass.dispatchWorkgroups(Math.ceil(M / 16), Math.ceil(N / 16));
+    pass.end();
+    encoder.copyBufferToBuffer(bufC, 0, bufRead, 0, M * N * 4);
+    device.queue.submit([encoder.finish()]);
+    await bufRead.mapAsync(GPUMapMode.READ);
+    const out = new Float32Array(bufRead.getMappedRange().slice(0));
+    bufRead.unmap();
+    return out;
+  };
+  return {
+    uploadInputs,
+    dispatch,
+    async run(a: Float32Array, b: Float32Array): Promise<Float32Array> {
+      uploadInputs(a, b);
+      return dispatch();
+    },
+    destroy() {
+      for (const buf of [bufA, bufB, bufC, bufDims, bufRead]) buf.destroy();
+    },
+  };
+}
+
+// ===========================================================================
+// Tiled matmul — workgroup-shared memory, identical bind layout to naive
+// ===========================================================================
+
+/** Workgroup-shared-memory tiled matmul runner. Same shape as createMatmul,
+ * different shader. On bandwidth-bound problems this avoids `size` global
+ * reads per output element; on small problems the extra synchronisation
+ * makes it a wash. */
+export function createMatmulTiled(
+  device: GPUDevice,
+  M: number,
+  K: number,
+  N: number,
+): MatmulRunner {
+  const module = device.createShaderModule({ code: matmulTiledShader });
+  const pipeline = device.createComputePipeline({
+    layout: "auto",
+    compute: { module, entryPoint: "main" },
+  });
+
+  const bufA = device.createBuffer({
+    size: M * K * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  const bufB = device.createBuffer({
+    size: K * N * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  const bufC = device.createBuffer({
+    size: M * N * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+  });
+  const bufDims = device.createBuffer({
+    size: 16,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  const bufRead = device.createBuffer({
+    size: M * N * 4,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(bufDims, 0, new Uint32Array([M, K, N, 0]));
+
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: bufA } },
+      { binding: 1, resource: { buffer: bufB } },
+      { binding: 2, resource: { buffer: bufC } },
+      { binding: 3, resource: { buffer: bufDims } },
+    ],
+  });
+
+  const uploadInputs = (a: Float32Array, b: Float32Array) => {
+    device.queue.writeBuffer(bufA, 0, a as Float32Array<ArrayBuffer>);
+    device.queue.writeBuffer(bufB, 0, b as Float32Array<ArrayBuffer>);
+  };
+  const dispatch = async (): Promise<Float32Array> => {
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
     pass.dispatchWorkgroups(Math.ceil(M / 16), Math.ceil(N / 16));
     pass.end();
     encoder.copyBufferToBuffer(bufC, 0, bufRead, 0, M * N * 4);
@@ -288,8 +372,15 @@ export interface F16MatmulBenchmark {
   size: number;
   /** Pure GPU dispatch cost — inputs are uploaded outside the timed loop. */
   f32GpuMs: number;
+  /** Tiled-naive (f32, workgroup-shared memory) version. */
+  tiledGpuMs: number;
+  /** Half-precision-storage version. */
   f16GpuMs: number;
-  f16Speedup: number; // f32GpuMs / f16GpuMs
+  /** Best of the three, in ms. */
+  bestGpuMs: number;
+  bestVariant: "f32" | "tiled" | "f16";
+  /** Speedup of the best variant vs naive f32. */
+  bestSpeedup: number;
   maxAbsError: number; // f16-packed output vs CPU reference
   parityOk: boolean;
 }
@@ -328,22 +419,28 @@ export async function benchmarkMatmulF16(
   }
 
   const f32Runner = createMatmul(device, size, size, size);
+  const tiledRunner = createMatmulTiled(device, size, size, size);
   const f16Runner = createMatmulF16Packed(device, size, size, size);
   try {
     // Upload OUTSIDE the timed loop — this is the once-per-weights cost.
     f32Runner.uploadInputs(a, b);
+    tiledRunner.uploadInputs(a, b);
     f16Runner.uploadInputs(a, b);
 
     // Warm-up: one dispatch each to flush shader compilation + pipeline
     // creation cost out of the measurement.
     await f32Runner.dispatch();
+    const tiledOut = await tiledRunner.dispatch();
     const f16Out = await f16Runner.dispatch();
 
     // Parity vs CPU reference — only computed for the small-size run; at
-    // 1024 the CPU reference would take ages.
+    // 1024+ the CPU reference would take ages.
     let maxAbsError = 0;
     if (size <= 512) {
       const refOut = reference(a, b, size, size, size);
+      // f16 has the loosest tolerance; tiled-f32 should match the naive f32
+      // closely. We report the f16 error since it's the binding constraint.
+      void tiledOut;
       for (let i = 0; i < n; i++) {
         maxAbsError = Math.max(maxAbsError, Math.abs(f16Out[i] - refOut[i]));
       }
@@ -356,19 +453,36 @@ export async function benchmarkMatmulF16(
     const f32GpuMs = (performance.now() - t0) / iterations;
 
     const t1 = performance.now();
+    for (let i = 0; i < iterations; i++) await tiledRunner.dispatch();
+    const tiledGpuMs = (performance.now() - t1) / iterations;
+
+    const t2 = performance.now();
     for (let i = 0; i < iterations; i++) await f16Runner.dispatch();
-    const f16GpuMs = (performance.now() - t1) / iterations;
+    const f16GpuMs = (performance.now() - t2) / iterations;
+
+    // Pick the best variant.
+    const candidates: Array<{ ms: number; variant: "f32" | "tiled" | "f16" }> = [
+      { ms: f32GpuMs, variant: "f32" },
+      { ms: tiledGpuMs, variant: "tiled" },
+      { ms: f16GpuMs, variant: "f16" },
+    ];
+    candidates.sort((a, b) => a.ms - b.ms);
+    const best = candidates[0];
 
     return {
       size,
       f32GpuMs,
+      tiledGpuMs,
       f16GpuMs,
-      f16Speedup: f32GpuMs / f16GpuMs,
+      bestGpuMs: best.ms,
+      bestVariant: best.variant,
+      bestSpeedup: f32GpuMs / best.ms,
       maxAbsError,
       parityOk: size > 512 || maxAbsError < tolerance,
     };
   } finally {
     f32Runner.destroy();
+    tiledRunner.destroy();
     f16Runner.destroy();
   }
 }

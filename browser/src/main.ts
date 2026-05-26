@@ -1528,25 +1528,27 @@ els.bench.addEventListener("click", async () => {
       backend.matmul(a, b, M, K, N);
     const r = await benchmarkMatmul(device, ref, 384);
 
-    // Sweep f16/f32 across realistic sizes. Inputs upload outside the timed
-    // loop, so we measure just dispatch — the per-step cost a real training
-    // pipeline pays. The crossover where f16-packed wins should be visible.
-    els.benchOut.textContent = "running f16/f32 size sweep on WebGPU (this takes a few seconds)…";
+    // Sweep three matmul variants across realistic sizes. Inputs upload
+    // outside the timed loop, so we measure just dispatch — the per-step
+    // cost a real training pipeline pays. The crossover where each variant
+    // starts winning should be visible.
+    els.benchOut.textContent = "running matmul kernel sweep on WebGPU (~10 s)…";
     let sweepLine = "";
     try {
       const sweep = await benchmarkMatmulF16Sweep(device, ref, [256, 512, 1024, 2048]);
       const rows = sweep.map((s) => {
         const par = s.size <= 512
-          ? (s.parityOk ? "parity OK ✓" : "PARITY FAILED")
-          : "(parity skipped — size too big)";
+          ? (s.parityOk ? "parity OK" : "PARITY FAIL")
+          : "(par skipped)";
         return `  size ${s.size.toString().padStart(4)}  ` +
-          `f32 ${s.f32GpuMs.toFixed(2)} ms  ` +
-          `f16 ${s.f16GpuMs.toFixed(2)} ms  ` +
-          `→ ${s.f16Speedup.toFixed(2)}× ${par}`;
+          `naive ${s.f32GpuMs.toFixed(2)}  ` +
+          `tiled ${s.tiledGpuMs.toFixed(2)}  ` +
+          `f16-packed ${s.f16GpuMs.toFixed(2)}  ms  ` +
+          `→ best=${s.bestVariant} @ ${s.bestSpeedup.toFixed(2)}×  ${par}`;
       });
-      sweepLine = "\n\nWebGPU f16-packed vs f32 (upload + pack moved outside timed loop):\n" + rows.join("\n");
+      sweepLine = "\n\nWebGPU matmul kernel sweep (upload + pack outside timed loop):\n" + rows.join("\n");
     } catch (e) {
-      sweepLine = `\n\nf16 sweep failed: ${e instanceof Error ? e.message : String(e)}`;
+      sweepLine = `\n\nmatmul sweep failed: ${e instanceof Error ? e.message : String(e)}`;
     }
     els.benchOut.textContent =
       `${r.size}×${r.size} parity — ${r.parityOk ? "parity OK ✓" : "PARITY FAILED"} ` +
