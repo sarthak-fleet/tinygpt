@@ -127,6 +127,87 @@ fn matmul_abt(@builtin(global_invocation_id) gid: vec3<u32>) {
   g2[row * p.c + col] = acc;
 }
 
+// Thread-blocked variant of matmul_abt. Same A-load pattern as matmul_blocked
+// (row-major); B's load pattern flips because we want B[col, k] not B[k, col].
+// For the tileB load, threads pull rows of B that correspond to the output
+// columns we're writing.
+var<workgroup> mab_tileA: array<array<f32, 16>, 64>;
+var<workgroup> mab_tileB: array<array<f32, 64>, 16>; // [k][n] but loaded from B[n,k]
+
+@compute @workgroup_size(16, 16)
+fn matmul_abt_blocked(
+  @builtin(workgroup_id) wid: vec3<u32>,
+  @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+  let M = p.a; let K = p.b; let N = p.c;
+  let blockRow = wid.x * 64u;
+  let blockCol = wid.y * 64u;
+  let lrow = lid.x; let lcol = lid.y;
+
+  var acc: array<array<f32, 4>, 4>;
+  for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      acc[i][j] = 0.0;
+    }
+  }
+
+  let nTiles = (K + 15u) / 16u;
+  for (var t: u32 = 0u; t < nTiles; t = t + 1u) {
+    let kBase = t * 16u;
+    // Load A[blockRow + lrow*4 + i, kBase + lcol] into mab_tileA — same as forward.
+    for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+      let aRow = blockRow + lrow * 4u + i;
+      let aCol = kBase + lcol;
+      var v: f32 = 0.0;
+      if (aRow < M && aCol < K) { v = g0[aRow * K + aCol]; }
+      mab_tileA[lrow * 4u + i][lcol] = v;
+    }
+    // Load B[blockCol + lcol*4 + j, kBase + lrow] — B is [N, K] in abt convention.
+    // Place in mab_tileB[lrow][lcol*4 + j] so the inner loop reads B-row-aligned.
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      let bRow = blockCol + lcol * 4u + j; // this is a column of output, but a row of B[N,K]
+      let bCol = kBase + lrow;
+      var v: f32 = 0.0;
+      if (bRow < N && bCol < K) { v = g1[bRow * K + bCol]; }
+      mab_tileB[lrow][lcol * 4u + j] = v;
+    }
+    workgroupBarrier();
+
+    let myA0 = lrow * 4u;
+    let myB0 = lcol * 4u;
+    for (var k: u32 = 0u; k < 16u; k = k + 1u) {
+      let a0 = mab_tileA[myA0 + 0u][k];
+      let a1 = mab_tileA[myA0 + 1u][k];
+      let a2 = mab_tileA[myA0 + 2u][k];
+      let a3 = mab_tileA[myA0 + 3u][k];
+      let b0 = mab_tileB[k][myB0 + 0u];
+      let b1 = mab_tileB[k][myB0 + 1u];
+      let b2 = mab_tileB[k][myB0 + 2u];
+      let b3 = mab_tileB[k][myB0 + 3u];
+      acc[0][0] = acc[0][0] + a0 * b0; acc[0][1] = acc[0][1] + a0 * b1;
+      acc[0][2] = acc[0][2] + a0 * b2; acc[0][3] = acc[0][3] + a0 * b3;
+      acc[1][0] = acc[1][0] + a1 * b0; acc[1][1] = acc[1][1] + a1 * b1;
+      acc[1][2] = acc[1][2] + a1 * b2; acc[1][3] = acc[1][3] + a1 * b3;
+      acc[2][0] = acc[2][0] + a2 * b0; acc[2][1] = acc[2][1] + a2 * b1;
+      acc[2][2] = acc[2][2] + a2 * b2; acc[2][3] = acc[2][3] + a2 * b3;
+      acc[3][0] = acc[3][0] + a3 * b0; acc[3][1] = acc[3][1] + a3 * b1;
+      acc[3][2] = acc[3][2] + a3 * b2; acc[3][3] = acc[3][3] + a3 * b3;
+    }
+    workgroupBarrier();
+  }
+
+  for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+    let outRow = blockRow + lrow * 4u + i;
+    if (outRow >= M) { continue; }
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      let outCol = blockCol + lcol * 4u + j;
+      if (outCol < N) {
+        g2[outRow * N + outCol] = acc[i][j];
+      }
+    }
+  }
+}
+
 // C = Aᵀ @ B   g0=A[K,M] g1=B[K,N] g2=C[M,N]   (dB = Aᵀ @ dC)
 @compute @workgroup_size(16, 16)
 fn matmul_atb(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -137,6 +218,87 @@ fn matmul_atb(@builtin(global_invocation_id) gid: vec3<u32>) {
     acc = acc + g0[k * p.a + row] * g1[k * p.c + col];
   }
   g2[row * p.c + col] = acc;
+}
+
+// Thread-blocked variant of matmul_atb. A is [K, M] so we read A[k, row]
+// (column-major access pattern from M's perspective). B is [K, N] like
+// forward but indexed by k (rows of B = K).
+var<workgroup> mat_tileA: array<array<f32, 64>, 16>; // [k][m]
+var<workgroup> mat_tileB: array<array<f32, 64>, 16>; // [k][n]
+
+@compute @workgroup_size(16, 16)
+fn matmul_atb_blocked(
+  @builtin(workgroup_id) wid: vec3<u32>,
+  @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+  let M = p.a; let K = p.b; let N = p.c;
+  let blockRow = wid.x * 64u;
+  let blockCol = wid.y * 64u;
+  let lrow = lid.x; let lcol = lid.y;
+
+  var acc: array<array<f32, 4>, 4>;
+  for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      acc[i][j] = 0.0;
+    }
+  }
+
+  let nTiles = (K + 15u) / 16u;
+  for (var t: u32 = 0u; t < nTiles; t = t + 1u) {
+    let kBase = t * 16u;
+    // Load A[kBase + lrow, blockRow + lcol*4 + i] — A is [K, M].
+    // Place into mat_tileA[lrow][lcol*4 + i] so inner loop reads A[k][m].
+    for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+      let aRow = kBase + lrow;
+      let aCol = blockRow + lcol * 4u + i;
+      var v: f32 = 0.0;
+      if (aRow < K && aCol < M) { v = g0[aRow * M + aCol]; }
+      mat_tileA[lrow][lcol * 4u + i] = v;
+    }
+    // Load B[kBase + lrow, blockCol + lcol*4 + j] — same K-row indexing.
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      let bRow = kBase + lrow;
+      let bCol = blockCol + lcol * 4u + j;
+      var v: f32 = 0.0;
+      if (bRow < K && bCol < N) { v = g1[bRow * N + bCol]; }
+      mat_tileB[lrow][lcol * 4u + j] = v;
+    }
+    workgroupBarrier();
+
+    let myA0 = lrow * 4u;
+    let myB0 = lcol * 4u;
+    for (var k: u32 = 0u; k < 16u; k = k + 1u) {
+      // mat_tileA[k][m] — pull row m of the output block from k-row of A.
+      let a0 = mat_tileA[k][myA0 + 0u];
+      let a1 = mat_tileA[k][myA0 + 1u];
+      let a2 = mat_tileA[k][myA0 + 2u];
+      let a3 = mat_tileA[k][myA0 + 3u];
+      let b0 = mat_tileB[k][myB0 + 0u];
+      let b1 = mat_tileB[k][myB0 + 1u];
+      let b2 = mat_tileB[k][myB0 + 2u];
+      let b3 = mat_tileB[k][myB0 + 3u];
+      acc[0][0] = acc[0][0] + a0 * b0; acc[0][1] = acc[0][1] + a0 * b1;
+      acc[0][2] = acc[0][2] + a0 * b2; acc[0][3] = acc[0][3] + a0 * b3;
+      acc[1][0] = acc[1][0] + a1 * b0; acc[1][1] = acc[1][1] + a1 * b1;
+      acc[1][2] = acc[1][2] + a1 * b2; acc[1][3] = acc[1][3] + a1 * b3;
+      acc[2][0] = acc[2][0] + a2 * b0; acc[2][1] = acc[2][1] + a2 * b1;
+      acc[2][2] = acc[2][2] + a2 * b2; acc[2][3] = acc[2][3] + a2 * b3;
+      acc[3][0] = acc[3][0] + a3 * b0; acc[3][1] = acc[3][1] + a3 * b1;
+      acc[3][2] = acc[3][2] + a3 * b2; acc[3][3] = acc[3][3] + a3 * b3;
+    }
+    workgroupBarrier();
+  }
+
+  for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+    let outRow = blockRow + lrow * 4u + i;
+    if (outRow >= M) { continue; }
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      let outCol = blockCol + lcol * 4u + j;
+      if (outCol < N) {
+        g2[outRow * N + outCol] = acc[i][j];
+      }
+    }
+  }
 }
 
 // --- elementwise -----------------------------------------------------------

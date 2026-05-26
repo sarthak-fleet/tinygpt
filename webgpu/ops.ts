@@ -15,7 +15,8 @@ import shader from "./train.wgsl?raw";
 import { BufferPool, GpuTensor, type GpuContext } from "./tensor";
 
 const ENTRIES = [
-  "matmul", "matmul_blocked", "matmul_abt", "matmul_atb", "add", "bias_add",
+  "matmul", "matmul_blocked", "matmul_abt", "matmul_abt_blocked",
+  "matmul_atb", "matmul_atb_blocked", "add", "bias_add",
   "bias_grad", "gelu_forward", "gelu_backward", "layernorm_forward",
   "layernorm_dx", "layernorm_dgb", "attn_softmax", "attn_value", "attn_dscores",
   "attn_dq", "attn_dk", "attn_dv", "embed_forward", "embed_tok_grad",
@@ -180,19 +181,25 @@ export class GpuOps {
     return c;
   }
 
-  /** C = A @ Bᵀ.   A:[M,K]  B:[N,K]  ->  [M,N]   (also the tied output head). */
+  /** C = A @ Bᵀ.   A:[M,K]  B:[N,K]  ->  [M,N]   (also the tied output head).
+   *
+   * Uses the thread-blocked variant — same 4×4-register + 64×64-workgroup tile
+   * pattern as matmul, adapted to B's [N,K] layout. */
   matmulAbt(a: GpuTensor, b: GpuTensor, M: number, K: number, N: number): GpuTensor {
     const c = this.newTensor(M * N, "matmul.abt");
-    this.dispatch("matmul_abt", [a, b, c], { a: M, b: K, c: N },
-      Math.ceil(M / 16), Math.ceil(N / 16));
+    this.dispatch("matmul_abt_blocked", [a, b, c], { a: M, b: K, c: N },
+      Math.ceil(M / 64), Math.ceil(N / 64));
     return c;
   }
 
-  /** C = Aᵀ @ B.   A:[K,M]  B:[K,N]  ->  [M,N] */
+  /** C = Aᵀ @ B.   A:[K,M]  B:[K,N]  ->  [M,N]
+   *
+   * Uses the thread-blocked variant — same pattern, adapted to A's [K,M]
+   * (transposed-row) access. */
   matmulAtb(a: GpuTensor, b: GpuTensor, M: number, K: number, N: number): GpuTensor {
     const c = this.newTensor(M * N, "matmul.atb");
-    this.dispatch("matmul_atb", [a, b, c], { a: M, b: K, c: N },
-      Math.ceil(M / 16), Math.ceil(N / 16));
+    this.dispatch("matmul_atb_blocked", [a, b, c], { a: M, b: K, c: N },
+      Math.ceil(M / 64), Math.ceil(N / 64));
     return c;
   }
 
