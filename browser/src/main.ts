@@ -1579,7 +1579,7 @@ els.bench.addEventListener("click", async () => {
           `naive ${s.f32GpuMs.toFixed(2)}  ` +
           `tiled ${s.tiledGpuMs.toFixed(2)}  ` +
           `blocked4 ${s.blockedGpuMs.toFixed(2)}  ` +
-          `blocked8 ${s.blocked8GpuMs.toFixed(2)}  ` +
+          `vec4 ${s.blockedVec4GpuMs.toFixed(2)}  ` +
           `f16 ${s.f16GpuMs.toFixed(2)} ms  ` +
           `→ best=${s.bestVariant} @ ${s.bestSpeedup.toFixed(2)}×  ${par}`;
       });
