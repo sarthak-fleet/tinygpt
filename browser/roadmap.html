@@ -762,58 +762,6 @@
         </div>
       </article>
 
-      <!-- New: native macOS app — biggest open ceiling -->
-      <article class="lever">
-        <div class="lever-head">
-          <span class="lever-num">●</span>
-          <h2 class="lever-title">Native macOS app (MLX-Swift + SwiftUI)</h2>
-          <span class="status open"><span class="dot"></span> Open · biggest ceiling-break</span>
-        </div>
-        <div class="lever-meta">
-          <span>Unlocks: <strong>250M → 7B+ params</strong></span>
-          <span>Speed vs browser: <strong>2–10× plus much bigger models</strong></span>
-          <span>Stack: <code>MLX-Swift + SwiftUI</code></span>
-        </div>
-        <div class="lever-body">
-          <p>
-            The browser tab caps out around <strong>~250M params (fp32)</strong> — V8 heap
-            ceiling and WebGPU buffer caps stop us from going bigger no matter how fast we
-            make each step. A native macOS app removes both walls and adds direct Metal
-            access without browser-sandbox overhead.
-          </p>
-          <table class="bench-table">
-            <thead>
-              <tr><th>Hardware</th><th>Realistic max model</th><th>Approx training regime</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>M2 8 GB</td><td>~200M</td><td>30-min runs of readable English</td></tr>
-              <tr><td>M2 Pro 16 GB</td><td>~1B</td><td>locally grammatical, semantically loose</td></tr>
-              <tr><td>M2 Max 64 GB</td><td>3-7B (fp16)</td><td>tinyLlama-class, real continuation</td></tr>
-              <tr><td>M2 Ultra 128 GB</td><td>13-30B (fp16)</td><td>mini-Llama territory</td></tr>
-            </tbody>
-          </table>
-          <p>
-            <strong>Stack rationale:</strong> MLX is Apple's ML framework for Apple Silicon —
-            unified memory architecture means the GPU sees the same buffers the CPU does,
-            no copies. Native Swift bindings exist (<code>MLX-Swift</code>). The Python
-            reference's model.py ports to MLX in roughly one day; the existing kernels become
-            optimised MLX ops or we keep the hand-written ones via Metal compute shaders.
-          </p>
-          <div class="why">
-            <span class="why-key">Interop</span>
-            <span class="why-val">The app reads and writes the same <code>.tinygpt</code>
-            v2 file format. Models trained in either tool work in both. Browser stays the
-            on-ramp / demo; app is for serious work.</span>
-          </div>
-          <div class="why">
-            <span class="why-key">Scope</span>
-            <span class="why-val">5-6 weeks of focused work: 1 wk port model.py to MLX,
-            1-2 wk SwiftUI shell matching the browser playground, 2-3 wk native advantages
-            (background training, larger models, fp16, Flash Attention via MLX), 1 wk polish.</span>
-          </div>
-        </div>
-      </article>
-
       <!-- 8: Local Python — shipped -->
       <article class="lever">
         <div class="lever-head">
@@ -913,6 +861,48 @@
             bit-identical (modulo float reorder). Pipeline-integration is
             the next item.</span>
           </div>
+        </div>
+      </article>
+
+      <article class="lever">
+        <div class="lever-head">
+          <span class="lever-num">9c</span>
+          <h2 class="lever-title">8×8 register block — tried, lost to 4×4</h2>
+          <span class="status open"><span class="dot"></span> Honest result · register spill / lower occupancy</span>
+        </div>
+        <div class="lever-meta">
+          <span>Impact: <strong>~0.85× of blocked4</strong> across all sizes (measured)</span>
+          <span>Lives in: <code>webgpu/matmul_blocked8.wgsl</code></span>
+        </div>
+        <div class="lever-body">
+          <p>
+            Tried scaling the register block up from 4×4 to 8×8 (workgroup
+            output tile 128×128 instead of 64×64). Hypothesis was that 4× the
+            arithmetic intensity per shared-memory load would translate to
+            ~1.5× more speedup on top of blocked4. <strong>Lost at every
+            size:</strong>
+          </p>
+          <table class="bench-table">
+            <thead>
+              <tr><th>matmul size</th><th>blocked4 ms</th><th>blocked8 ms</th><th>ratio</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>256³</td><td>0.33</td><td>0.55</td><td>0.60×</td></tr>
+              <tr><td>512³</td><td>0.54</td><td>0.75</td><td>0.72×</td></tr>
+              <tr><td>1024³</td><td>1.78</td><td>1.96</td><td>0.91×</td></tr>
+              <tr><td>2048³</td><td>10.15</td><td>11.52</td><td>0.88×</td></tr>
+            </tbody>
+          </table>
+          <p>
+            Most likely cause: 64 floats per thread for the accumulator
+            exceeds the per-thread register budget on Apple GPUs, forcing
+            register spill into local memory and tanking effective compute
+            throughput. Lower workgroup occupancy (16 KB shared per
+            workgroup vs 4 KB) compounds it — fewer concurrent workgroups
+            per SM. <strong>Kept in the codebase as a documented negative
+            result.</strong> Same lesson as f16-vs-tiled: more aggressive is
+            not always faster; benchmark every variant.
+          </p>
         </div>
       </article>
 
