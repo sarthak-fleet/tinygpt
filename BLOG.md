@@ -25,7 +25,7 @@ The same model exists at three levels, built in that order.
 when anything else disagrees. `wasm/` is the same maths in C++, with every
 backward pass derived by hand and compiled to WebAssembly via Emscripten.
 `webgpu/` is the whole training loop in WGSL — forward, backward, AdamW, all
-24 kernels — each one finite-difference checked against the reference. All
+30 kernels — each one finite-difference checked against the reference. All
 three read and write the same `.tinygpt` binary file format, so a model
 trained in any path continues training in any other.
 
