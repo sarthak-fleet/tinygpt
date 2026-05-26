@@ -1802,6 +1802,7 @@ void init().then(() => {
   setupIntroCard();
   setupStickyStats();
   setupKeyboardShortcuts();
+  setupDemoBanner();
   // Mark landing animation as done after first paint — subsequent navigations
   // skip the brand-draw animation (it's a one-time wow).
   setTimeout(() => document.body.classList.add("landing-done"), 2200);
@@ -1861,6 +1862,47 @@ function setupKeyboardShortcuts(): void {
         els.sizePreset.value = presetId;
         els.sizePreset.dispatchEvent(new Event("change"));
       }
+    }
+  });
+}
+
+// --- demo banner — "Try a trained model" CTA -----------------------------
+// On load, HEAD /demo.tinygpt. If it exists (200), reveal the banner.
+// Click → fetch + load via the same path as model upload.
+async function setupDemoBanner(): Promise<void> {
+  const banner = document.getElementById("demoBanner");
+  const btn = document.getElementById("loadDemoBtn") as HTMLButtonElement | null;
+  if (!banner || !btn) return;
+  // Hide once any model is loaded — avoid clutter for return visitors.
+  if (latestState) { banner.hidden = true; return; }
+
+  try {
+    const head = await fetch("/demo.tinygpt", { method: "HEAD" });
+    if (!head.ok) return; // demo not deployed yet; banner stays hidden
+  } catch {
+    return;
+  }
+  banner.hidden = false;
+
+  btn.addEventListener("click", async () => {
+    btn.classList.add("loading");
+    btn.textContent = "fetching trained model…";
+    try {
+      const resp = await fetch("/demo.tinygpt");
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const file = new File([blob], "demo.tinygpt", { type: "application/octet-stream" });
+      // Re-use the upload-file decode path so behaviour matches user uploads.
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      els.uploadModel.files = dt.files;
+      els.uploadModel.dispatchEvent(new Event("change"));
+      banner.hidden = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      btn.classList.remove("loading");
+      btn.innerHTML = `<span aria-hidden="true">▶</span> Try a trained model`;
+      setStatus(`couldn't load demo model: ${msg}`, true);
     }
   });
 }

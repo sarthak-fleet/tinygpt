@@ -191,6 +191,45 @@
       }
       .lede a:hover { text-decoration-color: var(--accent); }
 
+      /* Demo banner — first-visit CTA above the train card */
+      .demo-banner {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 18px; flex-wrap: wrap;
+        margin: 0 0 28px;
+        padding: 18px 22px;
+        background:
+          linear-gradient(135deg, rgba(72, 229, 194, 0.07), transparent 60%),
+          var(--panel);
+        border: 1px solid var(--accent-dim);
+        border-radius: 12px;
+        animation: rise-in 0.45s var(--ease-out-expo) 0.7s both;
+      }
+      .demo-banner[hidden] { display: none; }
+      .demo-banner-body {
+        flex: 1; min-width: 240px;
+        color: var(--muted);
+        font-size: 14px; line-height: 1.55;
+      }
+      .demo-banner-body strong {
+        display: block;
+        color: var(--fg); font-weight: 500;
+        margin-bottom: 2px;
+      }
+      .demo-load-btn {
+        padding: 10px 18px;
+        font: 600 13px/1 var(--font-sans);
+        background: var(--accent);
+        color: #062019;
+        border: 1px solid var(--accent);
+      }
+      .demo-load-btn:hover { background: #5cf0d0; border-color: #5cf0d0; }
+      .demo-load-btn span[aria-hidden] { color: #062019; font-size: 11px; }
+      .demo-load-btn.loading {
+        background: transparent;
+        color: var(--accent);
+        border: 1px dashed var(--accent-dim);
+      }
+
       /* Cards — quieter surfaces, defined by space not lines. */
       .card {
         background: var(--panel);
@@ -1974,6 +2013,16 @@
           <a href="https://github.com/sarthakagrawal927/tinygpt">Source ↗</a>
         </p>
       </header>
+
+      <div id="demoBanner" class="demo-banner" hidden>
+        <div class="demo-banner-body">
+          <strong>Want to skip the wait?</strong>
+          <span>Load a pre-trained Shakespeare model and Generate immediately. Training your own is below.</span>
+        </div>
+        <button id="loadDemoBtn" class="primary-btn demo-load-btn" type="button">
+          <span aria-hidden="true">▶</span> Try a trained model
+        </button>
+      </div>
 
       <div class="train-grid hero-grid">
         <!-- LEFT: configure + start -->
