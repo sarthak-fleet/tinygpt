@@ -358,13 +358,44 @@ async function continueWebgpu(extraSteps: number, startStep: number, newTotal: n
 async function doSample(prompt: string, tokens: number, temperature: number): Promise<void> {
   const seed = (Date.now() & 0xffff) >>> 0;
   if (gpuModel) {
-    const out = await gpuModel.generate([...encode(prompt)], tokens, temperature, 40, seed);
-    post({ type: "sample", text: decode(Uint8Array.from(out)) });
+    // Stream per-token via the onToken callback so the UI can render output
+    // live instead of waiting for the whole sequence and then animating a
+    // typewriter on already-finished text. Time the loop so we can report
+    // a real tokens-per-second number when the run finishes.
+    const promptIds = [...encode(prompt)];
+    post({ type: "sample_begin", prompt });
+    const tStart = performance.now();
+    let firstTokenMs = 0;
+    const generated: number[] = [];
+    const out = await gpuModel.generate(promptIds, tokens, temperature, 40, seed, (tok, idx) => {
+      if (idx === 0) firstTokenMs = performance.now() - tStart;
+      generated.push(tok);
+      // Decoding one byte in isolation can split UTF-8 sequences, so we
+      // re-decode the running tail on every chunk — small string,
+      // negligible cost compared to a full forward pass.
+      const chunkText = decode(Uint8Array.from(generated));
+      post({ type: "sample_chunk", chunk: chunkText, count: generated.length });
+    });
+    const elapsed = (performance.now() - tStart) / 1000;
+    const tokensPerSecond = elapsed > 0 ? out.length / elapsed : 0;
+    post({
+      type: "sample_done",
+      text: decode(Uint8Array.from(out)),
+      tokensPerSecond,
+      firstTokenMs,
+      totalMs: elapsed * 1000,
+    });
     return;
   }
   if (model) {
+    // WASM path is synchronous — no streaming hook in the C ABI. Still time
+    // it and emit a tokens-per-second number so the UI doesn't go dark.
+    const tStart = performance.now();
     const out = model.generate(encode(prompt), tokens, temperature, 40, seed);
-    post({ type: "sample", text: prompt + decode(out) });
+    const elapsed = (performance.now() - tStart) / 1000;
+    const text = prompt + decode(out);
+    const tokensPerSecond = elapsed > 0 ? out.length / elapsed : 0;
+    post({ type: "sample_done", text, tokensPerSecond, firstTokenMs: 0, totalMs: elapsed * 1000 });
     return;
   }
   post({ type: "error", message: "train a model before sampling" });

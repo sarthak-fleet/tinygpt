@@ -2069,6 +2069,23 @@ const pageStyle = `
       }
 
       /* Sample interpretation callout */
+      /* Tokens/sec + first-token latency under the generated output.
+         Hidden until a sample completes. */
+      .sample-stats {
+        margin-top: 10px;
+        font: 500 11.5px/1.5 var(--font-mono);
+        color: var(--muted);
+        display: flex; flex-wrap: wrap; gap: 14px;
+      }
+      .sample-stats[hidden] { display: none; }
+      .sample-stats .stat-pair {
+        display: inline-flex; gap: 6px; align-items: baseline;
+      }
+      .sample-stats .stat-pair strong {
+        color: var(--accent); font-weight: 500; font-variant-numeric: tabular-nums;
+      }
+      .sample-stats .stat-pair .unit { color: var(--faint); font-size: 10.5px; text-transform: lowercase; }
+
       .sample-note {
         margin-top: 20px;
         padding: 16px 0 0;
@@ -2828,6 +2845,7 @@ const pageBody = `
           <div id="output" class="empty">Train a model, then generate text here.</div>
           <button id="copyOutput" class="copy-output" type="button" title="Copy generated text" hidden aria-label="Copy generated text">⧉</button>
         </div>
+        <div id="sampleStats" class="sample-stats" hidden></div>
         <div class="sample-note" id="sampleNote">
           <span id="sampleNoteContent">
             <strong>What to expect:</strong> the model has to be sized to the data.

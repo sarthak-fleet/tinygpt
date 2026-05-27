@@ -81,7 +81,13 @@ export interface InspectResult {
 export type FromWorker =
   | { type: "status"; message: string }
   | { type: "progress"; progress: TrainingProgress }
+  // Generation flow: sample_begin (echo prompt) → sample_chunk* (live decode
+  // updates) → sample_done (final text + tokens/sec). Legacy `sample` is kept
+  // for the WASM path that doesn't stream per token.
   | { type: "sample"; text: string }
+  | { type: "sample_begin"; prompt: string }
+  | { type: "sample_chunk"; chunk: string; count: number }
+  | { type: "sample_done"; text: string; tokensPerSecond: number; firstTokenMs: number; totalMs: number }
   | { type: "checkpoint"; state: ArrayBuffer } // serialized model state for OPFS
   | { type: "restored" } // a saved model was reloaded into the worker
   | { type: "done"; reason: "finished" | "stopped" }

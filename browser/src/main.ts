@@ -776,7 +776,22 @@ els.continueBtn.addEventListener("click", () => {
 
 // Cached so we can attach prompt/temp to the `sample_generated` event when the
 // worker comes back. Storing length only — we never track prompt contents.
-let lastSampleRequest: { promptBytes: number; temperature: number } | null = null;
+// `prompt` is also stashed so streaming chunks can be rendered with the
+// original prompt prefix.
+let lastSampleRequest: { promptBytes: number; temperature: number; prompt: string } | null = null;
+
+function finalizeSampleAnalytics(text: string): void {
+  const last = history.length > 0 ? history[history.length - 1] : null;
+  trackSampleGenerated({
+    prompt_bytes: lastSampleRequest?.promptBytes ?? 0,
+    output_bytes: text.length,
+    temperature: lastSampleRequest?.temperature ?? 0,
+    top_k: 0,
+    final_train_loss: last ? last.trainLoss : null,
+    final_val_loss: last ? (last.valLoss ?? null) : null,
+  });
+  lastSampleRequest = null;
+}
 
 els.sample.addEventListener("click", () => {
   const promptVal = byId<HTMLInputElement>("prompt").value;
@@ -784,6 +799,7 @@ els.sample.addEventListener("click", () => {
   lastSampleRequest = {
     promptBytes: promptVal.length,
     temperature: Number.isFinite(temperatureVal) ? temperatureVal : 0,
+    prompt: promptVal,
   };
   send({
     type: "sample",
@@ -1965,23 +1981,47 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       break;
     }
     case "sample": {
+      // Legacy single-shot path (kept for backwards compat — older callers
+      // post a full sample at once).
       lastSampleText = msg.text;
       typewriteOutput(msg.text);
-      // Kick off an introspection forward pass over the same text so the
-      // "Watch the model think" panel becomes interactive once it shows up.
       requestInspect(msg.text);
-      const last = history.length > 0 ? history[history.length - 1] : null;
-      trackSampleGenerated({
-        prompt_bytes: lastSampleRequest?.promptBytes ?? 0,
-        output_bytes: msg.text.length,
-        temperature: lastSampleRequest?.temperature ?? 0,
-        // top_k isn't surfaced in the playground UI yet — record 0 to keep
-        // the schema stable for when it lands.
-        top_k: 0,
-        final_train_loss: last ? last.trainLoss : null,
-        final_val_loss: last ? (last.valLoss ?? null) : null,
-      });
-      lastSampleRequest = null;
+      finalizeSampleAnalytics(msg.text);
+      break;
+    }
+    case "sample_begin": {
+      // Start of a streaming generation. Render the prompt immediately so
+      // the user sees "something is happening" instead of waiting for the
+      // first model token (which itself takes a forward pass on the prompt).
+      els.output.classList.remove("empty");
+      els.output.textContent = msg.prompt;
+      const statsEl = document.getElementById("sampleStats") as HTMLElement | null;
+      if (statsEl) { statsEl.hidden = true; statsEl.innerHTML = ""; }
+      break;
+    }
+    case "sample_chunk": {
+      // Each chunk is the prompt + everything generated so far. Replace —
+      // no typewriter, the live stream IS the animation.
+      els.output.textContent = (lastSampleRequest?.prompt ?? "") + msg.chunk;
+      break;
+    }
+    case "sample_done": {
+      lastSampleText = msg.text;
+      els.output.classList.remove("empty");
+      els.output.textContent = msg.text;
+      requestInspect(msg.text);
+      finalizeSampleAnalytics(msg.text);
+      const statsEl = document.getElementById("sampleStats") as HTMLElement | null;
+      if (statsEl) {
+        const tps = Math.max(0, msg.tokensPerSecond).toFixed(1);
+        const totalSec = (msg.totalMs / 1000).toFixed(2);
+        const firstMs = msg.firstTokenMs > 0 ? `${msg.firstTokenMs.toFixed(0)} ms` : "n/a";
+        statsEl.innerHTML =
+          `<span class="stat-pair"><strong>${tps}</strong><span class="unit">tok/s</span></span>` +
+          `<span class="stat-pair"><strong>${totalSec}</strong><span class="unit">s total</span></span>` +
+          `<span class="stat-pair"><strong>${firstMs}</strong><span class="unit">to first token</span></span>`;
+        statsEl.hidden = false;
+      }
       break;
     }
     case "inspect":
