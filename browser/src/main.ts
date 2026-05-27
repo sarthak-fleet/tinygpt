@@ -34,6 +34,7 @@ import { hasSeenTour, markTourSeen, startTour } from "./tour";
 import { DEFAULT_CONFIG, type FromWorker, type InspectResult, type RunConfig, type ToWorker } from "./types";
 import {
   initAnalytics,
+  installBrowserMonitoring,
   trackPlaygroundLoaded,
   trackSampleGenerated,
   trackTrainStarted,
@@ -2386,6 +2387,10 @@ document.addEventListener("click", (e) => {
 // is dismissed (or immediately if the user has already seen the tour).
 initAnalytics();
 
+// Fleet-standard browser crash monitoring (page_crash_capture). Catches
+// production window errors + unhandled rejections with project slug.
+installBrowserMonitoring();
+
 let playgroundLoadedFired = false;
 let pendingPlaygroundLoadedProps: Parameters<typeof trackPlaygroundLoaded>[0] | null = null;
 
@@ -2448,7 +2453,19 @@ async function init(): Promise<void> {
     `Suggested: <strong>${rec.layers}L · d_model ${rec.dModel} · ctx ${rec.ctx}</strong> ` +
     `(~${formatParams(rec.approxParams)} params, ${rec.tier})` +
     `</span>` +
-    `<button id="applyRec" class="ghost" style="margin-left:4px">Apply</button>`;
+    `<button id="applyRec" class="ghost" style="margin-left:4px">Apply</button>` +
+    // Honest note for Safari users: TinyGPT is built + tested on Chromium.
+    // Safari mostly works for small/medium presets but a few load-time and
+    // runtime quirks (no Memory64 below 18.4, partial WebGPU, slower pthread
+    // shim) make bigger models flaky. Don't hide it — just tell them.
+    (browser.name === "Safari"
+      ? `<div class="safari-note">
+           <strong>You're on Safari.</strong> TinyGPT is built + tested on
+           Chromium — Safari should be fine for small / medium presets, but
+           larger ones may misbehave (no Memory64 below 18.4, WebGPU is
+           partial). For the smoothest experience, open this in Chrome.
+         </div>`
+      : "");
 
   // GPU adapter name (Chromium / Safari WebGPU). Display only if available.
   if (caps.webgpu) {

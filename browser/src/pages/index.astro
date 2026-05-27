@@ -443,6 +443,20 @@ const pageStyle = `
       .machine strong { color: var(--fg); font-weight: 500; }
       .machine .muted { color: var(--muted); }
       .machine #caps { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+      /* Honest "you're on Safari" note. Renders only when Safari is detected
+         (see main.ts setupCaps). Soft yellow border, no scare emoji —
+         informational, not blocking. */
+      #caps .safari-note {
+        flex-basis: 100%;
+        margin-top: 10px;
+        padding: 10px 14px;
+        border: 1px solid rgba(245, 177, 74, 0.35);
+        border-radius: 8px;
+        background: rgba(245, 177, 74, 0.04);
+        color: var(--muted);
+        font: 13px/1.55 var(--font-sans);
+      }
+      #caps .safari-note strong { color: var(--warn); font-weight: 500; }
       #caps .pill {
         display: inline-flex; align-items: center; gap: 4px;
         padding: 2px 8px;
@@ -3181,6 +3195,18 @@ const pageBody = `
       <button class="shortcuts-close" id="shortcutsClose" type="button">close</button>
     </dialog>
     </div>
+
+    <!-- Themed confirm dialog, used by the Start pre-flight checks instead of
+         native window.confirm(). showConfirm() in main.ts populates the body
+         + button labels at call time. -->
+    <dialog id="confirmDialog" class="confirm-dialog">
+      <h2 id="confirmTitle" class="confirm-title">Are you sure?</h2>
+      <div id="confirmBody" class="confirm-body"></div>
+      <div class="confirm-actions">
+        <button class="secondary" id="confirmCancel" type="button" value="cancel">Cancel</button>
+        <button class="primary" id="confirmOk" type="button" value="ok">Continue</button>
+      </div>
+    </dialog>
 
     <dialog id="welcome">
       <h2>Welcome to TinyGPT</h2>
