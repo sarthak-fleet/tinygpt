@@ -1204,10 +1204,58 @@ const pageBody = `
         </div>
       </article>
 
-      <!-- 18: Mac app — the remaining big piece -->
-      <article id="mac" class="lever">
+      <!-- 18: Quantization + LoRA fine-tuning — bundled, lands with Mac app -->
+      <article id="quant-lora" class="lever">
         <div class="lever-head">
           <span class="lever-num">18</span>
+          <h2 class="lever-title">Quantization + LoRA fine-tuning</h2>
+          <span class="status planned"><span class="dot"></span> Planned · lands with the Mac app</span>
+        </div>
+        <div class="lever-meta">
+          <span>Three capabilities, one bundle</span>
+          <span>Cheapest implementation: native (MLX) — see lever 19</span>
+        </div>
+        <div class="lever-body">
+          <p>
+            Three feature buckets that genuinely belong together — each one
+            multiplies the value of the other two — and that all benefit from
+            the same native ML primitives:
+          </p>
+          <ul>
+            <li><strong>bf16 / fp16 weights and activations.</strong> Halves the
+                memory footprint at training and inference time. First-class on
+                Apple Silicon, with hardware accelerators. The in-browser
+                fp16-packed experiment showed no compound gain (lever 10b);
+                native is where it actually pays.</li>
+            <li><strong>int8 / int4 quantized inference.</strong> Load a quantized
+                checkpoint, sample without dequantising the full weight matrix.
+                Lets the 9.6M-param Huge model ship at &lt; 10 MB and lets much
+                bigger models run sample-only without exceeding heap. MLX +
+                GGUF-style formats handle this off-the-shelf.</li>
+            <li><strong>LoRA fine-tuning.</strong> Load a base checkpoint, freeze
+                the weights, train low-rank adapter matrices on your own corpus.
+                The Python reference already supports this
+                (<a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/lora_guide.md"><code>docs/lora_guide.md</code></a>);
+                the hook is "load a gallery model → click Fine-tune → watch the
+                voice shift in a few minutes." Pairs directly with lever 17.</li>
+          </ul>
+          <p>
+            Doing these in the WebGPU path was previously listed as three
+            separate planned items. The honest read: each one would mean a
+            parallel set of WGSL kernels (quantized matmul, LoRA-aware matmul,
+            fp16 variants of every op), parity tests against the fp32 reference,
+            and a doubled test matrix. Months of work for capability that the
+            native ML framework gives in days. Better to ship them together
+            on the native side first; back-port to in-browser only if real
+            usage demands it.
+          </p>
+        </div>
+      </article>
+
+      <!-- 19: Mac app — the remaining big piece -->
+      <article id="mac" class="lever">
+        <div class="lever-head">
+          <span class="lever-num">19</span>
           <h2 class="lever-title">Native macOS app (MLX-Swift)</h2>
           <span class="status planned"><span class="dot"></span> Planned · biggest single new project</span>
         </div>
@@ -1232,28 +1280,12 @@ const pageBody = `
             faster.
           </p>
           <p>
-            <strong>What lives here, not in-browser.</strong> Several previously-planned
-            in-browser levers were moved into this app's scope, because the
-            native ML framework already supports them and the test surface in
-            WGSL would be huge for a marginal win:
-          </p>
-          <ul>
-            <li><strong>bf16 / fp16 weights and activations</strong> — first-class
-                on Apple Silicon; the in-browser fp16-packed experiment showed
-                no compound gain (lever 10b).</li>
-            <li><strong>int8 / int4 quantized inference</strong> — load a quantized
-                checkpoint, sample without dequantising the whole weight matrix to
-                fp32. MLX + GGUF-style formats handle this off-the-shelf.</li>
-            <li><strong>LoRA fine-tuning</strong> — load a base, freeze, train
-                only the adapter. Pairs directly with the gallery: download a
-                gallery model, fine-tune it on your own corpus.</li>
-          </ul>
-          <p>
             <strong>The boundary</strong> between what belongs in-browser and
             what belongs native is in
             <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/shared_vs_native.md">
               <code>docs/shared_vs_native.md</code></a>.
-            Together with the gallery (lever 17), this is the remaining work.
+            Together with the gallery (lever 17) and the quant + LoRA bundle
+            (lever 18, which lands here), this is the remaining work.
           </p>
         </div>
       </article>
