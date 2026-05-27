@@ -167,17 +167,43 @@ trying this (human or AI) won't waste a day re-discovering the same dead
 ends. Treating negative-result documentation as a first-class deliverable,
 equal in weight to the shipped wins, changed how productive the loop felt.
 
+## Flash Attention 2 — the lever that actually shipped
+
+Originally I'd planned to write this section as "what's next." It became
+"what shipped" instead.
+
+The forward kernel is workgroup-cooperative — one workgroup per
+`(batch, head, Q-tile of 16 rows)`, K and V walked in blocks of 16, with
+the online-softmax state (`m_i`, `l_i`, `O_i`) kept in registers across
+K blocks. The backward saves `L = m + log(l)` per Q row in the forward,
+then reconstructs `P = exp(S − L)` from `q`/`k` instead of reading the
+cached attention matrix. That removed the forward's second pass entirely
+— at Mega-class shapes (B=4, H=8, T=512) that's about **67 MB of global
+memory traffic per layer per step** that now stays on-chip.
+
+End-to-end parity vs. WASM after the full FA2 path was wired:
+
+```
+WASM SIMD          6.8 s   loss 2.9385
+WebGPU + FA2 fwd
+       + FA2 back  0.7 s   loss 2.8650   2.5% drift
+```
+
+The algorithm pinning happened in Node (`tests/test_fa2_parity.mjs` for
+the forward, `tests/test_fa2_backward_parity.mjs` for the backward) —
+each one mirrors the planned WGSL kernel in plain JS and checks
+gradient outputs against a naive reference to within 1 ULP. That made
+the WGSL "transcribe the proven algorithm" rather than "debug from a
+wall of NaN." If I had to do this whole project over, the
+algorithm-in-JS-first habit is the one rule I'd lock in earliest.
+
 ## What's next
 
 Most of the easy wins are done. What's left:
 
-- **Full Flash Attention 2 in WGSL.** Workgroup-cooperative attention with
-  tiling and backward recomputation. The biggest remaining lever at
-  ctx ≥ 256, where attention's share of step time climbs past 40%.
 - **Pre-trained model gallery** — R2-hosted, manifest-driven, so visitors
   can load and continue-train from real checkpoints. Deferred until the
-  speed work is fully shipped, so the gallery's implicit promise stays
-  honest.
+  speed work is fully shipped — which now means it's actually ready.
 - **Native macOS app** — MLX-Swift + SwiftUI, same `.tinygpt` file format
   both ways, lifts the ceiling into the 7B–30B range on Apple Silicon.
 

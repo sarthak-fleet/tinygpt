@@ -43,6 +43,13 @@ Reproducible from the playground's bench button or `tests/test_webgpu_train.mjs`
   module; on the 64-bit one it allocates cleanly in 3.7 s and takes one
   training step in 82.2 s with `loss 5.78` (the correct initial loss for
   random init).
+- **Flash Attention 2 forward + backward** in WGSL — workgroup-cooperative
+  forward with online softmax in registers, backward that recomputes
+  attention from a saved log-sum-exp instead of reading the cached matrix.
+  The forward dropped its O(B·H·T²) attention writeback entirely; on
+  Mega-class shapes (B=4, H=8, T=512) that's ~67 MB of global memory
+  traffic per layer per step that now stays on-chip. End-to-end parity at
+  2.5% drift vs. the WASM reference.
 
 The full speed-evolution table — scalar → SIMD → threads → WebGPU naive →
 WebGPU blocked — lives on the [roadmap](browser/roadmap.html). Each measured
@@ -133,13 +140,17 @@ Safari 18+.
 
 - **Pre-trained model gallery** — Cloudflare R2-hosted, manifest-driven; let
   visitors load and continue-train from real checkpoints instead of just the
-  one shipped demo. Deferred until the speed work is fully shipped, so the
-  gallery's implicit "you can train these too" promise is honest.
-- **Full Flash Attention 2** in WGSL — workgroup-cooperative attention with
-  tiling and backward recomputation. The biggest remaining lever at ctx ≥ 256.
+  one shipped demo.
 - **Native macOS app** — MLX-Swift + SwiftUI, same `.tinygpt` file format both
   ways, lifts the model-size ceiling into the 7B–30B range on Apple Silicon.
   See [`docs/shared_vs_native.md`](docs/shared_vs_native.md) for the boundary.
+
+Flash Attention 2 used to live in this list; it shipped — see
+[`docs/fa2_forward_notes.md`](docs/fa2_forward_notes.md) and
+[`docs/fa2_backward_notes.md`](docs/fa2_backward_notes.md). The forward
+runs workgroup-cooperative tiling with online softmax across K blocks;
+the backward recomputes attention on the fly from a saved log-sum-exp,
+which let the forward drop the O(B·H·T²) attention writeback entirely.
 
 ## Repo layout
 
