@@ -38,33 +38,25 @@ await page.locator("#loadDemoBtn").click({ force: true });
 await page.locator("#demoBanner").waitFor({ state: "hidden", timeout: 60_000 }).catch(() => {});
 console.log("model loaded (banner now hidden)");
 
-// Find a Generate button. The playground has a sample/generate control.
-const genCandidates = ["#generate", "#sampleBtn", "#genBtn", "button:has-text('Generate')", "button:has-text('Sample')"];
-let clicked = false;
-for (const sel of genCandidates) {
-  const loc = page.locator(sel).first();
-  if ((await loc.count()) > 0 && (await loc.isVisible().catch(() => false))) {
-    await loc.click({ force: true }).catch(() => {});
-    clicked = true;
-    console.log("clicked", sel);
-    break;
-  }
-}
-if (!clicked) console.log("WARNING: no Generate button found — listing all visible buttons:");
-if (!clicked) {
-  const all = await page.locator("button").elementHandles();
-  for (const h of all) {
-    const t = (await h.textContent())?.trim().slice(0, 40);
-    const vis = await h.isVisible();
-    if (vis && t) console.log("   button:", t);
-  }
-}
+// The generate button is #sample (per index.astro:2825), the OUTPUT div is
+// #output (per index.astro:2828). The button text on the page is "Generate".
+// Need to navigate to the Watch screen first — the Sample card lives there.
+await page.locator(".screen-tab[data-screen='watch']").click({ force: true }).catch(() => {});
+await page.waitForTimeout(300);
+await page.evaluate(() => document.getElementById("sample").click());
+console.log("clicked #sample (Generate button)");
 
-// Wait ~10s for the generation to finish
-await new Promise((r) => setTimeout(r, 10_000));
+// Wait up to 30s for generation to finish (Medium model, fast)
+await page.waitForFunction(
+  () => {
+    const out = document.getElementById("output");
+    return out && !out.classList.contains("empty") && out.textContent.length > 20;
+  },
+  null,
+  { timeout: 30_000 },
+).catch((e) => console.log("WARN:", e.message));
 
-// Try multiple known output element ids
-const outCandidates = ["#genOut", "#sample", "#sampleOut", "#generationText", "[data-role='generation']"];
+const outCandidates = ["#output", "#genOut", "#sampleOut"];
 let sample = "(none found)";
 for (const sel of outCandidates) {
   const loc = page.locator(sel).first();

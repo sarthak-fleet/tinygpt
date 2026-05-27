@@ -45,6 +45,11 @@ data/*.txt
 data/*.jsonl
 !data/examples/
 
+# Reference checkpoints (e.g. huge Shakespeare model, ~110MB) are too big
+# for git but useful to keep locally. The bundled browser demo
+# (browser/public/demo.tinygpt) is committed; everything else stays out.
+data/checkpoints/*.tinygpt
+
 # OS / editor
 .DS_Store
 *.swp
