@@ -5,9 +5,9 @@
   "type": "module",
   "description": "Browser TinyGPT — trains a tiny GPT in a Web Worker on WASM (Phase 4)",
   "scripts": {
-    "dev": "astro dev --port 5173",
+    "dev": "node scripts/copy_docs.mjs && astro dev --port 5173",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit && astro build",
+    "build": "node scripts/copy_docs.mjs && tsc --noEmit && astro build",
     "preview": "astro preview --port 4173",
     "e2e": "node e2e_browser.mjs",
     "webgpu-test": "node webgpu_test.mjs"
