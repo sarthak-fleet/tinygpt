@@ -1165,6 +1165,126 @@ const pageBody = `
         </div>
       </article>
 
+      <!-- 17: Pre-trained model gallery — planned, sponsor ask -->
+      <article id="gallery" class="lever">
+        <div class="lever-head">
+          <span class="lever-num">17</span>
+          <h2 class="lever-title">Pre-trained model gallery</h2>
+          <span class="status planned"><span class="dot"></span> Planned · looking for sponsors</span>
+        </div>
+        <div class="lever-meta">
+          <span>Impact: <strong>turns one demo into a library of demos</strong></span>
+          <span>Hosting: <code>Cloudflare R2</code> (storage trivial; compute isn't)</span>
+        </div>
+        <div class="lever-body">
+          <p>
+            A <code>/gallery</code> page listing curated <code>.tinygpt</code>
+            checkpoints — one per genre / corpus / size. Each card shows a
+            sample output, params, training data, license, and a
+            <strong>Load</strong> button that pulls the file from R2 and drops
+            it into the playground via the same loader the demo banner uses.
+          </p>
+          <p>
+            <strong>Cost honesty:</strong> R2 storage + egress is essentially
+            free at our scale (≈ $0.015/GB-month, no egress fees to Cloudflare
+            Pages). The real cost is <em>training the curated models</em> —
+            each useful checkpoint is 30 min – 6 hr of GPU time, run by hand,
+            then verified before it goes in the gallery.
+          </p>
+          <div class="why" style="border-left: 2px solid var(--accent); background: var(--accent-glow);">
+            <span class="why-key" style="color: var(--accent);">Looking for sponsors</span>
+            <span class="why-val">
+              If your org wants its name on a curated TinyGPT gallery model
+              (a recipe model, a code model, a song-lyric model, …),
+              <a href="https://github.com/sarthakagrawal927/tinygpt/issues/new?title=Gallery+sponsor+inquiry" target="_blank" rel="noopener">open an issue</a>
+              or reach
+              <a href="https://twitter.com/sarthakagrawal9" target="_blank" rel="noopener">@sarthakagrawal9</a>.
+              The compute funding directly translates to "this model exists,
+              and your name is on the card."
+            </span>
+          </div>
+        </div>
+      </article>
+
+      <!-- 18: LoRA fine-tuning + quantization in-browser -->
+      <article class="lever">
+        <div class="lever-head">
+          <span class="lever-num">18</span>
+          <h2 class="lever-title">LoRA fine-tuning + int8 quantization in-browser</h2>
+          <span class="status planned"><span class="dot"></span> Planned</span>
+        </div>
+        <div class="lever-meta">
+          <span>Impact: <strong>fine-tune the demo model on your text in minutes</strong></span>
+          <span>Plus: <strong>ship the 9.6M Huge model at &lt;10 MB via int8</strong></span>
+        </div>
+        <div class="lever-body">
+          <p>
+            <strong>LoRA</strong> — load a pretrained checkpoint, freeze base
+            weights, train only small low-rank adapter matrices
+            (<code>A · B</code>) into each linear layer. The Python reference
+            already supports this; see
+            <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/lora_guide.md">
+              <code>docs/lora_guide.md</code></a>.
+            In-browser the loop is the same shape — just smaller gradients
+            and fewer trainable params — so it should be a clean port to the
+            existing WebGPU training stack.
+          </p>
+          <p>
+            <strong>The hook:</strong> load the bundled Shakespeare model,
+            paste your own corpus (recipes, code, lyrics, your own writing),
+            click <em>Fine-tune</em>, watch the model's voice shift in
+            ~2-5 minutes. Same compute budget as full training of a much
+            smaller model, but starting from a base that already knows English.
+          </p>
+          <p>
+            <strong>int8 quantization</strong> — store weights as int8 with
+            per-tensor scale; dequantize-on-read inside the matmul kernel.
+            Cuts a 9.6M-param Huge model from 38 MB (fp32 weights) to 9.6 MB
+            (int8) — finally a shippable file size for the bigger model. The
+            current 110 MB <code>.tinygpt</code> for Huge is locally archived
+            (<code>data/checkpoints/huge-shakespeare-5000-loss1.22.tinygpt</code>)
+            and only because of optimizer state + fp32; this lever bridges the gap.
+          </p>
+        </div>
+      </article>
+
+      <!-- 19: Mac app — biggest single new project -->
+      <article class="lever">
+        <div class="lever-head">
+          <span class="lever-num">19</span>
+          <h2 class="lever-title">Native macOS app (MLX-Swift)</h2>
+          <span class="status planned"><span class="dot"></span> Planned · biggest single new project</span>
+        </div>
+        <div class="lever-meta">
+          <span>Impact: <strong>lift the ceiling from ~10M to billions of params</strong></span>
+          <span>File format: <code>.tinygpt</code> portable both ways</span>
+        </div>
+        <div class="lever-body">
+          <p>
+            A native macOS app — SwiftUI shell, MLX-Swift training loop. Same
+            model architecture, same <code>.tinygpt</code> file format. Train
+            on your Mac, drop the checkpoint into the browser playground
+            anywhere; load a browser-trained model into the Mac app to
+            continue training at much higher throughput.
+          </p>
+          <p>
+            <strong>Why it's the big one:</strong> the browser ceiling is
+            roughly ~10M params before the user-experience falls apart
+            (training-time budget, memory, GPU sharing with the compositor).
+            Apple Silicon native via MLX can comfortably train 100M–1B+ models
+            on a laptop, and the same TinyGPT code paths apply — the math is
+            the same, only the runtime is faster.
+          </p>
+          <p>
+            <strong>The boundary</strong> between what belongs in-browser and
+            what belongs native is in
+            <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/shared_vs_native.md">
+              <code>docs/shared_vs_native.md</code></a>.
+            Tracked here as the highest-impact single piece of work left.
+          </p>
+        </div>
+      </article>
+
       <footer>
         <span>Have a faster idea?</span>
         <a href="https://github.com/sarthakagrawal927/tinygpt/issues/new" target="_blank" rel="noopener">Open an issue ↗</a>
