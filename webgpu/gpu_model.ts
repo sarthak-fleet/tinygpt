@@ -262,6 +262,37 @@ export class GpuModel {
     return buf;
   }
 
+  /**
+   * Inverse of `exportState`. Reads the same flat float32 buffer layout
+   * (4-byte int32 step prefix + per-param triplets [w, m, v]) and uploads
+   * each tensor back to the corresponding GPU buffer. The param order in
+   * this.params matches initWeights(), which matches the on-disk manifest,
+   * so a straight sequential walk is correct.
+   *
+   * Throws if the buffer size doesn't match the model's expected param
+   * footprint — typically means the saved file was for a different config.
+   */
+  importState(state: ArrayBuffer): void {
+    let totalFloats = 0;
+    for (const p of this.params) totalFloats += p.size * 3;
+    const expectedBytes = 4 + totalFloats * 4;
+    if (state.byteLength !== expectedBytes) {
+      throw new Error(
+        `state size mismatch: got ${state.byteLength} bytes, expected ${expectedBytes} ` +
+        `for ${this.params.length} params totaling ${totalFloats} floats. ` +
+        `The saved checkpoint was probably for a different config.`,
+      );
+    }
+    this.stepCount = new Int32Array(state, 0, 1)[0];
+    const f32 = new Float32Array(state, 4);
+    let off = 0;
+    for (const p of this.params) {
+      p.w.upload(new Float32Array(f32.buffer, f32.byteOffset + off * 4, p.size)); off += p.size;
+      p.m.upload(new Float32Array(f32.buffer, f32.byteOffset + off * 4, p.size)); off += p.size;
+      p.v.upload(new Float32Array(f32.buffer, f32.byteOffset + off * 4, p.size)); off += p.size;
+    }
+  }
+
   /** Autoregressive generation from a prompt. temperature <= 0 is greedy.
    *  Optional `onToken` callback fires once per newly-sampled token so the
    *  caller can stream output instead of waiting for the full sequence. */

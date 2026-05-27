@@ -488,9 +488,39 @@ async function doInspect(prompt: Uint8Array, topK: number): Promise<void> {
   post({ type: "error", message: "train a model before inspecting" });
 }
 
-// Rebuild a model from a saved checkpoint (WASM backend only).
+// Rebuild a model from a saved checkpoint. Prefers the WebGPU path when the
+// saved config says backend: "webgpu" AND the host has WebGPU — that gives
+// the loaded model streaming generation + lower TTFT, vs the synchronous
+// per-token WASM path. Falls back to WASM if WebGPU isn't available, so
+// older Safari etc. still works.
 async function doRestore(state: ArrayBuffer, cfg: RunConfig): Promise<void> {
   try {
+    // Try WebGPU first if the saved file was a WebGPU run.
+    if (cfg.backend === "webgpu") {
+      try {
+        const gpuCtx = await createGpuContext();
+        if (!gpuCtx) throw new Error("WebGPU adapter not available");
+        if (model) { model.free(); model = null; }
+        if (gpuModel) gpuModel = null;
+        gpuModel = new GpuModel(gpuCtx, {
+          vocab: 256, ctx: cfg.ctx, layers: cfg.layers, heads: cfg.heads,
+          dModel: cfg.dModel, dMlp: cfg.dMlp, seed: cfg.seed,
+        });
+        gpuModel.importState(state);
+        post({ type: "restored" });
+        post({ type: "status", message: "restored on WebGPU — warming up inference pipelines…" });
+        // Warm up the B=1 inference pipelines so the first Generate click
+        // doesn't pay the 10–60s pipeline-compile cost. Cheap (~one forward).
+        await warmupGenerate(gpuModel, cfg.ctx);
+        post({ type: "status", message: "ready to generate." });
+        return;
+      } catch (gpuErr) {
+        // GPU restore failed (device unavailable, OOM, shape mismatch).
+        // Fall through to WASM so the user at least gets something.
+        post({ type: "status", message: `WebGPU restore failed (${gpuErr instanceof Error ? gpuErr.message : String(gpuErr)}); falling back to WASM` });
+      }
+    }
+    // WASM fallback path.
     if (!backend) backend = await TinyGptBackend.load();
     if (model) { model.free(); model = null; }
     gpuModel = null;
