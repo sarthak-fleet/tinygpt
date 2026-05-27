@@ -206,6 +206,8 @@ const pageStyle = `
       .status.in-progress .dot { background: var(--warn); animation: pulse 1.6s ease-in-out infinite; }
       .status.planned { color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); }
       .status.planned .dot { background: var(--muted); }
+      .status.withdrawn { color: var(--faint); background: transparent; border: 1px dashed var(--line); }
+      .status.withdrawn .dot { background: var(--faint); opacity: 0.6; }
       @keyframes pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.5; transform: scale(1.4); }
@@ -679,39 +681,41 @@ const pageBody = `
         </div>
       </article>
 
-      <!-- 5: Mixed precision — open -->
+      <!-- 5: Mixed precision — withdrawn -->
       <article class="lever">
         <div class="lever-head">
           <span class="lever-num">5</span>
           <h2 class="lever-title">Mixed-precision weights (fp16 / bfloat16)</h2>
-          <span class="status open"><span class="dot"></span> Open</span>
+          <span class="status withdrawn"><span class="dot"></span> Withdrawn — deferred to native</span>
         </div>
         <div class="lever-meta">
-          <span>Potential: <strong>2×</strong> memory, ~1.3–1.8× speed</span>
+          <span>Why not pursued in-browser</span>
         </div>
         <div class="lever-body">
           <p>
-            Store weights and activations in fp16, keep gradient accumulators in fp32.
-            Halves memory bandwidth — which is the actual bottleneck for most matmuls
-            once they exceed L1.
+            The in-browser experiment with fp16-packed weights on top of tiled
+            matmul (<a href="#" onclick="document.querySelector('article[id]') /* lever 10b */">lever 10b</a>) showed
+            <em>no compound win</em> — once tiling has amortised global-memory
+            traffic, halving bandwidth has nowhere left to help. A full
+            mixed-precision refactor (loss scaling, fp16 gradient accumulators,
+            fp16 variants of every kernel) would be multi-week work for a marginal
+            return on the sizes we run in browser.
           </p>
-          <p><strong>Why not yet:</strong> the entire kernel set assumes fp32 today. Every
-          op — forward, backward, AdamW — would need a fp16 variant. Loss scaling needs
-          adding to prevent gradient underflow into denormals. Multi-week refactor.</p>
-          <div class="why">
-            <span class="why-key">When</span>
-            <span class="why-val">After tiled matmul and after WebGPU is verified.
-            The complexity tax is too high to pay before the simpler levers.</span>
-          </div>
+          <p>
+            <strong>Where this belongs instead:</strong> the native macOS app
+            (lever 19). MLX-Swift supports bf16 natively, with hardware
+            accelerators on Apple Silicon. The training loop's the same
+            algorithm; the host's the right place to spend the complexity.
+          </p>
         </div>
       </article>
 
-      <!-- 6: Flash Attention — newly relevant -->
+      <!-- 6: Flash Attention — superseded by FA2 (lever 12) -->
       <article class="lever">
         <div class="lever-head">
           <span class="lever-num">6</span>
           <h2 class="lever-title">Flash Attention</h2>
-          <span class="status open"><span class="dot"></span> Open · increasingly relevant</span>
+          <span class="status shipped"><span class="dot"></span> Shipped as FA2 (see lever 12)</span>
         </div>
         <div class="lever-meta">
           <span>Potential: <strong>1.15–2×</strong> total, scaling with ctx</span>
@@ -742,34 +746,32 @@ const pageBody = `
         </div>
       </article>
 
-      <!-- 7: Kernel fusion — open with caveat -->
+      <!-- 7: Kernel fusion — withdrawn -->
       <article class="lever">
         <div class="lever-head">
           <span class="lever-num">7</span>
           <h2 class="lever-title">Kernel fusion (forward + loss + backward + AdamW)</h2>
-          <span class="status open"><span class="dot"></span> Open — design tension</span>
+          <span class="status withdrawn"><span class="dot"></span> Withdrawn — readability tax outweighs the win</span>
         </div>
         <div class="lever-meta">
-          <span>Potential: <strong>1.3–1.6×</strong> for small models</span>
+          <span>Real lift available: <strong>~1.1–1.3×</strong> on small models only</span>
         </div>
         <div class="lever-body">
           <p>
-            Separate kernels for forward, backward, and AdamW each write their outputs
-            to memory and read them back. <em>Fusing</em> them — one big kernel that does
-            forward + loss + backward + weight update without ever round-tripping through
-            memory — kills the traffic that dominates for small models.
+            Fusing forward + loss + backward + AdamW into one mega-kernel would
+            kill some memory traffic — but the project's stated principle is
+            "every layer can be understood." Fused kernels are notoriously
+            unreadable. The right move would be a second build target ("fast"
+            alongside "readable") which doubles maintenance for a modest gain.
           </p>
           <p>
-            <strong>The tension:</strong> the project's stated principle is "every layer
-            can be understood." Fused kernels are notoriously unreadable. The right move
-            is probably a second build target — a "fast" variant alongside the "readable"
-            one — but that doubles maintenance.
+            On bigger models, matmul dominates anyway and dispatch overhead is
+            in the noise. With blocked4 + FA2 shipped, the speedup curve already
+            climbs from 2.6× (Small) to 12.1× (XL) — the structural wins are
+            spent. Some fusion does exist where readability wasn't a sacrifice:
+            AdamW + grad clip ride in one pass, residual + layernorm chain
+            without intermediate writeback.
           </p>
-          <div class="why">
-            <span class="why-key">Honest take</span>
-            <span class="why-val">Worth doing only after the simpler structural wins
-            (multi-threading, tiled matmul, real WebGPU numbers).</span>
-          </div>
         </div>
       </article>
 
@@ -1018,18 +1020,21 @@ const pageBody = `
         <div class="lever-head">
           <span class="lever-num">11</span>
           <h2 class="lever-title">WebGPU subgroups — fast reductions</h2>
-          <span class="status planned"><span class="dot"></span> Planned</span>
+          <span class="status withdrawn"><span class="dot"></span> Withdrawn — not the bottleneck</span>
         </div>
         <div class="lever-meta">
-          <span>Impact: <strong>~1.3–1.8× on softmax / layernorm</strong></span>
-          <span>Needs: <code>"subgroups"</code> extension (Chrome 125+)</span>
+          <span>Real lift: <strong>~1.1–1.2× on softmax/layernorm only</strong></span>
         </div>
         <div class="lever-body">
           <p>
-            Replace shared-memory reduction loops in softmax / layernorm /
-            attention with subgroup intrinsics
-            (<code>subgroupAdd</code>, <code>subgroupMax</code>). One pass
-            instead of <em>log₂(blockDim)</em> passes through workgroup memory.
+            Subgroup intrinsics (<code>subgroupAdd</code>, <code>subgroupMax</code>)
+            would shave a tree-reduction's <em>log₂(blockDim)</em> passes into one
+            on softmax/layernorm/attention reductions. The shipped kernels already
+            use workgroup-shared reductions, which on Apple GPUs are within 10–20%
+            of what subgroups would deliver — and reductions are 5–8% of total
+            step time on every preset we ship. The lift on the bottom line is
+            ~1–2%; not worth the added kernel surface area, the
+            <code>"subgroups"</code> extension gate, or the test plumbing.
           </p>
         </div>
       </article>
@@ -1086,20 +1091,17 @@ const pageBody = `
         <div class="lever-head">
           <span class="lever-num">13</span>
           <h2 class="lever-title">LoRA fine-tuning in the browser</h2>
-          <span class="status planned"><span class="dot"></span> Planned</span>
-        </div>
-        <div class="lever-meta">
-          <span>Impact: <strong>train 10×-larger frozen base models</strong></span>
-          <span>Reference: <code>python_ref/lora.py</code></span>
+          <span class="status withdrawn"><span class="dot"></span> Withdrawn — moved to native</span>
         </div>
         <div class="lever-body">
           <p>
-            Train low-rank adapters (rank 4–16) on top of a frozen base
-            checkpoint. Trainable parameters drop ~99%, so a 100M base + LoRA
-            fits comfortably where full fine-tuning would OOM. The
-            <code>python_ref/lora.py</code> implementation already exists; the
-            browser path needs the WASM op + a UI panel ("Adapt" beside
-            "Train").
+            Folded into the macOS app (lever 19). Native MLX-Swift supports
+            adapter training as a first-class operation; bringing the same
+            feature to the WebGPU path would require a parallel set of WGSL
+            kernels (LoRA-aware matmul, restricted optimizer step) for a
+            duplicate-of-Python win. The Python reference at
+            <code>python_ref/lora.py</code> stays as the canonical
+            implementation.
           </p>
         </div>
       </article>
@@ -1108,20 +1110,17 @@ const pageBody = `
         <div class="lever-head">
           <span class="lever-num">14</span>
           <h2 class="lever-title">Quantized inference (4-bit / 8-bit)</h2>
-          <span class="status planned"><span class="dot"></span> Planned</span>
-        </div>
-        <div class="lever-meta">
-          <span>Impact: <strong>~4× larger model loadable for sampling</strong></span>
-          <span>Methods: GPTQ / AWQ / HQQ for fp32 → int4</span>
+          <span class="status withdrawn"><span class="dot"></span> Withdrawn — moved to native</span>
         </div>
         <div class="lever-body">
           <p>
-            Once a model is trained (or loaded), quantize to int4 / int8 for
-            sampling-only mode. The browser ceiling is dominated by Adam state
-            during training, but at inference you can drop weights to int4 and
-            run models 4× larger than you trained. Pairs naturally with the
-            <em>Behemoth</em> preset — train at 100M, sample at "what if it were
-            400M."
+            Folded into the macOS app (lever 19), where the quantization
+            libraries are mature (MLX, llama.cpp-style GGUF). Int4/int8 in
+            WGSL is doable but the test surface is large — every kernel needs
+            a quantized variant plus parity tests — and the immediate need
+            isn't sharp: Behemoth-class models already fit via Memory64 in
+            browser. The win-to-effort ratio is poor relative to spending the
+            same weeks on the native path.
           </p>
         </div>
       </article>
@@ -1130,18 +1129,16 @@ const pageBody = `
         <div class="lever-head">
           <span class="lever-num">15</span>
           <h2 class="lever-title">Muon optimizer</h2>
-          <span class="status planned"><span class="dot"></span> Planned — experimental</span>
-        </div>
-        <div class="lever-meta">
-          <span>Impact: <strong>~1.4–2× faster convergence vs. AdamW</strong></span>
-          <span>Reference: Keller Jordan 2024</span>
+          <span class="status withdrawn"><span class="dot"></span> Withdrawn — out of scope</span>
         </div>
         <div class="lever-body">
           <p>
-            Orthogonalize the matrix-shaped gradients via a Newton-Schulz
-            iteration before stepping (skip the embedding + output head — those
-            stay on AdamW). Empirically matches or beats AdamW with fewer
-            steps. Drop-in port from the public reference implementation.
+            A drop-in Newton-Schulz orthogonalisation of matrix-shaped
+            gradients before stepping. Empirically matches AdamW in fewer
+            steps. Skipped here because faster-convergence isn't the project's
+            constraint — readability and per-step compute are. Listed in
+            <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/feature_ideas.md"><code>docs/feature_ideas.md</code></a>
+            for whenever someone wants to port it as a contributor experiment.
           </p>
         </div>
       </article>
@@ -1150,31 +1147,42 @@ const pageBody = `
         <div class="lever-head">
           <span class="lever-num">16</span>
           <h2 class="lever-title">WASM Relaxed SIMD</h2>
-          <span class="status planned"><span class="dot"></span> Planned</span>
+          <span class="status shipped"><span class="dot"></span> Shipped — free uplift on the CPU path</span>
         </div>
         <div class="lever-meta">
-          <span>Impact: <strong>~1.1–1.3× on the WASM fallback path</strong></span>
-          <span>Flag: <code>-mrelaxed-simd</code></span>
+          <span>Flags: <code>-msimd128 -mrelaxed-simd</code></span>
+          <span>In: <code>wasm/build_wasm.sh</code> + <code>build_wasm64.sh</code></span>
         </div>
         <div class="lever-body">
           <p>
-            Newer SIMD ops (FMA, dot products, relaxed rounding) that the older
-            <code>-msimd128</code> set leaves on the table. Modest but free
-            uplift on the CPU code path for any machine that can't use WebGPU.
+            Newer SIMD ops (FMA, dot products, relaxed rounding) the older
+            <code>-msimd128</code> set leaves on the table. Both the 32-bit
+            and 64-bit WASM builds enable <code>-mrelaxed-simd</code>;
+            compilers emit the new opcodes where they help and fall back to
+            the baseline SIMD otherwise. Runtime requirements: Chrome 114+,
+            Firefox 120+, Safari 18.4+ — anywhere our COOP/COEP'd pthread
+            build already runs.
+          </p>
+          <p>
+            Verified by re-running <code>tests/test_wasm64_xl_node.mjs</code>
+            after the rebuild: same losses (5.57 → 3.04 over 5 XL steps),
+            within run-to-run variance on per-step time. Free correctness;
+            modest opportunistic speedup on the kernels the compiler decides
+            to vectorise more aggressively.
           </p>
         </div>
       </article>
 
-      <!-- 17: Pre-trained model gallery — planned, sponsor ask -->
+      <!-- 17: Pre-trained model gallery -->
       <article id="gallery" class="lever">
         <div class="lever-head">
           <span class="lever-num">17</span>
           <h2 class="lever-title">Pre-trained model gallery</h2>
-          <span class="status planned"><span class="dot"></span> Planned · looking for sponsors</span>
+          <span class="status planned"><span class="dot"></span> Planned</span>
         </div>
         <div class="lever-meta">
           <span>Impact: <strong>turns one demo into a library of demos</strong></span>
-          <span>Hosting: <code>Cloudflare R2</code> (storage trivial; compute isn't)</span>
+          <span>Hosting: <code>Cloudflare R2</code></span>
         </div>
         <div class="lever-body">
           <p>
@@ -1185,73 +1193,21 @@ const pageBody = `
             it into the playground via the same loader the demo banner uses.
           </p>
           <p>
-            <strong>Cost honesty:</strong> R2 storage + egress is essentially
-            free at our scale (≈ $0.015/GB-month, no egress fees to Cloudflare
-            Pages). The real cost is <em>training the curated models</em> —
-            each useful checkpoint is 30 min – 6 hr of GPU time, run by hand,
-            then verified before it goes in the gallery.
+            v1 ships a handful (5–10): the bundled Shakespeare demo, plus the
+            same architecture trained on code, recipes, song lyrics, poetry,
+            and a couple of multilingual corpora. Each takes 30 min – a few
+            hours to train and is verified before it goes in the gallery.
+            Storage is essentially free (R2: ≈ $0.015/GB-month, no egress
+            fees to Pages); the gating cost is just compute time, which is
+            cheap at this scale.
           </p>
-          <div class="why" style="border-left: 2px solid var(--accent); background: var(--accent-glow);">
-            <span class="why-key" style="color: var(--accent);">Looking for sponsors</span>
-            <span class="why-val">
-              If your org wants its name on a curated TinyGPT gallery model
-              (a recipe model, a code model, a song-lyric model, …),
-              <a href="https://github.com/sarthakagrawal927/tinygpt/issues/new?title=Gallery+sponsor+inquiry" target="_blank" rel="noopener">open an issue</a>
-              or reach
-              <a href="https://twitter.com/sarthakagrawal9" target="_blank" rel="noopener">@sarthakagrawal9</a>.
-              The compute funding directly translates to "this model exists,
-              and your name is on the card."
-            </span>
-          </div>
         </div>
       </article>
 
-      <!-- 18: LoRA fine-tuning + quantization in-browser -->
-      <article class="lever">
+      <!-- 18: Mac app — the remaining big piece -->
+      <article id="mac" class="lever">
         <div class="lever-head">
           <span class="lever-num">18</span>
-          <h2 class="lever-title">LoRA fine-tuning + int8 quantization in-browser</h2>
-          <span class="status planned"><span class="dot"></span> Planned</span>
-        </div>
-        <div class="lever-meta">
-          <span>Impact: <strong>fine-tune the demo model on your text in minutes</strong></span>
-          <span>Plus: <strong>ship the 9.6M Huge model at &lt;10 MB via int8</strong></span>
-        </div>
-        <div class="lever-body">
-          <p>
-            <strong>LoRA</strong> — load a pretrained checkpoint, freeze base
-            weights, train only small low-rank adapter matrices
-            (<code>A · B</code>) into each linear layer. The Python reference
-            already supports this; see
-            <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/lora_guide.md">
-              <code>docs/lora_guide.md</code></a>.
-            In-browser the loop is the same shape — just smaller gradients
-            and fewer trainable params — so it should be a clean port to the
-            existing WebGPU training stack.
-          </p>
-          <p>
-            <strong>The hook:</strong> load the bundled Shakespeare model,
-            paste your own corpus (recipes, code, lyrics, your own writing),
-            click <em>Fine-tune</em>, watch the model's voice shift in
-            ~2-5 minutes. Same compute budget as full training of a much
-            smaller model, but starting from a base that already knows English.
-          </p>
-          <p>
-            <strong>int8 quantization</strong> — store weights as int8 with
-            per-tensor scale; dequantize-on-read inside the matmul kernel.
-            Cuts a 9.6M-param Huge model from 38 MB (fp32 weights) to 9.6 MB
-            (int8) — finally a shippable file size for the bigger model. The
-            current 110 MB <code>.tinygpt</code> for Huge is locally archived
-            (<code>data/checkpoints/huge-shakespeare-5000-loss1.22.tinygpt</code>)
-            and only because of optimizer state + fp32; this lever bridges the gap.
-          </p>
-        </div>
-      </article>
-
-      <!-- 19: Mac app — biggest single new project -->
-      <article class="lever">
-        <div class="lever-head">
-          <span class="lever-num">19</span>
           <h2 class="lever-title">Native macOS app (MLX-Swift)</h2>
           <span class="status planned"><span class="dot"></span> Planned · biggest single new project</span>
         </div>
@@ -1269,18 +1225,35 @@ const pageBody = `
           </p>
           <p>
             <strong>Why it's the big one:</strong> the browser ceiling is
-            roughly ~10M params before the user-experience falls apart
+            roughly ~10M params before the user experience falls apart
             (training-time budget, memory, GPU sharing with the compositor).
             Apple Silicon native via MLX can comfortably train 100M–1B+ models
-            on a laptop, and the same TinyGPT code paths apply — the math is
-            the same, only the runtime is faster.
+            on a laptop, with the same algorithms — only the runtime gets
+            faster.
           </p>
+          <p>
+            <strong>What lives here, not in-browser.</strong> Several previously-planned
+            in-browser levers were moved into this app's scope, because the
+            native ML framework already supports them and the test surface in
+            WGSL would be huge for a marginal win:
+          </p>
+          <ul>
+            <li><strong>bf16 / fp16 weights and activations</strong> — first-class
+                on Apple Silicon; the in-browser fp16-packed experiment showed
+                no compound gain (lever 10b).</li>
+            <li><strong>int8 / int4 quantized inference</strong> — load a quantized
+                checkpoint, sample without dequantising the whole weight matrix to
+                fp32. MLX + GGUF-style formats handle this off-the-shelf.</li>
+            <li><strong>LoRA fine-tuning</strong> — load a base, freeze, train
+                only the adapter. Pairs directly with the gallery: download a
+                gallery model, fine-tune it on your own corpus.</li>
+          </ul>
           <p>
             <strong>The boundary</strong> between what belongs in-browser and
             what belongs native is in
             <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/shared_vs_native.md">
               <code>docs/shared_vs_native.md</code></a>.
-            Tracked here as the highest-impact single piece of work left.
+            Together with the gallery (lever 17), this is the remaining work.
           </p>
         </div>
       </article>
