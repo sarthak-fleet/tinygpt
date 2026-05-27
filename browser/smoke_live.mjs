@@ -1,101 +1,153 @@
-// smoke_live.mjs — verify the live tinygpt.sarthakagrawal.dev deploy in a
-// real Chromium with WebGPU enabled. Sidesteps the local DNS cache by
-// using a Playwright hostResolver fallback that points the domain at the
-// resolved Cloudflare IP.
+// smoke_live.mjs — pre-launch walkthrough of the deployed playground.
+// Verifies the full user flow end-to-end against https://tinygpt.sarthakagrawal.dev
+// (or whatever SMOKE_URL points at). Reports each step pass/fail with timing.
+//
+// Run:  node browser/smoke_live.mjs
+//       SMOKE_URL=http://localhost:5173 node browser/smoke_live.mjs   (against preview)
+
 import { chromium } from "playwright";
 import dns from "node:dns/promises";
 
-const HOST = "tinygpt.sarthakagrawal.dev";
+const SITE = process.env.SMOKE_URL || "https://tinygpt.sarthakagrawal.dev";
+const isLive = SITE.startsWith("https://");
 
-// Resolve via public DNS so we're not at the mercy of the local cache.
-const ipResult = await dns.resolve4(HOST).catch(async () => {
-  // Fallback: ask Cloudflare directly over HTTPS.
-  const r = await fetch(`https://cloudflare-dns.com/dns-query?name=${HOST}&type=A`, {
-    headers: { accept: "application/dns-json" },
-  });
-  const j = await r.json();
-  return j.Answer.filter((a) => a.type === 1).map((a) => a.data);
-});
-const ip = ipResult[0];
-console.log(`Resolved ${HOST} → ${ip}`);
+const results = [];
+const check = (name, ok, detail = "") => {
+  results.push({ name, ok, detail });
+  const mark = ok ? "✅" : "❌";
+  console.log(`${mark} ${name}${detail ? "  — " + detail : ""}`);
+};
 
-const browser = await chromium.launch({
-  headless: false,
-  args: [
-    "--enable-unsafe-webgpu",
-    "--enable-features=Vulkan",
-    "--use-vulkan",
-    `--host-resolver-rules=MAP ${HOST} ${ip}`,
-  ],
-});
-const ctx = await browser.newContext();
-const page = await ctx.newPage();
-const consoleErrors = [];
-page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message}`));
-page.on("console", (m) => {
-  if (m.type() === "error") consoleErrors.push(`console.error: ${m.text()}`);
-});
-
-console.log(`Loading https://${HOST}/ ...`);
-await page.goto(`https://${HOST}/`, { waitUntil: "networkidle" });
-await page.locator("#welcomeSkip").click({ timeout: 2000 }).catch(() => {});
-await page.waitForTimeout(800);
-
-// 1. Memory64 pill
-const mem64 = await page.evaluate(() => {
-  const el = document.querySelector('[data-explain="memory64"]');
-  return el ? { text: el.textContent.trim(), on: el.classList.contains("on") } : null;
-});
-console.log(`Memory64 pill: ${JSON.stringify(mem64)}`);
-
-// 2. WebGPU pill
-const webgpu = await page.evaluate(() => {
-  const el = document.getElementById("webgpuPill");
-  return el ? { text: el.textContent.trim(), on: el.classList.contains("on") } : null;
-});
-console.log(`WebGPU pill:   ${JSON.stringify(webgpu)}`);
-
-// 3. Behemoth preset present?
-const hasBehemoth = await page.evaluate(() => {
-  const opts = [...document.querySelectorAll("#sizePreset option")].map((o) => o.textContent.trim());
-  return { count: opts.length, hasBehemoth: opts.some((o) => /behemoth/i.test(o)) };
-});
-console.log(`Preset list:   ${JSON.stringify(hasBehemoth)}`);
-
-// 4. Demo load → sample button enables → introspection panel appears
-await page.locator("#loadDemoBtn").click({ timeout: 5000 }).catch(() => {});
-await page.waitForFunction(
-  () => { const el = document.getElementById("sample"); return el && !el.disabled; },
-  null, { timeout: 60_000 },
-).catch((e) => console.log(`  sample never enabled: ${e.message}`));
-
-const sampleReady = await page.evaluate(() => {
-  const el = document.getElementById("sample");
-  return el ? !el.disabled : null;
-});
-console.log(`Sample btn:    ${sampleReady ? "enabled (demo loaded ok)" : "still disabled"}`);
-
-// Generate once + verify the introspection panel shows up
-await page.locator("#sample").click().catch(() => {});
-await page.waitForTimeout(2500);
-const thinkCardVisible = await page.evaluate(() => {
-  const el = document.querySelector(".think-card");
-  if (!el) return null;
-  return { exists: true, hidden: el.hidden, hasContent: el.textContent.includes("Watch") };
-});
-console.log(`Think card:    ${JSON.stringify(thinkCardVisible)}`);
-
-// 5. The other four routes load?
-for (const route of ["/roadmap", "/devlog", "/speedup", "/webgpu-test"]) {
-  const resp = await page.goto(`https://${HOST}${route}`, { waitUntil: "networkidle" });
-  console.log(`${route.padEnd(14)} ${resp.status()}  ${resp.headers()["content-type"]?.split(";")[0]}`);
+// Sidestep local DNS cache when going against the live host.
+const launchArgs = [
+  "--enable-unsafe-webgpu",
+  "--enable-features=Vulkan",
+  "--use-vulkan",
+];
+if (isLive) {
+  const host = new URL(SITE).host;
+  try {
+    const ips = await dns.resolve4(host);
+    launchArgs.push(`--host-resolver-rules=MAP ${host} ${ips[0]}`);
+    console.log(`Resolved ${host} → ${ips[0]}`);
+  } catch { /* fall back to whatever the OS gives us */ }
 }
 
-console.log("\n=== Console errors ===");
-if (consoleErrors.length) {
-  consoleErrors.forEach((e) => console.log("  " + e));
-} else {
-  console.log("  none");
+const browser = await chromium.launch({ headless: false, args: launchArgs });
+const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 }, acceptDownloads: true });
+const page = await ctx.newPage();
+page.on("dialog", (d) => d.accept().catch(() => {}));
+const pageErrors = [];
+page.on("pageerror", (e) => pageErrors.push(e.message));
+const consoleErrors = [];
+page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
+
+console.log(`\n>> SITE = ${SITE}\n`);
+
+// 1. Site loads
+try {
+  const resp = await page.goto(SITE, { waitUntil: "networkidle", timeout: 30_000 });
+  check("site responds 200", resp?.status() === 200, `HTTP ${resp?.status()}`);
+} catch (e) {
+  check("site responds", false, e.message);
+  await browser.close();
+  process.exit(1);
+}
+await page.locator("#welcomeSkip").click({ timeout: 3000 }).catch(() => {});
+
+// 2. COOP/COEP headers — needed for SharedArrayBuffer
+try {
+  const h = await page.evaluate(async () => {
+    const r = await fetch(location.href, { method: "HEAD" });
+    return { coop: r.headers.get("cross-origin-opener-policy"), coep: r.headers.get("cross-origin-embedder-policy") };
+  });
+  check("COOP header", h.coop === "same-origin", `value=${h.coop}`);
+  check("COEP header", h.coep === "require-corp", `value=${h.coep}`);
+} catch (e) { check("COOP/COEP", false, e.message); }
+
+// 3. Banner copy
+const banner = await page.locator("#demoBanner").isVisible().catch(() => false);
+check("demo banner visible", banner);
+if (banner) {
+  const text = (await page.locator("#demoBanner").textContent()) ?? "";
+  check("banner has new 'Two ways' copy", text.includes("Two ways"));
+  check("banner has 'Load pretrained' label", text.includes("Load pretrained"));
+}
+
+// 4. Default corpus
+await page.waitForTimeout(2500);
+const corpusLen = await page.evaluate(() => document.getElementById("corpus")?.value.length ?? 0);
+check("Shakespeare corpus auto-loaded", corpusLen > 1_000_000, `${corpusLen} bytes`);
+
+// 5. demo.tinygpt — is the new Medium model under 25 MB?
+const demoMeta = await page.evaluate(async () => {
+  const r = await fetch("/demo.tinygpt", { method: "HEAD" });
+  return { ok: r.ok, size: Number(r.headers.get("content-length") || 0) };
+});
+check("/demo.tinygpt reachable", demoMeta.ok);
+check("demo size under CF cap", demoMeta.size > 0 && demoMeta.size < 25 * 1024 * 1024,
+  `${(demoMeta.size / 1024 / 1024).toFixed(1)} MB`);
+
+// 6. Load pretrained
+const tLoad = Date.now();
+await page.locator("#loadDemoBtn").click({ force: true });
+await page.locator("#demoBanner").waitFor({ state: "hidden", timeout: 90_000 }).catch(() => {});
+check("pretrained model loads", Date.now() - tLoad < 90_000, `${((Date.now() - tLoad) / 1000).toFixed(1)}s`);
+
+// 7. Navigate to Watch screen + Generate
+await page.locator(".screen-tab[data-screen='watch']").click({ force: true }).catch(() => {});
+await page.waitForTimeout(400);
+const tGen = Date.now();
+await page.evaluate(() => document.getElementById("sample")?.click());
+
+let firstByteMs = 0;
+await page.waitForFunction(
+  () => {
+    const out = document.getElementById("output");
+    return out && !out.classList.contains("empty") && out.textContent.length > 10;
+  },
+  null, { timeout: 60_000 },
+).then(() => { firstByteMs = Date.now() - tGen; }).catch(() => {});
+
+await page.waitForTimeout(10_000);
+const output = await page.evaluate(() => document.getElementById("output")?.textContent ?? "");
+check("Generate produces text", output.length > 40, `${output.length} chars, first byte ${firstByteMs}ms`);
+console.log(`\n--- generated sample (live) ---\n${output.slice(0, 300)}\n--- /sample ---\n`);
+
+// 8. tok/s stats
+const statsText = await page.evaluate(() => document.getElementById("sampleStats")?.textContent ?? "");
+check("tok/s stats rendered", statsText.includes("tok/s"), statsText.replace(/\s+/g, " ").trim().slice(0, 80));
+
+// 9. /docs index
+const docsResp = await page.goto(`${SITE}/docs`, { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => null);
+check("/docs index loads", docsResp?.status() === 200, `HTTP ${docsResp?.status()}`);
+const docsCards = await page.locator(".doc-card").count().catch(() => 0);
+check("/docs lists 6 cards", docsCards === 6, `found ${docsCards}`);
+
+// 10. each doc page
+for (const slug of ["lessons", "qa_log", "decision_log", "study_guide", "annotated_transcript", "session_retrospective"]) {
+  const r = await page.goto(`${SITE}/docs/${slug}`, { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
+  const h1 = r?.status() === 200 ? await page.locator(".prose h1").isVisible().catch(() => false) : false;
+  check(`/docs/${slug}`, h1, `HTTP ${r?.status()}`);
+}
+
+// 11. other routes
+for (const path of ["/speedup", "/devlog", "/roadmap"]) {
+  const r = await page.goto(`${SITE}${path}`, { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
+  check(path, r?.status() === 200, `HTTP ${r?.status()}`);
+}
+
+// 12. Console errors
+check("no page errors", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | ") || "");
+check("no console errors", consoleErrors.length === 0, consoleErrors.slice(0, 3).join(" | ") || "");
+
+const passed = results.filter((r) => r.ok).length;
+console.log(`\n${"=".repeat(50)}`);
+console.log(`${passed} / ${results.length} checks passed`);
+if (passed < results.length) {
+  console.log(`\nFailed:`);
+  for (const r of results.filter((r) => !r.ok)) console.log(`  ❌ ${r.name}  — ${r.detail}`);
 }
 
 await browser.close();
+process.exit(passed === results.length ? 0 : 1);

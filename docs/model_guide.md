@@ -44,7 +44,10 @@ token. This avoids all BPE / tokenizer complexity.
 }
 ```
 
-Expected size: roughly **0.8M parameters**. Intentionally small.
+Expected size of the reference config above: roughly **0.8M parameters**.
+Intentionally small. The browser playground exposes a preset table from
+360k (Small) to ~470M (Behemoth via Memory64), backed by the same
+architecture.
 
 ---
 
@@ -219,7 +222,7 @@ backward → optimizer step → post progress to UI. See `browser_notes.md`.
 ### Step 1 — Python / PyTorch reference (do this first)
 
 Deliverables: `model.py`, `dataset.py`, `train.py`, `sample.py`.
-Goal: train the 0.8M TinyGPT on 100 KB of text; loss decreases; sampling works;
+Goal: train the reference 0.8M-param config on 100 KB of text; loss decreases; sampling works;
 checkpoint reloads. Use Karpathy's nanoGPT as a structural reference — not
 something to copy blindly.
 

@@ -35,10 +35,13 @@ in one sitting — the parts are self-contained.
 
 ## 0. Orientation — the repo in 10 minutes
 
-**What TinyGPT is.** A ~0.8M-parameter GPT — the same architecture as ChatGPT,
-about 200,000× smaller. It is intentionally tiny so that every part is readable
-and every part is *tested*. It will never say anything clever; that is not the
-point. The point is that you can understand a complete one.
+**What TinyGPT is.** A GPT-2-shaped transformer the user can size from ~360k
+parameters (Small) up to ~470M (Behemoth, Memory64). The same architecture as
+ChatGPT, ten-to-five-hundred-thousand× smaller depending on preset. It is
+intentionally readable — every part has a *test*. It will never say anything
+clever at the smallest sizes; the point is that you can understand a complete
+one. The bundled demo (Medium, ~840k params) produces character-aware
+pseudo-Shakespeare after about four minutes of in-browser training.
 
 **The guiding rule of the codebase:** never trust a component until a test pins
 it down. Every layer has a check that fails loudly if it is wrong — which is

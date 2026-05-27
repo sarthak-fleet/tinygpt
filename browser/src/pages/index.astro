@@ -2480,8 +2480,10 @@ const pageBody = `
         <div class="demo-banner-body">
           <strong>Two ways to see this work:</strong>
           <span>
-            <em>Skip ahead</em> — load a Shakespeare model we already trained, and hit <kbd>Generate</kbd>.
-            Or <em>train your own from scratch</em> in your browser (~15 min on a Mac) using the controls below.
+            <em>Skip ahead</em> — load a tiny 840k-param model trained on Shakespeare and hit <kbd>Generate</kbd>.
+            It picks up the <em>rhythm</em> — character labels, verse line breaks, the cadence — but it's
+            8.4× smaller than nanoGPT-Shakespeare, so it's pseudo-English, not real prose.
+            Or <em>train your own from scratch</em> in your browser (~4–15 min depending on preset) using the controls below.
           </span>
         </div>
         <button id="loadDemoBtn" class="primary-btn demo-load-btn" type="button">

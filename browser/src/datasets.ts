@@ -188,16 +188,6 @@ export const HF_CATALOG: HfDataset[] = [
     blurb: "recipe instructions — imperative voice, numbered steps",
   },
   {
-    id: "pubmed-abstracts",
-    label: "PubMed abstracts",
-    dataset: "armanc/scientific_papers",
-    config: "pubmed",
-    split: "train",
-    textColumn: "abstract",
-    license: "Apache-2.0",
-    blurb: "biomedical abstracts — formal, hedged scientific register",
-  },
-  {
     id: "poetry",
     label: "English poetry",
     dataset: "merve/poetry",
