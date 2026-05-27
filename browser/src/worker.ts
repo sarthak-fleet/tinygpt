@@ -214,11 +214,31 @@ async function runWebGpu(text: string, cfg: RunConfig): Promise<void> {
   if (gpuModel) {
     const state = await gpuModel.exportState();
     post({ type: "checkpoint", state }, [state]);
+    // Warm up the B=1 inference pipelines while the user is still reading the
+    // "training complete" message — otherwise the first Generate click pays
+    // a 10–60s WebGPU pipeline-compile cost (training used B=8; inference
+    // bind-group layouts differ). One small forward triggers compilation of
+    // every kernel against the inference shape; subsequent generations are
+    // immediate.
+    await warmupGenerate(gpuModel, cfg.ctx);
   }
   lastCfg = cfg;
   lastTokens = tokens;
   lastStep = step;
   post({ type: "done", reason: stopped ? "stopped" : "finished" });
+}
+
+async function warmupGenerate(g: GpuModel, ctx: number): Promise<void> {
+  post({ type: "status", message: "warming up inference pipelines…" });
+  const t0 = performance.now();
+  // 32 tokens is a reasonable middle-ground prompt length. One forward at
+  // T=32 compiles every inference kernel against bind-group layouts that
+  // also cover smaller and bigger Ts (the kernels are shape-uniform; T
+  // flows through as a uniform, not a layout parameter).
+  const T = Math.min(32, ctx);
+  const prompt = Array.from({ length: T }, (_, i) => 10 + (i % 90));
+  await g.generate(prompt, 1, 0, 0, 0);
+  post({ type: "status", message: `inference warmed up in ${((performance.now() - t0) / 1000).toFixed(1)}s — ready to generate.` });
 }
 
 /**
@@ -349,6 +369,7 @@ async function continueWebgpu(extraSteps: number, startStep: number, newTotal: n
   if (gpuModel) {
     const state = await gpuModel.exportState();
     post({ type: "checkpoint", state }, [state]);
+    await warmupGenerate(gpuModel, cfg.ctx);
   }
   lastStep = step;
   lastCfg = { ...cfg, maxSteps: newTotal };
