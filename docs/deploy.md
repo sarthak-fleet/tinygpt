@@ -93,7 +93,7 @@ not in that list is silently dropped from the production build):
   chart. Each measured bar is reproducible from the bench button.
 - `/devlog` — long-form notes from the AI-pairing session that produced
   the kernel work, including the negative results.
-- `/speedup` — punchy "9.7× before/after" chart, social-shareable.
+- `/speedup` — the speedup-curve chart (2.6× → 12.1× across Small → XL), social-shareable.
 - `/webgpu-test` — the live kernel-parity diagnostic (30 GPU kernels
   checked against a reference, plus the GPU overfit gate). Useful as a
   "see it self-verify" link from the case study; keep it shipped.

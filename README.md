@@ -1,14 +1,16 @@
 # TinyGPT
 
 A GPT-2-shaped transformer, written from scratch and trained **in your browser
-tab** — **9.7× faster** than the WebAssembly baseline thanks to hand-written
-WebGPU kernels, parity-tested to within 1.1% loss drift.
+tab** — **2.6× → 12.1× faster** than the multi-threaded WebAssembly baseline
+thanks to hand-written WebGPU kernels. The speedup is a curve, not a single
+number: GPU work amortizes better as `d_model` grows. Parity-tested to within
+2.5% loss drift across the curve.
 
 Python reference, hand-written C++/WASM, hand-written WGSL — the same model at
 three levels, with every gradient pinned down by a test.
 
 **[Live playground →](https://tinygpt.sarthakagrawal.dev)**
-· [9.7× chart](browser/speedup.html)
+· [Speedup chart](browser/speedup.html)
 · [Devlog](browser/devlog.html)
 · [Roadmap](browser/roadmap.html)
 
@@ -31,10 +33,14 @@ of what's in [`browser/devlog.html`](browser/devlog.html) is that second half.
 All on the same Apple M-series laptop, same model, same seed, same data.
 Reproducible from the playground's bench button or `tests/test_webgpu_train.mjs`.
 
-- **9.7× end-to-end speedup** — WASM SIMD takes 6.8 s/step, WebGPU with the
-  blocked-4×4 matmul kernel takes 0.7 s/step. Loss drift between the two
-  backends after 50 steps: 1.1% (pure float-reorder noise from different
-  GPU accumulation order).
+- **End-to-end speedup curve, WebGPU vs multi-thread WASM SIMD** — Small
+  (d=96) 2.6×, Medium (d=128) 6.8×, Large (d=192) 9.3×, XL (d=256) 12.1×.
+  The curve trends upward because the blocked-4×4 matmul kernel's win grows
+  with matmul size — the bigger the model, the more the GPU pulls away.
+  Mega/Behemoth aren't on this curve yet: a Memory64 ABI bug at the JS↔WASM
+  bridge currently blocks an in-browser end-to-end run (see "Known issues").
+  Loss drift across the curve: 1.1%–2.5% after 50 steps — float-reorder
+  noise from different GPU accumulation order.
 - **5.18× kernel speedup at 2048³ matmul** — the size that dominates the
   Mega/Behemoth presets. Naive WebGPU matmul: 47.24 ms. Workgroup-tiled:
   17.23 ms. Tiled + 4×4 register blocking: 9.12 ms.
@@ -120,6 +126,27 @@ it's the part most blog posts skip.
 The first two are kept in the repo as documented negative results.
 The vec4 fix is shipped.
 
+## Lessons from this build
+
+Three discoveries worth more than the kernels themselves. The long-form is in
+[`docs/lessons.md`](docs/lessons.md).
+
+- **The LR-default bug.** Browser default learning rate was `3e-3` for months;
+  the Python reference uses `3e-4`. Ten times too hot. Loss plateaued at ~2.45
+  on real corpora and looked like a modelling ceiling, not a config bug. Fixed
+  in `browser/src/types.ts:35` and `browser/src/pages/index.astro:2621`.
+  Lesson: parity-check the defaults the same way you parity-check the
+  gradients.
+- **The Memory64 ABI was untested.** `tests/bench_wasm.mjs` loads the 32-bit
+  module, so the 64-bit pthread+Memory64 build had never been exercised in
+  Node. The browser path was calling into a broken JS↔WASM bridge —
+  `_malloc` returns Number but cwrap pointer args expect BigInt. Reproduced
+  by `tests/test_wasm64_xl_node.mjs`. Tracked as task #66.
+- **The speedup is a curve, not a number.** "9.7× end-to-end" was true for
+  one preset on one day. The honest framing is the scaling curve above —
+  2.6× → 12.1× as `d_model` climbs from 96 to 256. Don't quote a flat ratio
+  as the project's identity number.
+
 ## Tech used
 
 - [PyTorch](https://pytorch.org/) — the reference path
@@ -130,11 +157,14 @@ The vec4 fix is shipped.
 
 ## Try it
 
-Open **[tinygpt.sarthakagrawal.dev](https://tinygpt.sarthakagrawal.dev)** and
-click Start. It detects your machine, suggests a model size, shows a live
-training-time estimate, and saves checkpoints to OPFS so a run survives a
-refresh. The WebGPU backend kicks in automatically on Chrome/Edge 113+ and
-Safari 18+.
+Open **[tinygpt.sarthakagrawal.dev](https://tinygpt.sarthakagrawal.dev)**.
+Two paths: *Load pretrained model* serves a Shakespeare-trained checkpoint
+and lets you generate immediately. *Train your own from scratch* runs in
+~15 minutes on the larger presets and converges to readable pseudo-Shakespeare
+on the bundled 1.1 MB TinyShakespeare corpus. The playground detects your
+machine, suggests a model size, shows a live training-time estimate, and
+saves checkpoints to OPFS so a run survives a refresh. WebGPU kicks in
+automatically on Chrome/Edge 113+ and Safari 18+.
 
 ## What's next
 
@@ -190,6 +220,7 @@ builds and tests them with a normal compiler. Full deploy notes:
 - [`docs/status.md`](docs/status.md) — where the project stands; a review map
 - [`docs/learn.md`](docs/learn.md) — guided learning path through the repo
 - [`docs/performance.md`](docs/performance.md) — the SIMD and WebGPU performance work
+- [`docs/lessons.md`](docs/lessons.md) — the bugs and surprises worth more than the kernels
 - [`docs/model_guide.md`](docs/model_guide.md) — the model, from scratch
 - [`docs/lora_guide.md`](docs/lora_guide.md) — LoRA fine-tuning
 - [`docs/online_softmax_in_attention.md`](docs/online_softmax_in_attention.md) — why and how, ties to the `attn_fused_sv` kernel

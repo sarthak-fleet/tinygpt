@@ -691,14 +691,14 @@ if (copyBtn) {
 // --- reset ---------------------------------------------------------------
 // Reset config + corpus + chart + trained model. Asks for confirmation if
 // there's something to lose (existing trained state or a non-default corpus).
-const RESET_CORPUS = `A small model learns one thing at a time. First it learns that letters follow letters. After a space, another word begins. After a period, a capital letter often comes next.
-Then it learns short words. The word "the" appears again and again, and so do "and", "of", "to", and "a". A model that predicts the next byte quickly learns to expect these common words, because guessing them lowers the loss on almost every line.
-Training is slow at the start and fast in the middle. At the start the model knows nothing, so its loss sits near the value of a uniform guess. In the middle the loss falls quickly as the model picks up the easy patterns. Near the end it falls slowly, because what remains is hard.
-The goal here is understanding, not a clever model. If you build it yourself, byte by byte and layer by layer, you will understand how every larger model works.`;
+// The default corpus is the bundled Shakespeare file (~1.1 MB); it is fetched
+// lazily by setupDefaultCorpus() at init time and cached in defaultCorpus.
+let defaultCorpus = "";
+function getResetCorpus(): string { return defaultCorpus; }
 
 byId<HTMLButtonElement>("reset").addEventListener("click", () => {
   const hasModel = latestState !== null;
-  const corpusChanged = els.corpus.value !== RESET_CORPUS;
+  const corpusChanged = els.corpus.value !== getResetCorpus();
   if (hasModel || corpusChanged) {
     if (!window.confirm("Reset everything? Your trained model, corpus changes, and config will be cleared.")) {
       return;
@@ -710,7 +710,7 @@ byId<HTMLButtonElement>("reset").addEventListener("click", () => {
   els.sizePreset.dispatchEvent(new Event("change"));
 
   // Reset corpus.
-  els.corpus.value = RESET_CORPUS;
+  els.corpus.value = getResetCorpus();
 
   // Reset tabs.
   switchTab("curated");
@@ -2377,6 +2377,7 @@ void init().then(() => {
   setupStickyStats();
   setupKeyboardShortcuts();
   setupDemoBanner();
+  setupDefaultCorpus();
   setupScreens();
   // Mark landing animation as done after first paint — subsequent navigations
   // skip the brand-draw animation (it's a one-time wow).
@@ -2499,6 +2500,26 @@ function setupScreens(): void {
 
   // Expose enableWatch globally so other code paths can call it.
   (window as unknown as { __tgEnableWatch?: () => void }).__tgEnableWatch = enableWatch;
+}
+
+// --- default corpus — fetch Shakespeare on init --------------------------
+// The textarea is empty in the HTML; on first load we populate it with the
+// bundled Shakespeare (~1.1 MB) so that "train your own from scratch" has
+// real data ready without any user input. If the user has already typed,
+// pasted, or restored a corpus (loadState ran first), leave that alone.
+async function setupDefaultCorpus(): Promise<void> {
+  try {
+    const resp = await fetch("/shakespeare.txt");
+    if (!resp.ok) return;
+    const text = await resp.text();
+    defaultCorpus = text;
+    // Only auto-fill the textarea if the user hasn't already supplied content
+    // (typed, pasted, restored from state, applied from URL).
+    if (els.corpus.value.trim().length === 0) {
+      els.corpus.value = text;
+      els.corpus.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  } catch { /* network/parse failed — leave textarea empty so the user can paste */ }
 }
 
 // --- demo banner — "Try a trained model" CTA -----------------------------

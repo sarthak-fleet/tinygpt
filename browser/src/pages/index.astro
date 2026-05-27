@@ -7,12 +7,12 @@ import Default from "../layouts/Default.astro";
 
 const layoutProps = {
   title: "TinyGPT — train a real transformer in your browser tab",
-  description: "Train a real transformer from scratch in your browser tab — 9.7× faster than naive WASM thanks to hand-written WebGPU kernels. 0.8M to 473M params (Memory64), hand-derived backward pass, parity-tested.",
+  description: "Train a real GPT-2 from scratch in your browser tab — 2.6× to 12.1× faster than the multi-threaded WebAssembly baseline thanks to hand-written WebGPU kernels. Pretrained Shakespeare model included, hand-derived backward pass, parity-tested across the preset curve.",
   ogTitle: "TinyGPT — train a real transformer in your browser tab",
-  ogDescription: "9.7× faster than naive WebAssembly. Hand-written WebGPU kernels, parity-tested to within 1.1% loss drift. 0.8M to 473M params with Memory64. No server, no install.",
+  ogDescription: "2.6× → 12.1× faster than multi-threaded WebAssembly — the speedup grows with model size. Hand-written WebGPU kernels, parity-tested to within 2.5% loss drift. No server, no install.",
   ogUrl: "https://tinygpt.sarthakagrawal.dev",
-  twitterTitle: "TinyGPT — 9.7× faster transformer training in a browser tab",
-  twitterDescription: "GPT-2 from scratch. Python reference + WASM + WebGPU. 9.7× speedup, 1.1% loss drift, 473M-param ceiling via Memory64. Every kernel hand-written and parity-tested.",
+  twitterTitle: "TinyGPT — 12× faster transformer training in a browser tab",
+  twitterDescription: "GPT-2 from scratch. Python reference + WASM + WebGPU. Speedup curve 2.6× → 12.1× across Small → XL. Pretrained Shakespeare model. Every kernel hand-written and parity-tested.",
   themeColor: "#08090a",
 };
 
@@ -204,6 +204,11 @@ const pageStyle = `
         display: block;
         color: var(--fg); font-weight: 500;
         margin-bottom: 2px;
+      }
+      .demo-banner-body em {
+        color: var(--accent);
+        font-style: normal;
+        font-weight: 500;
       }
       .demo-load-btn {
         padding: 10px 18px;
@@ -2409,11 +2414,14 @@ const pageBody = `
 
       <div id="demoBanner" class="demo-banner" hidden>
         <div class="demo-banner-body">
-          <strong>Want to skip the wait?</strong>
-          <span>Load a pre-trained Shakespeare model and Generate immediately. Training your own is below.</span>
+          <strong>Two ways to see this work:</strong>
+          <span>
+            <em>Skip ahead</em> — load a Shakespeare model we already trained, and hit <kbd>Generate</kbd>.
+            Or <em>train your own from scratch</em> in your browser (~15 min on a Mac) using the controls below.
+          </span>
         </div>
         <button id="loadDemoBtn" class="primary-btn demo-load-btn" type="button">
-          <span aria-hidden="true">▶</span> Try a trained model
+          <span aria-hidden="true">▶</span> Load pretrained model
         </button>
       </div>
 
@@ -2509,10 +2517,7 @@ const pageBody = `
             <button id="hfTokenSave" class="ghost-btn" type="button">Save &amp; retry</button>
             <button id="hfTokenClear" class="ghost-btn" type="button">Clear</button>
           </div>
-          <textarea id="corpus">A small model learns one thing at a time. First it learns that letters follow letters. After a space, another word begins. After a period, a capital letter often comes next.
-Then it learns short words. The word "the" appears again and again, and so do "and", "of", "to", and "a". A model that predicts the next byte quickly learns to expect these common words, because guessing them lowers the loss on almost every line.
-Training is slow at the start and fast in the middle. At the start the model knows nothing, so its loss sits near the value of a uniform guess. In the middle the loss falls quickly as the model picks up the easy patterns. Near the end it falls slowly, because what remains is hard.
-The goal here is understanding, not a clever model. If you build it yourself, byte by byte and layer by layer, you will understand how every larger model works.</textarea>
+          <textarea id="corpus" placeholder="loading Shakespeare (1.1 MB)…  or paste your own UTF-8 text here"></textarea>
 
           <div class="field" style="margin-top: 14px">
             <label for="sizePreset">
@@ -2613,7 +2618,7 @@ The goal here is understanding, not a clever model. If you build it yourself, by
                   <span class="label-jargon">learning_rate</span>
                   <button class="info" data-explain="lr">?</button>
                 </label>
-                <input id="lr" type="number" value="0.003" min="0.0001" max="0.02" step="0.0001" />
+                <input id="lr" type="number" value="0.0003" min="0.0001" max="0.02" step="0.0001" />
               </div>
             </div>
           </details>
@@ -2973,11 +2978,11 @@ python python_ref/sample.py --checkpoint checkpoints/run --prompt "Once "</code>
 
       <footer class="notes">
         <div class="footer-meta">
-          <span>~0.8M params · byte-level · no autograd anywhere</span>
+          <span>byte-level transformer · no autograd anywhere · 360k–470M param range</span>
           <span>·</span>
           <a href="https://github.com/sarthakagrawal927/tinygpt">GitHub ↗</a>
           <span>·</span>
-          <a href="/speedup">9.7× chart ↗</a>
+          <a href="/speedup">Speedup curve ↗</a>
           <span>·</span>
           <a href="/roadmap">Performance journey ↗</a>
           <span>·</span>
@@ -3021,9 +3026,10 @@ python python_ref/sample.py --checkpoint checkpoints/run --prompt "Once "</code>
       <h2>Welcome to TinyGPT</h2>
       <p>
         A complete transformer that trains from scratch — right here, in this tab,
-        with no server. The model is ~0.8M parameters, byte-level. Every layer was
-        written by hand. The first time it's running, it helps to have someone
-        walk you through. Want a 90-second tour?
+        with no server. Load the pretrained Shakespeare model to see it work in
+        one click, or train your own from scratch (a few minutes on the small
+        preset, ~15 minutes on the larger ones). Every layer was written by hand.
+        Want a 90-second tour first?
       </p>
       <div class="welcome-actions">
         <button class="secondary" id="welcomeSkip">Just explore</button>

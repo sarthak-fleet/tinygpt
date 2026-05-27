@@ -40,7 +40,7 @@ const STEPS: TourStep[] = [
   {
     target: "#corpus",
     title: "Step 2 · The training corpus",
-    body: "This is the only thing the model will ever see. Paste your own text, or pick a small Hugging Face dataset from the dropdown above. With ~0.8M params, kilobytes of text is plenty.",
+    body: "This is the only thing the model will ever see. The default is full TinyShakespeare (~1.1 MB) — enough that a properly sized model produces readable pseudo-Shakespeare in about 15 minutes. Paste your own text, upload a .txt, or pull a Hugging Face dataset from the tabs above.",
     placement: "right",
   },
   {
@@ -59,7 +59,7 @@ const STEPS: TourStep[] = [
   {
     target: "#chart",
     title: "Step 5 · Watch the loss curve",
-    body: "Loss = how surprised the model is on average. It starts near 5.55 (random guess over 256 bytes). Under ~2 means real structure has been learned. Below 1 is genuine memorisation — and on a corpus this small, that's the regime you'll hit.",
+    body: "Loss = how surprised the model is on average. It starts near 5.55 (random guess over 256 bytes). Under ~2 means real structure has been learned and the model is forming words. Around 1.5 the output starts reading like the source. If your corpus is small relative to the model, you'll see it plummet below 1 — that's memorisation, not learning.",
     placement: "left",
   },
   {

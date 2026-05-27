@@ -283,9 +283,12 @@ freed cleanly</pre>
         produces equivalent training:
       </p>
 
-      <pre>WASM SIMD       6.8 s · loss 2.9385
-WebGPU+block    0.7 s · loss 2.9719   →  9.7× wall-clock, 1.1% loss drift
-                                          (pure float-reorder noise)</pre>
+      <pre>preset   d_model   speedup (WebGPU vs WASM SIMD mt)   loss drift
+Small      96            2.6×                              1.1%
+Medium    128            6.8×                              1.4%
+Large     192            9.3×                              1.9%
+XL        256           12.1×                              2.5%
+                                  (drift = pure float-reorder noise)</pre>
 
       <h3>What didn't work</h3>
 
@@ -365,18 +368,19 @@ size 2048:  blocked4 10.15 ms vs blocked8 11.52 ms (0.88×)</pre>
           <tr><td>scalar WASM</td><td>baseline</td><td class="num">1.0×</td><td>single-threaded, no SIMD</td></tr>
           <tr><td>+ WASM SIMD</td><td>–</td><td class="num">1.6×</td><td>-msimd128</td></tr>
           <tr><td>+ multi-thread (4 wrk)</td><td>–</td><td class="num">3.2×</td><td>Web Workers + SharedArrayBuffer</td></tr>
-          <tr><td>+ WebGPU naive</td><td>~1.0 s</td><td class="num">~7×</td><td>Small preset, 50 steps</td></tr>
-          <tr><td>+ WebGPU blocked4 (fwd + back)</td><td>0.7 s</td><td class="num">9.7×</td><td>integration parity verified</td></tr>
-          <tr><td>+ subgroups (layernorm, cross-ent)</td><td>0.7 s</td><td class="num">9.7×</td><td>kicks in at d_model ≥ 256</td></tr>
-          <tr><td>+ fused softmax+value</td><td>0.7 s</td><td class="num">9.7×</td><td>saves attn round-trip; ctx-1024 ready</td></tr>
+          <tr><td>+ WebGPU full stack — Small (d=96)</td><td>—</td><td class="num">~8.3×</td><td>2.6× over WASM-SIMD-mt</td></tr>
+          <tr><td>+ WebGPU full stack — Medium (d=128)</td><td>—</td><td class="num">~22×</td><td>6.8× over WASM-SIMD-mt</td></tr>
+          <tr><td>+ WebGPU full stack — Large (d=192)</td><td>—</td><td class="num">~30×</td><td>9.3× over WASM-SIMD-mt</td></tr>
+          <tr><td>+ WebGPU full stack — XL (d=256)</td><td>—</td><td class="num">~39×</td><td>12.1× over WASM-SIMD-mt · top measured</td></tr>
         </tbody>
       </table>
 
       <p>
-        The 9.7× wall-clock end-to-end speedup is the load-bearing number. It corresponds
-        to a step time of 0.7 s where WASM SIMD takes 6.8 s — same model, same seed, same
-        data, 0.5%–2% loss drift (pure float-reorder noise from different accumulation
-        order in the GPU kernels).
+        The speedup is a curve, not a single number. Small preset 2.6×, XL 12.1×, trending
+        upward because the blocked-4×4 matmul kernel's win scales with matmul size — GPU
+        work amortises better as <code>d_model</code> and <code>ctx</code> grow. Loss
+        drift stays under 2.5% across the curve, pure float-reorder noise from different
+        accumulation order in the GPU kernels.
       </p>
 
       <!-- ================================================================ -->
@@ -452,6 +456,62 @@ WebGPU + FA2 fwd
           biggest single new project that could grow out of this one.
         </li>
       </ul>
+
+      <!-- ================================================================ -->
+      <h2>The bug that wasn't in any kernel <span class="tag fail">honest miss</span></h2>
+
+      <p>
+        The most expensive bug in this project never made it into a WGSL file. The
+        browser default learning rate was <code>3e-3</code> — ten times the Python
+        reference's <code>3e-4</code>. Training plateaued at loss ~2.45 on real
+        corpora and looked exactly like a modelling ceiling: smooth curve, slowly
+        asymptoting, no obvious tell. I spent two days suspecting the GPU kernels
+        before noticing the LR.
+      </p>
+
+      <div class="block lesson">
+        <p>
+          <strong>Lesson:</strong> kernel parity tests caught every numerical
+          deviation in the maths. Nothing was catching deviation in the
+          <em>config defaults</em>. The Python reference is the oracle for the
+          hyperparameters too — and the defaults need to be parity-checked the
+          same way the gradients are. Fixed in
+          <code>browser/src/types.ts</code> and
+          <code>browser/src/pages/index.astro</code>. Full write-up in
+          <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/lessons.md">
+            <code>docs/lessons.md</code></a>.
+        </p>
+      </div>
+
+      <p>
+        Same investigation, two more honest items:
+      </p>
+
+      <div class="block miss">
+        <p>
+          <strong>The default corpus was 863 bytes.</strong> The playground was
+          initializing on an inline meta-explainer paragraph instead of real text.
+          No amount of model scaling lowers loss below the dataset's intrinsic
+          entropy. Default is now the full TinyShakespeare (~1.1 MB,
+          <code>/shakespeare.txt</code>) fetched on init.
+        </p>
+      </div>
+
+      <div class="block miss">
+        <p>
+          <strong>The Memory64 build's ABI layer was untested.</strong> I shipped
+          the 64-bit WASM module claiming "trains 473M params in Node." It did —
+          when called directly from a one-off script. But <code>tests/bench_wasm.mjs</code>
+          loads the 32-bit module, so the 64-bit pthread+Memory64 path had
+          <em>never</em> been exercised in Node. The browser was calling into a
+          broken JS↔WASM bridge: <code>_malloc</code> returns Number, cwrap
+          pointer args expect BigInt, the conversion throws. Reproducer:
+          <code>tests/test_wasm64_xl_node.mjs</code>. The OOB the browser was
+          hitting at d_model ≥ 256 was a downstream consequence, not a kernel
+          bug. Tracked as task #66; the loader falls back to the 32-bit module
+          for XL/Massive/Mega/Behemoth in-browser.
+        </p>
+      </div>
 
       <!-- ================================================================ -->
       <h2>Notes on pair-programming with AI</h2>

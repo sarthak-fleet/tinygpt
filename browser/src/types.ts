@@ -32,7 +32,7 @@ export const DEFAULT_CONFIG: RunConfig = {
   dModel: 96,
   dMlp: 384,
   batchSize: 16,
-  learningRate: 3e-3,
+  learningRate: 3e-4,
   gradClip: 1.0,
   maxSteps: 1500,
   evalEvery: 50,

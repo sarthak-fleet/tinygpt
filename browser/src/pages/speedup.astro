@@ -6,13 +6,13 @@
 import Default from "../layouts/Default.astro";
 
 const layoutProps = {
-  title: "TinyGPT — the speedup, in one chart",
-  description: "WebAssembly SIMD vs hand-written WebGPU on the same GPT-2 model — 6.8 s/step down to 0.7 s/step, 9.7× end-to-end, 1.1% loss drift.",
+  title: "TinyGPT — the speedup curve, in one chart",
+  description: "WebAssembly SIMD vs hand-written WebGPU on the same GPT-2 model. The speedup is a curve, not a single number: Small 2.6×, Medium 6.8×, Large 9.3×, XL 12.1× — and growing with model size.",
   ogType: "article",
-  ogTitle: "TinyGPT — 9.7× faster in one chart",
-  ogDescription: "WASM SIMD: 6.8 s/step. WebGPU with the blocked-4×4 matmul kernel: 0.7 s/step. Same model, same seed, 1.1% loss drift — pure float-reorder noise.",
-  twitterTitle: "TinyGPT — 9.7× faster, in one chart",
-  twitterDescription: "WASM SIMD vs hand-written WebGPU on the same GPT-2 model. 9.7× end-to-end, 1.1% loss drift.",
+  ogTitle: "TinyGPT — 2.6× → 12.1× faster, in one chart",
+  ogDescription: "WASM SIMD vs hand-written WebGPU on the same GPT-2 model. The speedup is a curve, not a single number: GPU work amortizes better as d_model grows.",
+  twitterTitle: "TinyGPT — 2.6× → 12.1× faster",
+  twitterDescription: "WASM SIMD vs hand-written WebGPU. Small 2.6×, Medium 6.8×, Large 9.3×, XL 12.1× — the speedup grows with model size.",
   themeColor: "#0a0c10",
   loadFonts: false,
 };
@@ -209,40 +209,53 @@ const pageStyle = `
 const pageBody = `
     <div class="wrap">
       <div class="eyebrow"><a href="/">← TinyGPT</a> · <a href="/roadmap">roadmap</a> · <a href="/devlog">devlog</a></div>
-      <h1>The speedup, measured</h1>
+      <h1>The speedup, measured — and why it's a curve</h1>
       <p class="lede">
-        Same model, same seed, same data, same Apple M-series laptop. Just two backends.
-        Run it yourself: <code>tests/test_webgpu_train.mjs</code> at the repo root.
+        Same model, same seed, same data, same Apple M-series laptop. Two backends.
+        The speedup grows with <code>d_model</code> because GPU work amortizes better
+        as matmul shapes grow. Run it yourself: <code>tests/test_webgpu_train.mjs</code>.
       </p>
 
-      <!-- HEADLINE -->
+      <!-- HEADLINE — small multiples, one bar pair per preset -->
       <div class="headline">
         <div class="headline-bars">
-          <div class="label">WASM SIMD<small>multi-threaded baseline</small></div>
+          <div class="label">Small · d=96<small>WASM SIMD (mt)</small></div>
           <div class="bar before" style="width: 100%"></div>
-          <div class="ms">6.8 s<small>per step</small></div>
+          <div class="ms">2.6×<small>WebGPU faster</small></div>
         </div>
         <div class="headline-bars">
-          <div class="label">WebGPU + this work<small>blocked4 + subgroups + FA2 fwd&nbsp;+&nbsp;bwd + Memory64</small></div>
-          <div class="bar after" style="width: 10.3%"></div>
-          <div class="ms">0.7 s<small>per step</small></div>
+          <div class="label">Medium · d=128<small>WASM SIMD (mt)</small></div>
+          <div class="bar before" style="width: 100%"></div>
+          <div class="ms">6.8×<small>WebGPU faster</small></div>
+        </div>
+        <div class="headline-bars">
+          <div class="label">Large · d=192<small>WASM SIMD (mt)</small></div>
+          <div class="bar before" style="width: 100%"></div>
+          <div class="ms">9.3×<small>WebGPU faster</small></div>
+        </div>
+        <div class="headline-bars">
+          <div class="label">XL · d=256<small>WASM SIMD (mt)</small></div>
+          <div class="bar before" style="width: 100%"></div>
+          <div class="ms">12.1×<small>WebGPU faster</small></div>
         </div>
         <div class="verdict">
-          <span class="big">9.7×</span>
-          <span>faster end-to-end. 50 training steps · Small preset · 1.1% loss drift (pure float-reorder noise).</span>
+          <span class="big">12.1×</span>
+          <span>at XL — and growing with model size. 1.1–2.5% loss drift across the curve (pure float-reorder noise from different GPU accumulation order).</span>
         </div>
         <div class="source">
-          Measured via <code>tests/test_webgpu_train.mjs</code>. Same seed, identical
-          tokenization, identical AdamW state. WebGPU run uses the
-          <code>matmul_blocked</code> kernel (this work), subgroup-cooperative layernorm
-          + cross-entropy, and the fused softmax+value attention forward.
+          Measured via <code>tests/test_webgpu_train.mjs</code>. WebGPU run uses
+          the full stack: <code>matmul_blocked</code> + vec4 loads,
+          subgroup-cooperative layernorm + cross-entropy, and Flash Attention 2
+          forward + backward. Mega and Behemoth presets are omitted —
+          a Memory64 ABI bug at the JS↔WASM bridge (task #66) currently
+          blocks an honest in-browser end-to-end measurement.
         </div>
       </div>
 
-      <!-- STACK-UP -->
+      <!-- WHY IT'S A CURVE -->
       <div class="stack">
-        <h2>Where the 9.7× actually came from</h2>
-        <p class="sub">Each row is the cumulative speedup over a single-threaded scalar WASM baseline. Solid = measured; striped = projected.</p>
+        <h2>Why the speedup is a curve, not a single number</h2>
+        <p class="sub">Every training step costs <code>fixed_overhead + math(model_size)</code>. The overhead is roughly the same on both backends; only the math piece scales. So small models are bottlenecked on per-step overhead and look "only" 2.6× faster on the GPU; big models are bottlenecked on the math itself, and the GPU's arithmetic throughput dominates.</p>
 
         <div class="stack-row">
           <div class="lbl">scalar WASM baseline</div>
@@ -263,35 +276,42 @@ const pageBody = `
           <div class="tag m">measured</div>
         </div>
         <div class="stack-row">
-          <div class="lbl">+ WebGPU naive</div>
-          <div class="stack-bar measured" style="width: 10%"></div>
-          <div class="val">~7×</div>
-          <div class="tag m">measured</div>
+          <div class="lbl">+ WebGPU full stack — Small (d=96)</div>
+          <div class="stack-bar measured" style="width: 13%"></div>
+          <div class="val">~8.3×</div>
+          <div class="tag m">2.6× over WASM-SIMD-mt</div>
         </div>
         <div class="stack-row">
-          <div class="lbl">+ WebGPU blocked matmul</div>
-          <div class="stack-bar measured" style="width: 13.9%"></div>
-          <div class="val">9.7×</div>
-          <div class="tag m">measured</div>
+          <div class="lbl">+ WebGPU full stack — Medium (d=128)</div>
+          <div class="stack-bar measured" style="width: 34%"></div>
+          <div class="val">~22×</div>
+          <div class="tag m">6.8× over WASM-SIMD-mt</div>
         </div>
         <div class="stack-row">
-          <div class="lbl">+ on big-matmul presets (Mega+)</div>
-          <div class="stack-bar measured" style="width: 43%"></div>
+          <div class="lbl">+ WebGPU full stack — Large (d=192)</div>
+          <div class="stack-bar measured" style="width: 47%"></div>
           <div class="val">~30×</div>
-          <div class="tag m">measured (kernel)</div>
+          <div class="tag m">9.3× over WASM-SIMD-mt</div>
         </div>
         <div class="stack-row">
-          <div class="lbl">+ WebGPU subgroups</div>
-          <div class="stack-bar projected" style="width: 52%"></div>
-          <div class="val">~36×</div>
-          <div class="tag">projected</div>
+          <div class="lbl">+ WebGPU full stack — XL (d=256)</div>
+          <div class="stack-bar measured" style="width: 60%"></div>
+          <div class="val">~39×</div>
+          <div class="tag m">12.1× over WASM-SIMD-mt · top measured</div>
         </div>
         <div class="stack-row">
-          <div class="lbl">+ Flash Attention 2 (fwd + bwd)</div>
-          <div class="stack-bar measured" style="width: 80%"></div>
-          <div class="val">~50×</div>
-          <div class="tag m">shipped</div>
+          <div class="lbl">Mega / Behemoth (projected)</div>
+          <div class="stack-bar projected" style="width: 80%"></div>
+          <div class="val">≥ 15×</div>
+          <div class="tag">projected · blocked by Memory64 ABI bug</div>
         </div>
+
+        <p class="sub" style="margin-top: 16px;">
+          Each "WebGPU full stack" row is the same code: blocked4 matmul + vec4
+          loads + subgroup-cooperative reductions + Flash Attention 2 forward and
+          backward. These aren't independent additive levers any more — they're
+          the shipped default WebGPU path.
+        </p>
       </div>
 
       <div class="foot">

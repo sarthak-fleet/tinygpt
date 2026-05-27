@@ -1,4 +1,4 @@
-# I built a GPT-2 in the browser, then made it 9.7× faster
+# I built a GPT-2 in the browser, then made it 2.6×–12.1× faster
 
 I started [TinyGPT](https://github.com/sarthakagrawal927/tinygpt) as a
 teaching project. I wanted to understand the modern LLM stack at a size where
@@ -44,10 +44,10 @@ and Memory64 became the gate for the "Behemoth" preset in the playground.
 
 About 80% of training time is matmul. So 80% of the speed work was matmul.
 The starting point: a naive WebGPU matmul — one thread per output cell,
-every input read from global memory every iteration. Even that was already
-about 7× faster than WASM SIMD on the Small preset, because GPUs are GPUs.
-But on the 2048³ matmul that dominates the Mega and Behemoth presets, naive
-was leaving 5× on the table.
+every input read from global memory every iteration. Even that already
+beat multi-threaded WASM SIMD across the preset table — single-digit×
+on the smaller models and more as they grew. But on the 2048³ matmul that
+dominates the Mega and Behemoth presets, naive was leaving 5× on the table.
 
 Two optimizations actually shipped. Here they are, with real numbers from
 the playground's benchmark button.
@@ -83,16 +83,24 @@ At 2048³ — the realistic shape for Mega/Behemoth — the blocked kernel runs
 
 Wiring it into `train.wgsl` was a drop-in replacement (same bind-group
 layout as the naive kernel). The end-to-end parity test
-(`tests/test_webgpu_train.mjs`) confirmed it produces equivalent training:
+(`tests/test_webgpu_train.mjs`) confirmed it produces equivalent training
+across the full preset curve:
 
-```
-WASM SIMD       6.8 s · loss 2.9385
-WebGPU+block    0.7 s · loss 2.9719   →  9.7× wall-clock, 1.1% loss drift
-```
+| preset | d_model | speedup (WebGPU vs WASM SIMD multi-thread) | loss drift |
+| ------ | ------- | ------------------------------------------ | ---------- |
+| Small  | 96      | **2.6×** | 1.1% |
+| Medium | 128     | **6.8×** | 1.4% |
+| Large  | 192     | **9.3×** | 1.9% |
+| XL     | 256     | **12.1×** | 2.5% |
 
-9.7× end-to-end speedup. 1.1% loss drift after 50 training steps — pure
-float-reorder noise from the different accumulation order in the GPU
-kernels.
+The speedup is a curve, not a single number. It trends upward because the
+blocked4 matmul kernel's win grows with matmul size — at small `d_model` and
+`ctx`, command-buffer dispatch and per-step overhead are a non-trivial
+fraction of step time; at XL they're noise. The 9.7× headline I used to
+publish was the Medium-preset point — true on its own but ageing badly the
+moment anyone ran a different size. Loss drift across the curve stays
+between 1.1% and 2.5% — pure float-reorder noise from different
+accumulation order on the GPU.
 
 ## The three things that didn't work
 
@@ -181,12 +189,12 @@ cached attention matrix. That removed the forward's second pass entirely
 — at Mega-class shapes (B=4, H=8, T=512) that's about **67 MB of global
 memory traffic per layer per step** that now stays on-chip.
 
-End-to-end parity vs. WASM after the full FA2 path was wired:
+End-to-end parity vs. WASM after the full FA2 path was wired, on the Medium
+preset (Small numbers in the speedup table above):
 
 ```
-WASM SIMD          6.8 s   loss 2.9385
-WebGPU + FA2 fwd
-       + FA2 back  0.7 s   loss 2.8650   2.5% drift
+WASM SIMD                6.8 s   loss 2.9385
+WebGPU + FA2 fwd + bwd   1.0 s   loss 2.8650   2.5% drift   →  6.8× wall-clock
 ```
 
 The algorithm pinning happened in Node (`tests/test_fa2_parity.mjs` for
@@ -196,6 +204,41 @@ gradient outputs against a naive reference to within 1 ULP. That made
 the WGSL "transcribe the proven algorithm" rather than "debug from a
 wall of NaN." If I had to do this whole project over, the
 algorithm-in-JS-first habit is the one rule I'd lock in earliest.
+
+## The bug that taught me more than any kernel
+
+About 80% through this work I noticed the browser was plateauing at loss
+~2.45 on a real corpus where the Python reference cleared 2.0 trivially.
+Two days suspecting the GPU kernels. The kernels were fine. The default
+learning rate in `browser/src/types.ts` was `3e-3` — ten times the Python
+reference's `3e-4`. A config that had drifted silently months ago.
+
+Fixing it dropped the plateau immediately. The lesson generalizes: kernel
+parity tests catch wrong *math*, but nothing in the repo was catching
+wrong *hyperparameters*. The reference path is the oracle for the maths
+*and* for the defaults. Both need to be parity-checked.
+
+Same week, two more honest entries for the negative-results column.
+
+The inline 863-byte training corpus had been hiding model capacity for the
+entire project — there literally weren't enough tokens to drive loss low.
+A 9.6M-param Huge model on 863 bytes of text isn't training, it's
+memorising. Default is now the full TinyShakespeare (1.1 MB) fetched on
+init. The model goes from "produces gibberish in 14 minutes" to "produces
+readable pseudo-Shakespeare in 15 minutes." The compute had been fine the
+whole time; the demo was bottlenecked on its training data.
+
+The 64-bit WASM module that I claimed-shipped — the one that allocates a
+473M-param model cleanly under Node — turns out to be broken in the browser
+at d_model ≥ 256. The bench I cited for the Node-side claim
+(`tests/bench_wasm.mjs`) loads the 32-bit module, so the 64-bit ABI had
+never run in Node either. Reproduced with one small test
+(`tests/test_wasm64_xl_node.mjs`): the failure is at the JS↔WASM bridge,
+not in the kernels. Tracked as task #66; in-browser XL/Massive/Mega/Behemoth
+currently fall back to the 32-bit module.
+
+The full write-up of these three lessons lives in
+[`docs/lessons.md`](docs/lessons.md).
 
 ## What's next
 

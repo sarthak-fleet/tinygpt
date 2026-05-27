@@ -10,7 +10,7 @@ const layoutProps = {
   description: "The performance journey of TinyGPT — every speed lever, what's shipped, what's blocked, and why.",
   ogType: "article",
   ogTitle: "TinyGPT — the performance journey",
-  ogDescription: "Every speed lever, what's shipped, what's blocked, and why. Scalar → SIMD → threads → WebGPU naive → blocked-4×4. The 9.7× end-to-end speedup, anchored to numbers you can reproduce.",
+  ogDescription: "Every speed lever, what's shipped, what's blocked, and why. Scalar → SIMD → threads → WebGPU naive → blocked-4×4. End-to-end speedup grows from 2.6× at Small to 12.1× at XL — anchored to numbers you can reproduce.",
   twitterTitle: "TinyGPT — the performance journey",
   twitterDescription: "Every speed lever in TinyGPT, what's shipped, what's blocked, and why — with reproducible numbers.",
   themeColor: "#08090a",
@@ -425,10 +425,13 @@ const pageBody = `
             (Previously, single-threaded SIMD: ~2× slower across the board. See lever 3.)
           </p>
           <p>
-            For WebGPU on the same hardware, the first user-measured datapoint is
-            <strong>~7× faster than WASM SIMD</strong>: a run estimated at 7 minutes
-            on WASM finished in ~1 minute on WebGPU. WebGPU benchmarks across
-            multiple machines are still TBD — see lever 2.
+            For WebGPU on the same hardware, the speedup is a
+            <strong>scaling curve</strong>, not a flat ratio. End-to-end,
+            measured via <code>tests/test_webgpu_train.mjs</code>:
+            <strong>Small 2.6×, Medium 6.8×, Large 9.3×, XL 12.1×</strong> vs
+            the multi-threaded WASM SIMD baseline above. The curve trends
+            upward because GPU work amortises better with model size — the
+            speed-evolution chart below shows the cumulative picture.
           </p>
           <div class="why">
             <span class="why-key">How to reproduce</span>
@@ -444,7 +447,7 @@ const pageBody = `
       <article class="lever speed-evo">
         <div class="lever-head">
           <span class="lever-num">●</span>
-          <h2 class="lever-title">Speed evolution — Small preset, normalized to scalar baseline</h2>
+          <h2 class="lever-title">Speed evolution — across the preset curve, normalized to scalar baseline</h2>
           <span class="status shipped"><span class="dot"></span> Measured + extrapolated</span>
         </div>
         <div class="lever-meta">
@@ -473,45 +476,45 @@ const pageBody = `
               <span class="evo-tag">measured</span>
             </div>
             <div class="evo-row">
-              <span class="evo-label">+ WebGPU naive</span>
-              <span class="evo-bar shipped" style="--w: 11%"></span>
-              <span class="evo-val">~7×</span>
-              <span class="evo-tag">end-to-end measured (Small preset)</span>
+              <span class="evo-label">+ WebGPU full stack — Small (d=96)</span>
+              <span class="evo-bar shipped" style="--w: 13%"></span>
+              <span class="evo-val">~8.3×</span>
+              <span class="evo-tag">2.6× over WASM-SIMD-mt · 1.1% drift</span>
             </div>
             <div class="evo-row">
-              <span class="evo-label">+ WebGPU blocked matmul</span>
-              <span class="evo-bar shipped" style="--w: 19%"></span>
-              <span class="evo-val">~12×</span>
-              <span class="evo-tag">end-to-end measured · 7.6× over WASM SIMD on Small preset · 0.5% loss drift</span>
+              <span class="evo-label">+ WebGPU full stack — Medium (d=128)</span>
+              <span class="evo-bar shipped" style="--w: 34%"></span>
+              <span class="evo-val">~22×</span>
+              <span class="evo-tag">6.8× over WASM-SIMD-mt · 1.4% drift</span>
             </div>
             <div class="evo-row">
-              <span class="evo-label">+ blocked on big-matmul presets (Mega+)</span>
-              <span class="evo-bar shipped" style="--w: 48%"></span>
+              <span class="evo-label">+ WebGPU full stack — Large (d=192)</span>
+              <span class="evo-bar shipped" style="--w: 47%"></span>
               <span class="evo-val">~30×</span>
-              <span class="evo-tag">kernel measured · 5.2× kernel speedup at 2048³</span>
+              <span class="evo-tag">9.3× over WASM-SIMD-mt · 1.9% drift</span>
             </div>
             <div class="evo-row">
-              <span class="evo-label">+ WebGPU subgroups (softmax, layernorm)</span>
-              <span class="evo-bar planned" style="--w: 60%"></span>
-              <span class="evo-val">~36×</span>
-              <span class="evo-tag">projected</span>
+              <span class="evo-label">+ WebGPU full stack — XL (d=256)</span>
+              <span class="evo-bar shipped" style="--w: 60%"></span>
+              <span class="evo-val">~39×</span>
+              <span class="evo-tag">12.1× over WASM-SIMD-mt · 2.5% drift · top measured</span>
             </div>
             <div class="evo-row">
-              <span class="evo-label">+ Flash Attention 2 (fwd + bwd)</span>
-              <span class="evo-bar shipped" style="--w: 80%"></span>
-              <span class="evo-val">~50×</span>
-              <span class="evo-tag">shipped · recompute-on-backward, attn writeback dropped</span>
+              <span class="evo-label">Mega / Behemoth (projected)</span>
+              <span class="evo-bar planned" style="--w: 80%"></span>
+              <span class="evo-val">≥ 15×</span>
+              <span class="evo-tag">projected · blocked by Memory64 ABI bug (task #66)</span>
             </div>
           </div>
           <p style="margin-top: 18px; color: var(--muted); font-size: 13.5px;">
-            <strong>Solid teal bars</strong> are measured end-to-end on this codebase:
-            <code>tests/test_webgpu_train.mjs</code> compares WASM vs WebGPU final loss
-            after 50 steps on the same seed — the WebGPU + blocked-matmul run finishes
-            in 0.9 s vs 6.8 s for WASM, with 0.5% loss drift (pure float-reorder noise,
-            model trains identically). Bigger presets see more benefit because the
-            blocked kernel's win grows with matmul size — at 2048³ the standalone
-            kernel is 5.18× faster than naive, vs ~1.5–2× on Small-preset shapes.
-            <strong>Striped bars</strong> are projected from per-lever impact estimates.
+            <strong>Solid teal bars</strong> are measured end-to-end on this
+            codebase (multi-thread WASM SIMD vs full WebGPU stack: blocked4 +
+            vec4 + subgroup reductions + FA2 fwd+bwd). Speedup grows with
+            <code>d_model</code> because the blocked matmul kernel's win
+            scales with matmul size. <strong>Striped bar</strong> is projected
+            from kernel-level measurements; the in-browser Memory64 ABI bug
+            at d_model ≥ 256 (task #66) currently blocks an honest
+            end-to-end number for Mega and Behemoth.
           </p>
           <div style="margin-top: 14px; padding: 10px 14px; border-left: 2px solid var(--accent); background: var(--accent-glow); border-radius: 0 6px 6px 0;">
             <p style="margin: 0; color: var(--muted); font-size: 13px;">
@@ -562,10 +565,10 @@ const pageBody = `
         <div class="lever-head">
           <span class="lever-num">2</span>
           <h2 class="lever-title">WebGPU forward + backward + AdamW</h2>
-          <span class="status shipped"><span class="dot"></span> Shipped · ~7× measured on M-series</span>
+          <span class="status shipped"><span class="dot"></span> Shipped · 2.6×–12.1× curve</span>
         </div>
         <div class="lever-meta">
-          <span>Measured: <strong>~7×</strong> on Apple M-series · others TBD</span>
+          <span>Measured: <strong>2.6× → 12.1×</strong> across Small → XL on M-series</span>
           <span>Lives in: <code>webgpu/</code></span>
         </div>
         <div class="lever-body">
@@ -575,12 +578,12 @@ const pageBody = `
             <strong>Correct end to end.</strong>
           </p>
           <p>
-            <strong>First real-hardware datapoint:</strong> a run that took <strong>~1 min on WebGPU</strong>
-            on Apple M-series was estimated at <strong>~7 min on the WASM SIMD path</strong> for the
-            same config — roughly <strong>7× faster</strong>. Earlier numbers from this
-            project were withdrawn because they came from <code>swiftshader</code> (software adapter,
-            see <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/notes.md">docs/notes.md §10</a>);
-            this is the first honestly measured speedup on real silicon.
+            <strong>Measured curve:</strong> Small 2.6×, Medium 6.8×, Large 9.3×, XL
+            12.1× over the multi-threaded WASM SIMD baseline, via
+            <code>tests/test_webgpu_train.mjs</code>. Loss drift 1.1%–2.5% across
+            the curve — float-reorder noise. The earlier single-preset "~7× on
+            Small" number predated the multi-threaded WASM baseline and is
+            withdrawn.
           </p>
           <div class="why">
             <span class="why-key">What's next</span>
@@ -799,7 +802,7 @@ const pageBody = `
         <div class="lever-head">
           <span class="lever-num">9</span>
           <h2 class="lever-title">WebAssembly Memory64 — break the 4 GB tab ceiling</h2>
-          <span class="status in-progress"><span class="dot"></span> In progress</span>
+          <span class="status partial"><span class="dot"></span> Shipped · partial (browser ABI bug above d_model 256)</span>
         </div>
         <div class="lever-meta">
           <span>Impact: <strong>~2× model size</strong> (in fp32)</span>
@@ -813,11 +816,22 @@ const pageBody = `
             64-bit pointers and lifts the cap into the tens of GB on Chromium 133+.
           </p>
           <p>
-            <strong>Measured:</strong> built the Memory64 variant; allocated a
-            473M-param model (~5.6 GB heap with Adam state) cleanly in Node — a
-            config that hard-OOMed on the 32-bit module. Next: wire the loader
-            to prefer the 64-bit build when the runtime supports it, and ship a
-            <em>Behemoth</em> preset that uses the extra ceiling.
+            <strong>Measured (when called directly):</strong> 473M-param model
+            (~5.6 GB heap with Adam state) allocates cleanly in Node — a config
+            that hard-OOMed on the 32-bit module.
+          </p>
+          <p>
+            <strong>Caveat (task #66):</strong> the 64-bit module's JS↔WASM ABI
+            wasn't being exercised by the existing
+            <code>tests/bench_wasm.mjs</code> (which loads the 32-bit module),
+            so a cwrap pointer-conversion bug shipped — <code>_malloc</code>
+            returns Number but pointer args expect BigInt. The browser was
+            calling into this broken bridge for XL and bigger; the loader now
+            falls back to the 32-bit module for XL/Massive/Mega/Behemoth
+            in-browser. Reproducer: <code>tests/test_wasm64_xl_node.mjs</code>.
+            Lesson captured in
+            <a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/docs/lessons.md">
+              <code>docs/lessons.md</code></a>.
           </p>
         </div>
       </article>

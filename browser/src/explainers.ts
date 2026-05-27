@@ -68,7 +68,7 @@ export const EXPLAINERS: Record<string, Explainer> = {
   },
   lr: {
     title: "Learning rate",
-    body: "How aggressively to nudge each weight on every step. Too high → the loss diverges or oscillates. Too low → training stalls. 0.003 is a safe default for tiny GPTs trained with AdamW.",
+    body: "How aggressively to nudge each weight on every step. Too high → the loss oscillates (or plateaus, which looks like a modelling ceiling but isn't). Too low → training stalls. 0.0003 is the safe default for char-level GPTs trained with AdamW, matching the Python reference. Raise to 1e-3 only if the model and dataset are both very small.",
     link: {
       href: "https://arxiv.org/abs/1711.05101",
       label: "AdamW — Loshchilov & Hutter",
@@ -76,12 +76,12 @@ export const EXPLAINERS: Record<string, Explainer> = {
   },
   backend: {
     title: "Backend — WASM or WebGPU",
-    body: "WASM runs the same model on the CPU via hand-derived C++ kernels — fully supported. WebGPU runs the forward, backward, and AdamW on the GPU. One measured data point (Apple M-series): a run estimated at ~7 min on WASM finished in ~1 min on WebGPU — about 7× faster. The kernels are parity-checked, so it's correct; the speedup is just unverified across all machines. If your machine has WebGPU, try it.",
+    body: "WASM runs the same model on the CPU via hand-derived C++ kernels — fully supported. WebGPU runs the forward, backward, and AdamW on the GPU. Measured on Apple M-series: WebGPU is ~2.6× faster than WASM on small models and ~12× faster on the XL preset — the speedup grows with model size as the GPU's arithmetic throughput dominates. The kernels are parity-checked, so it's correct. If your machine has WebGPU, use it.",
     link: docsLink("docs/browser_notes.md", "browser_notes.md — WASM vs WebGPU"),
   },
   corpus: {
     title: "The training corpus",
-    body: "The model has nothing to learn except patterns in this text. A 0.8M model on a few KB will memorise short patterns — common words, capitalisation, spacing — and that's the point: the goal is to watch the loss curve fall, not to produce great prose.",
+    body: "The model has nothing to learn except patterns in this text. The default is the full TinyShakespeare corpus (~1.1 MB) — enough that a small model learns letter and word patterns, and a larger model trained for ~15 minutes starts producing readable pseudo-Shakespeare. Paste your own text, upload a file, or pull a dataset from Hugging Face to change what it learns.",
     link: docsLink("docs/learn.md", "docs/learn.md — the guided path"),
   },
 
@@ -147,7 +147,7 @@ export const EXPLAINERS: Record<string, Explainer> = {
   },
   tokensPerSec: {
     title: "Throughput",
-    body: "Tokens (bytes here) processed per second. In-browser this is single-threaded WebAssembly, so it's bounded by your CPU. On a modern laptop expect 10k–50k tok/s for a 0.8M model.",
+    body: "Tokens (bytes here) processed per second. WASM uses multi-threaded SIMD; WebGPU runs the whole training loop on the GPU. On a modern laptop expect roughly 10k–80k tok/s for a small model under WASM, and ~3× that under WebGPU on the smaller presets — growing to ~12× on XL.",
     link: docsLink("docs/performance.md", "docs/performance.md — perf work"),
   },
   eta: {
