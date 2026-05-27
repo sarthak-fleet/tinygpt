@@ -112,12 +112,16 @@ while (true) {
 }
 
 console.log("\n--- saving checkpoint ---");
-// #downloadModel lives in #modelMenu (hidden dropdown). Open menu first.
-await page.locator("#modelMenuBtn").click({ force: true });
-await page.locator("#modelMenu").waitFor({ state: "visible", timeout: 5000 });
+// #modelMenuBtn lives in a controls cluster that's visibility-toggled —
+// Playwright's locator.click() rejects with "Element is not visible". Bypass
+// the visibility check by invoking the DOM click handler directly. Same for
+// #downloadModel, which lives inside the menu and only becomes interactable
+// after the parent click.
+await page.evaluate(() => document.getElementById("modelMenuBtn").click());
+await page.waitForTimeout(150);
 const [download] = await Promise.all([
   page.waitForEvent("download", { timeout: 60_000 }),
-  page.locator("#downloadModel").click({ force: true }),
+  page.evaluate(() => document.getElementById("downloadModel").click()),
 ]);
 const tmp = await download.path();
 console.log(`download arrived at ${tmp}; copying to ${DEMO_OUT}`);

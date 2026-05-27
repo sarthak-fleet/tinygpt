@@ -1128,6 +1128,53 @@ const pageStyle = `
       }
       .backend-chip span { color: var(--muted); font-weight: 500; }
 
+      /* System-pressure chip — visible while training runs.
+         States map to OS Compute Pressure: nominal / fair / serious / critical. */
+      .pressure-chip {
+        font: 500 10.5px/1 var(--font-mono);
+        color: var(--muted);
+        background: transparent;
+        border: 1px solid var(--line);
+        padding: 4px 8px 4px 6px;
+        border-radius: 999px;
+        text-transform: lowercase;
+        display: inline-flex; align-items: center; gap: 6px;
+        cursor: help;
+        transition: color 0.25s, border-color 0.25s, background 0.25s;
+      }
+      .pressure-chip[hidden] { display: none; }
+      .pressure-dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 0 var(--accent-glow);
+        animation: pulse-dot 1.4s ease-in-out infinite;
+      }
+      @keyframes pulse-dot {
+        0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+        50%      { box-shadow: 0 0 0 5px rgba(72, 229, 194, 0); }
+      }
+      .pressure-chip[data-state="fair"] { color: #d6c46d; border-color: rgba(214, 196, 109, 0.4); }
+      .pressure-chip[data-state="fair"] .pressure-dot { background: #d6c46d; box-shadow: 0 0 0 0 rgba(214, 196, 109, 0.35); }
+      .pressure-chip[data-state="fair"] .pressure-dot { animation-name: pulse-dot-fair; }
+      @keyframes pulse-dot-fair {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(214, 196, 109, 0.35); }
+        50%      { box-shadow: 0 0 0 5px rgba(214, 196, 109, 0); }
+      }
+      .pressure-chip[data-state="serious"] { color: var(--warn); border-color: rgba(245, 177, 74, 0.55); background: rgba(245, 177, 74, 0.06); }
+      .pressure-chip[data-state="serious"] .pressure-dot { background: var(--warn); box-shadow: 0 0 0 0 rgba(245, 177, 74, 0.4); }
+      .pressure-chip[data-state="serious"] .pressure-dot { animation-name: pulse-dot-serious; }
+      @keyframes pulse-dot-serious {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(245, 177, 74, 0.4); }
+        50%      { box-shadow: 0 0 0 5px rgba(245, 177, 74, 0); }
+      }
+      .pressure-chip[data-state="critical"] { color: #ff7e7e; border-color: rgba(255, 126, 126, 0.55); background: rgba(255, 126, 126, 0.06); }
+      .pressure-chip[data-state="critical"] .pressure-dot { background: #ff7e7e; box-shadow: 0 0 0 0 rgba(255, 126, 126, 0.45); }
+      .pressure-chip[data-state="critical"] .pressure-dot { animation-name: pulse-dot-critical; }
+      @keyframes pulse-dot-critical {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(255, 126, 126, 0.45); }
+        50%      { box-shadow: 0 0 0 5px rgba(255, 126, 126, 0); }
+      }
+
       /* Loss panel */
       .loss-card { display: flex; flex-direction: column; position: relative; }
       .chart-tooltip {
@@ -2686,6 +2733,12 @@ const pageBody = `
             <button class="info" data-explain="whatIsLoss">?</button>
             <span class="backend-chip">
               <span id="stBackend">wasm</span>
+            </span>
+            <span id="systemPressure" class="pressure-chip" hidden
+                  title="Compute Pressure API — your OS reporting how hard the system is working. Heavy training pushes this up; that's why your machine feels slower while it runs."
+            >
+              <span class="pressure-dot" id="pressureDot"></span>
+              <span id="pressureLabel">system: nominal</span>
             </span>
           </h2>
           <canvas id="chart" width="960" height="420"></canvas>

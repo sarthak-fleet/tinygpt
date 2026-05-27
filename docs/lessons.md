@@ -27,43 +27,68 @@ same way the gradients are.
 **Lesson:** a "plateau" is a hypothesis, not a fact. Cross-reference the
 hyperparameters against the reference path before suspecting the model.
 
-## 2. The Memory64 ABI was untested
+## 2. The Memory64 OOB was a pthread + memory-growth race, not an ABI bug
 
-The 64-bit WASM module (`browser/public/tinygpt64.{js,wasm}`) compiled with
-`-sMEMORY64=1 -sWASM_BIGINT` was claimed-shipped — it allocates a 473M-param
-model cleanly in Node when called directly, and the browser feature-detects
-and picks it up automatically for big presets. But the browser was hitting
-"memory access out of bounds" at d_model ≥ 256 (XL, Massive, Mega, Behemoth).
-Same `.wasm`, different host.
+The 64-bit WASM module (`browser/public/tinygpt64.{js,wasm}`) was hitting
+"memory access out of bounds" in the *browser* at d_model ≥ 256 — XL,
+Massive, Mega, Behemoth. The exact same `.wasm` ran fine when called
+directly in Node. Two days of looking turned up two unrelated findings.
 
-The trap: `tests/bench_wasm.mjs` loads the 32-bit `tinygpt.js`, not the
-64-bit one. So the 64-bit pthread+Memory64 path had been **completely
-untested in Node**. "Node passes XL" was a misleading data point — the test
-exercises the 32-bit kernels.
+**The misdirection.** The first reproducer
+(`tests/test_wasm64_xl_node.mjs`, v1) used `cwrap` with bigint-typed
+pointer args and threw `TypeError: Cannot convert 80312 to a BigInt`.
+Concluded: ABI bug, cwrap doesn't auto-coerce Number→BigInt. *Wrong
+diagnosis.* The browser doesn't use cwrap — `browser/src/backend.ts:118`
+already has a `toPtr` helper that BigInt-wraps pointers before every
+direct exports call. The cwrap failure was a problem with the test, not
+the production path.
 
-**Reproducer:** `tests/test_wasm64_xl_node.mjs`. Load `tinygpt64.js` in
-Node, call `tg_model_create` for XL, call `setData`:
+**The real diagnosis.** Rewriting the reproducer to mirror exactly how
+`backend.ts` calls into the module — direct exports, `BigInt(ptr)` on
+every pointer arg — made the Node-side test pass cleanly: 5 XL training
+steps, ~2.2 s each, loss descending 5.57 → 3.04. The 64-bit kernels are
+correct. The build is correct. The browser path is calling the same
+correct kernels with the same correct arguments. The difference must be
+*how* the host runs them.
+
+The likely culprit is the well-known interaction between Emscripten's
+pthread shim, `SharedArrayBuffer`, and `WebAssembly.Memory.grow`. In the
+browser:
 
 ```
-TypeError: Cannot convert 80312 to a BigInt
-    at ccall (tinygpt64.js:1:24518)
+main thread mallocs → memory.grow → SAB reallocated
+worker thread (matmul, mid-call) holds stale HEAPF32 view → reads past
+the old view's length → wasm trap: memory access out of bounds
 ```
 
-`_malloc` returns a Number (because the heap is still below 2³¹), but
-`cwrap` with type `"bigint"` for pointer args is strict and won't auto-coerce
-a Number argument. The browser was calling into this broken bridge every
-time it tried to allocate at scale; the OOB was a downstream consequence of
-the malloc never landing where the kernels expected.
+Emscripten's pthread shim notifies workers of growth through atomics, but
+the notification isn't synchronous with the worker's currently-running
+kernel; if the worker is inside a matmul tile loop when growth happens,
+the next `HEAPF32[i]` read can hit the stale view. Node's
+`worker_threads` shim has a different update path that doesn't race the
+same way, which is why the Node test passes.
 
-**Lesson:** if a build target ships, it needs a test that exercises it on
-the same data path the production caller uses. "Same `.wasm`" is not the
-same as "same execution path". Parity is per-host, not per-binary.
+**The fix.** The simplest reliable fix is to avoid growth entirely during
+training: bump `INITIAL_MEMORY` in `wasm/build_wasm64.sh` from 32 MB to
+256 MB. XL needs ~350 MB live; Small/Medium/Large/XL all train without
+ever triggering `memory.grow`. (Behemoth still needs growth — the eventual
+proper fix is `GROWABLE_HEAP_*` helpers in the C++ kernels so stale views
+re-resolve, but that's a bigger change.)
 
-**Status:** task #66; not yet fixed. Likely fix is to update
-`browser/src/backend.ts` to explicitly `BigInt()`-wrap pointer args before
-every `cwrap`-bound call into `tinygpt64`, plus an integration test that
-runs every preset against `tinygpt64.js` in Node so this can't silently
-regress again.
+**The other trap.** `tests/bench_wasm.mjs` loaded `tinygpt.js` (32-bit),
+not `tinygpt64.js`. So the 64-bit module had been entirely *unmeasured*
+in Node before this session. Citing "Node passes XL" was meaningless — it
+was passing a *different binary*. Per-host parity, not per-binary parity,
+is what counts.
+
+**Lesson:** the cheapest reproducer is the one that mirrors the production
+path exactly. Substituting cwrap for direct exports — or one host for
+another — moves you to a different bug. Build the reproducer that
+matches, then trust it.
+
+**Status:** fixed for everything up to and including XL with the
+`INITIAL_MEMORY=268435456` bump in `wasm/build_wasm64.sh`. Behemoth still
+exercises growth and would benefit from the proper SAB-view-aware path.
 
 ## 3. The speedup is a curve, not a single number
 

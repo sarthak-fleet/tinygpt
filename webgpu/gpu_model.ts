@@ -228,10 +228,12 @@ export class GpuModel {
     return { logits, caches, lastX: x, lnf, idsT, N };
   }
 
-  /** Autoregressive generation from a prompt. temperature <= 0 is greedy. */
+  /** Autoregressive generation from a prompt. temperature <= 0 is greedy.
+   *  Optional `onToken` callback fires once per newly-sampled token so the
+   *  caller can stream output instead of waiting for the full sequence. */
   async generate(
     promptIds: number[], maxNew: number, temperature: number, topK: number,
-    seed: number,
+    seed: number, onToken?: (tok: number, idxIntoMaxNew: number) => void,
   ): Promise<number[]> {
     const { vocab: V, ctx } = this.cfg;
     const ids = promptIds.length > 0 ? [...promptIds] : [10];
@@ -267,6 +269,7 @@ export class GpuModel {
       }
       ids.push(next);
       this.freeScratch();
+      onToken?.(next, s);
     }
     return ids;
   }

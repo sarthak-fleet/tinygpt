@@ -2379,6 +2379,7 @@ void init().then(() => {
   setupDemoBanner();
   setupDefaultCorpus();
   setupScreens();
+  setupSystemPressure();
   // Mark landing animation as done after first paint — subsequent navigations
   // skip the brand-draw animation (it's a one-time wow).
   setTimeout(() => document.body.classList.add("landing-done"), 2200);
@@ -2500,6 +2501,32 @@ function setupScreens(): void {
 
   // Expose enableWatch globally so other code paths can call it.
   (window as unknown as { __tgEnableWatch?: () => void }).__tgEnableWatch = enableWatch;
+}
+
+// --- system pressure indicator --------------------------------------------
+// User-visible signal that "this is doing real work" while training. Uses
+// the Compute Pressure API (Chromium 125+). The chip is hidden when there's
+// no signal; shows the current OS-reported pressure state ("nominal" /
+// "fair" / "serious" / "critical") with a color that matches the severity.
+// On browsers without PressureObserver we leave it hidden silently rather
+// than fake a value — the rest of the live-stats panel already tells the
+// user training is in flight.
+function setupSystemPressure(): void {
+  const chip = document.getElementById("systemPressure");
+  const label = document.getElementById("pressureLabel");
+  if (!chip || !label) return;
+  const PO = (globalThis as unknown as { PressureObserver?: new (cb: (r: { state: string; source: string }[]) => void) => { observe: (s: string) => Promise<void> } }).PressureObserver;
+  if (!PO) return; // Quietly no-op when the API isn't available.
+  try {
+    const obs = new PO((records) => {
+      const cpu = records.find((r) => r.source === "cpu") ?? records[0];
+      if (!cpu) return;
+      chip.hidden = false;
+      chip.setAttribute("data-state", cpu.state);
+      label.textContent = `system: ${cpu.state}`;
+    });
+    void obs.observe("cpu").catch(() => { /* permission denied or unsupported source */ });
+  } catch { /* nothing — chip stays hidden */ }
 }
 
 // --- default corpus — fetch Shakespeare on init --------------------------
