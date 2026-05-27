@@ -35,7 +35,7 @@ emcc \
   "$ROOT"/wasm/src/model.cpp \
   -O3 -std=c++17 -msimd128 -pthread \
   -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=createTinyGPT \
-  -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=33554432 \
+  -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=268435456 \
   -s MAXIMUM_MEMORY=2147483648 \
   -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=8 \
   -s ENVIRONMENT=web,worker,node \
