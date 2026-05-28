@@ -122,9 +122,43 @@ in this doc + the gate-framework pattern in `docs/precision.md`.
 
 ## What's queued (in execution order)
 
+### Shipped in this thread
 1. **#90 — Storage-f16 matmul in the production path** ✅ SHIPPED in
-   `a9a8150` + `9928b71`. See the "Most recent landing" section above and
-   `docs/precision.md` for the full numerics framework.
+   `a9a8150` + `9928b71`.
+2. **#91 (re-scoped) — Extended storage-f16 to training (backward dA +
+   repack + dual-direction gate)** ✅ SHIPPED in `4ceeff2`. Real-GPU
+   smoke verified: both fwd and bwd gates pass with `max_abs ≤ 11%` of
+   budget and `mean_rel ≤ 15%` of budget.
+3. **Live GPU activity badge** ✅ SHIPPED in `0e22e7c`. Pulsing green
+   "GPU active · X tok/s" indicator during training, hidden when idle.
+
+### Deferred to v1.1 / future sessions
+4. **Recipes gallery model** — third-corpus model. Not retrained in this
+   thread (TinyStories + Code shipped; Recipes is ~47 min more wall and
+   the user opted to ship with 3 models). Run
+   `caffeinate -i node browser/train_gallery_one.mjs --corpus=/tmp/tinygpt-corpora/recipes.txt --out=recipes --prompt="Ingredients:"`
+   then `node browser/finalize_gallery.mjs` to rebuild the manifest.
+5. **Training smoke verification** — `browser/smoke_f16_train.mjs`
+   exists; runs a 200-step Medium training and checks loss descent + no
+   NaN. Not yet executed (GPU has been busy retraining). Run when GPU
+   is free post-launch to confirm the training-path plumbing works
+   end-to-end (the inference path is already verified).
+6. **Measured A/B benchmark** — sampling tokens/sec on f16 vs f32. The
+   theoretical 1.3-1.5× is unverified empirically. Easy to add a small
+   benchmark script.
+7. **#91 (original scope) — shader-f16 compute path** with
+   `enable f16;` and f16 accumulators. ~3-5 hr, expected ~1.1×
+   incremental on Apple (the bandwidth win was already grabbed by
+   storage-f16; compute on M-series is largely bandwidth-bound). Real
+   precision risk on K≥256 shapes — gate may reject.
+8. **#92 — Cooperative matrix** (`enable chromium_experimental_subgroup_matrix`).
+   ~6-10 hr, HIGH uncertainty on Apple (the WebGPU → simdgroup mapping
+   is unverified in public benchmarks). Wire the `+coop-matrix` pill
+   via the `__tgUpdateGpuAccelPills` bridge.
+9. **#93 — WebNN inference sampler.** Build the model graph in
+   MLGraphBuilder; route inference to CoreML / ANE; training stays
+   WebGPU. ~5-7 hr. Sampling-only path, falls back to WebGPU on context
+   creation failure.
 2. **#91 — `shader-f16` full-compute matmul.** New WGSL with `enable f16;`
    and `f16` accumulators. Gated on `capabilities.shaderF16`. Same
    numerics gate.
