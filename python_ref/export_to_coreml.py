@@ -23,6 +23,37 @@ The converted package is bundled by the Swift side (Sources/TinyGPTApp/Resources
 and loaded by TinyGPTANE.swift. See native-mac/Sources/TinyGPTANE/ once the
 Swift integration lands.
 
+QUANTIZATION (optional, for ANE perf)
+=====================================
+
+After converting to fp32 .mlpackage, you can quantize for ~6x smaller
+files (and the right path forward for actual ANE int-compute speedups
+once Apple ships them):
+
+    pip install scikit-learn
+    python3 -c "
+    import coremltools as ct
+    from coremltools.optimize.coreml import (
+        palettize_weights, OpPalettizerConfig, OptimizationConfig,
+    )
+    m = ct.models.MLModel('model.mlpackage')
+    cfg = OptimizationConfig(global_config=OpPalettizerConfig(
+        nbits=4, mode='kmeans', granularity='per_tensor',
+    ))
+    palettize_weights(m, config=cfg).save('model-pal4.mlpackage')
+    "
+
+Measured on M5 Pro for the Huge gallery Shakespeare model:
+    fp32 .mlpackage:       37 MB · 365 pass/s on ANE
+    int8 .mlpackage:       9.6 MB · MPSGraph compile fails currently
+    4-bit palettized:      4.9 MB · 398 pass/s on ANE
+
+The 4-bit gives ~6x size reduction with comparable speed. Speed parity
+because Core ML's palettization is storage-side — it dequantizes to
+fp16 at inference time. Real int-compute on ANE requires the newer
+Stateful Models API + macOS 15+ paths that aren't in coremltools 9
+yet.
+
 KNOWN HAZARDS
 =============
 
