@@ -16,12 +16,9 @@
 
 import posthog from "posthog-js";
 
-type EnvMap = Record<string, string | undefined>;
-
-// Vite injects `import.meta.env`. We don't depend on `vite/client` types to
-// keep the tsconfig untouched; a small local shim is enough.
-const env: EnvMap =
-  (import.meta as unknown as { env?: EnvMap }).env ?? {};
+// import.meta.env is typed locally in src/vite-env.d.ts — no unknown,
+// no casts, no aliasing. Read directly at call sites so Vite's static
+// replacement plugin can substitute the build-time values.
 
 const DEFAULT_HOST = "https://us.i.posthog.com";
 const OPT_OUT_KEY = "tg_analytics_opt_out";
@@ -57,7 +54,11 @@ export function initAnalytics(): boolean {
     return false;
   }
 
-  const key = env.VITE_POSTHOG_KEY;
+  // Read import.meta.env.VITE_X DIRECTLY here so Vite's static
+  // replacement plugin can substitute the literal value at build time.
+  // Aliasing (`const env = import.meta.env`) defeats the replacement and
+  // leaves a runtime lookup against an empty object.
+  const key = import.meta.env.VITE_POSTHOG_KEY;
   if (!key) {
     // One-time info-level breadcrumb so devs running locally aren't confused.
     // eslint-disable-next-line no-console
@@ -65,7 +66,7 @@ export function initAnalytics(): boolean {
     return false;
   }
 
-  const host = env.VITE_POSTHOG_HOST || DEFAULT_HOST;
+  const host = import.meta.env.VITE_POSTHOG_HOST || DEFAULT_HOST;
 
   try {
     posthog.init(key, {
