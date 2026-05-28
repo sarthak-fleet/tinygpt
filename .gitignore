@@ -38,6 +38,9 @@ checkpoints/*
 *.bin
 *.pt
 *.ckpt
+# Gallery model files MUST be committed — they're the shipped artifact
+# and renamed to .bin so Cloudflare Pages caches them at the edge.
+!browser/public/gallery/*.bin
 
 # Datasets (keep examples/ and READMEs; ignore bulk corpora)
 data/raw/

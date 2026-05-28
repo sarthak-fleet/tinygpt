@@ -270,10 +270,10 @@ for (const slot of SLOTS) {
     console.log(`[${slot.id}] skipped (--only filter)`);
     continue;
   }
-  const dstPath = resolve(OUT_DIR, `${slot.id}.tinygpt`);
+  const dstPath = resolve(OUT_DIR, `${slot.id}.bin`);
 
   // Pick the canonical source.
-  let canonicalSrc = slot.canonicalOverride ?? resolve(DATA_DIR, `${slot.id}.tinygpt`);
+  let canonicalSrc = slot.canonicalOverride ?? resolve(DATA_DIR, `${slot.id}.bin`);
   let canonicalExists = false;
   try { await fs.access(canonicalSrc); canonicalExists = true; } catch {}
 
@@ -329,7 +329,7 @@ for (const slot of SLOTS) {
     blurb: slot.blurb,
     corpus: slot.corpus,
     corpusUrl: slot.corpusUrl,
-    file: `${slot.id}.tinygpt`,
+    file: `${slot.id}.bin`,
     params,
     paramCount,
     trainLoss,

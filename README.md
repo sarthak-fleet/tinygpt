@@ -146,6 +146,19 @@ Three discoveries worth more than the kernels themselves. The long-form is in
   one preset on one day. The honest framing is the scaling curve above —
   2.6× → 12.1× as `d_model` climbs from 96 to 256. Don't quote a flat ratio
   as the project's identity number.
+- **Cloudflare Pages caches by extension allowlist, not by your headers.**
+  The gallery `.tinygpt` model files (~18 MB each) were never edge-cached,
+  despite proper `Cache-Control: public, max-age=…, s-maxage=…` headers and
+  a Cache Rule deployed in the dashboard — `cf-cache-status: DYNAMIC` on
+  every request, downloads going to origin every time. A side-by-side
+  empirical test: identical 18 MB binaries served as `.bin` and `.dat` got
+  totally different cache treatment (`.bin` → MISS→REVALIDATED, `.dat` →
+  DYNAMIC), even with identical `Content-Type: application/octet-stream`.
+  Pages has an opaque internal allowlist of cacheable extensions that runs
+  *before* zone Cache Rules. The fix was a no-code rename: gallery files
+  now ship as `.bin`. Saved on origin egress, fast first-render globally,
+  no Worker / R2 detour. Pages is great until it isn't — and "isn't" is
+  poorly documented.
 
 ## Tech used
 
