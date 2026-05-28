@@ -274,9 +274,14 @@ for (const slot of SLOTS) {
   });
 }
 
+const wordForCount = (n) => ["zero", "one", "two", "three", "four", "five", "six"][n] ?? String(n);
 const manifest = {
   version: 1,
-  note: "All four models share the same architecture (12L, d=256, ctx=256, ~9.6M params, char-level). Each was trained from scratch in this browser for 5000 steps on ~1.1 MB of its corpus. Compare the samples — same machinery, different patterns.",
+  note:
+    `All ${wordForCount(built.length)} models share the same architecture ` +
+    `(12L, d=256, ctx=256, ~9.6M params, char-level). Each was trained from ` +
+    `scratch in this browser for 5000 steps on ~1.1 MB of its corpus. ` +
+    `Compare the samples — same machinery, different patterns.`,
   models: built,
 };
 await fs.writeFile(resolve(OUT_DIR, "manifest.json"), JSON.stringify(manifest, null, 2));
