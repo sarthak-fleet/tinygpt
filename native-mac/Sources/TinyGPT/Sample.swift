@@ -55,49 +55,35 @@ enum Sample {
         }
         let url = URL(fileURLWithPath: path)
 
-        // Read header to determine model config.
-        let file: TinyGPTFile
-        do {
-            file = try TinyGPTFileReader.read(url)
-        } catch {
-            fputs("error reading \(path): \(error)\n", stderr)
-            exit(1)
-        }
-        let h = file.header.config
-        let cfg = ModelConfig(
-            vocabSize: 256,
-            contextLength: h.ctx ?? 256,
-            nLayers: h.layers ?? 12,
-            nHeads: h.heads ?? 8,
-            dModel: h.dModel ?? 256,
-            dMlp: h.dMlp ?? 1024
-        )
+        // Unified loader — accepts .tinygpt files or HF model dirs.
+        print("loading \(url.lastPathComponent)…")
+        let load: ModelLoader.LoadResult
+        do { load = try ModelLoader.load(path) }
+        catch { fputs("error loading: \(error)\n", stderr); exit(1) }
+        let cfg = load.config
+        let model = load.model
 
-        print("loading \(url.lastPathComponent) (\(cfg.nLayers)L, d=\(cfg.dModel), ctx=\(cfg.contextLength))…")
-        let model = TinyGPTModel(cfg)
-        do {
-            try TinyGPTWeightLoader.load(file, into: model)
-        } catch {
-            fputs("error loading weights: \(error)\n", stderr)
-            exit(1)
-        }
-        // Apply one OR MORE LoRA adapters on top.
-        //   - 0 adapters: pure base
-        //   - 1 adapter:  base + adapter (the usual single fine-tune)
-        //   - 2+ adapters: composed via StackedLoraLinear; each adapter
-        //     contributes its own delta, scaled by its --lora-weight
+        // Apply one OR MORE LoRA adapters on top. Adapters carry their
+        // base architecture in the header so a from-scratch adapter
+        // can't accidentally load on an HF base, and vice versa.
         if !loraPaths.isEmpty {
             do {
                 let adapters = try loraPaths.map { try LoraAdapterReader.read(URL(fileURLWithPath: $0)) }
-                // Default missing weights to 1.0 each
                 while loraWeights.count < adapters.count { loraWeights.append(1.0) }
                 if adapters.count == 1 {
-                    try LoraAdapterReader.apply(adapters[0], to: model)
+                    try model.applyLora(adapters[0])
                     print("loaded LoRA: rank=\(adapters[0].header.rank) targets=\(adapters[0].header.targetSuffixes.joined(separator: ","))")
                 } else {
-                    try LoraStackInjection.apply(adapters, weights: loraWeights, to: model)
-                    let blend = zip(loraPaths, loraWeights).map { "\($0.0.split(separator: "/").last ?? "") @ \($0.1)" }.joined(separator: " + ")
-                    print("composed \(adapters.count) LoRAs: \(blend)")
+                    // Stacked composition currently wired for the from-scratch
+                    // path; HF stacking is the next step.
+                    if case .fromScratch(let m) = model {
+                        try LoraStackInjection.apply(adapters, weights: loraWeights, to: m)
+                        let blend = zip(loraPaths, loraWeights).map { "\($0.0.split(separator: "/").last ?? "") @ \($0.1)" }.joined(separator: " + ")
+                        print("composed \(adapters.count) LoRAs: \(blend)")
+                    } else {
+                        fputs("multi-LoRA composition isn't wired for HF models yet — apply one adapter at a time\n", stderr)
+                        exit(1)
+                    }
                 }
             } catch {
                 fputs("error loading LoRA adapter(s): \(error)\n", stderr)
@@ -116,13 +102,20 @@ enum Sample {
         fflush(stdout)
 
         let t0 = Date()
-        let cache = useKVCache ? KVCache(nLayers: cfg.nLayers) : nil
+        // KV cache currently only implemented for TinyGPTModel (from-scratch).
+        // HF path falls back to the uncached forward — slower per token but
+        // correct. Adding KV cache to TinyGPTModelHF is a follow-up.
+        let canUseCache: Bool
+        var fromScratchModel: TinyGPTModel? = nil
+        switch model {
+        case .fromScratch(let m): canUseCache = true; fromScratchModel = m
+        case .huggingFace: canUseCache = false
+        }
+        let useActualCache = useKVCache && canUseCache
+        let cache = useActualCache ? KVCache(nLayers: cfg.nLayers) : nil
 
-        if useKVCache, let cache {
-            // PREFILL: run the prompt through the cached path once, populates
-            // K/V for every layer. Then DECODE one token at a time, feeding
-            // only the new token and reusing the cache.
-            let prefillLogits = model.forwardCached(promptIds, cache: cache)
+        if useActualCache, let cache, let m = fromScratchModel {
+            let prefillLogits = m.forwardCached(promptIds, cache: cache)
             var lastLogits = prefillLogits[0..., prefillLogits.shape[1] - 1, 0...]
             for _ in 0..<maxTokens {
                 let nextId: MLXArray
@@ -138,17 +131,12 @@ enum Sample {
                     print(String(scalar), terminator: "")
                     fflush(stdout)
                 }
-                if cache.currentLength >= cfg.contextLength {
-                    // Cache is full — stop. Real production code would slide
-                    // the window, but for the demo we just halt.
-                    break
-                }
-                let logits = model.forwardCached(nextId.asType(promptIds.dtype), cache: cache)
+                if cache.currentLength >= cfg.contextLength { break }
+                let logits = m.forwardCached(nextId.asType(promptIds.dtype), cache: cache)
                 lastLogits = logits[0..., 0, 0...]
             }
         } else {
-            // Legacy uncached path — recomputes the whole context every token.
-            // Kept under --no-cache for benchmarking and bug isolation.
+            // Uncached forward — works on either model variant via AnyModel.
             var idx = promptIds
             for _ in 0..<maxTokens {
                 let T = idx.shape.last!
@@ -175,7 +163,8 @@ enum Sample {
         let elapsed = -t0.timeIntervalSinceNow
         let tokensPerSec = Double(maxTokens) / elapsed
         print("\n")
-        print("(\(maxTokens) tokens in \(String(format: "%.2f", elapsed))s — \(String(format: "%.0f", tokensPerSec)) tok/s · \(useKVCache ? "KV-cached" : "uncached"))")
+        let cacheLabel = useActualCache ? "KV-cached" : "uncached"
+        print("(\(maxTokens) tokens in \(String(format: "%.2f", elapsed))s — \(String(format: "%.0f", tokensPerSec)) tok/s · \(cacheLabel))")
     }
 
     private static func MLXRandomCategorical(_ logits: MLXArray) -> MLXArray {

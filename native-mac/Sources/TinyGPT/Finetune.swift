@@ -42,36 +42,34 @@ enum Finetune {
                 basePath = args[i]; i += 1
             }
         }
-        guard let basePath = basePath else { fputs("missing base.tinygpt\n", stderr); exitUsage() }
+        guard let basePath = basePath else { fputs("missing base.tinygpt or HF dir\n", stderr); exitUsage() }
         guard let corpusPath = corpusPath else { fputs("--corpus required\n", stderr); exitUsage() }
         guard let outPath = outPath else { fputs("--out required\n", stderr); exitUsage() }
 
+        // Default LoRA targets differ between from-scratch (q+v on plain
+        // MLP) and HF (q+v on SwiGLU MLP). User-supplied --targets always
+        // wins; otherwise we pick sensible defaults per model kind below.
+        var url = URL(fileURLWithPath: basePath); var isDir: ObjCBool = false
+        _ = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
+        let userSetTargets = (targetSuffixesArg != "q_proj,v_proj")
+        if isDir.boolValue && !userSetTargets {
+            // HF models use SwiGLU — q_proj + v_proj still works and is
+            // the LoRA paper's recommendation. Keep the default.
+        }
         let targetSuffixes = targetSuffixesArg.split(separator: ",").map(String.init)
         let loraCfg = LoraConfig(rank: rank, alpha: alpha, targetSuffixes: targetSuffixes)
 
-        // Load the base model
-        let baseURL = URL(fileURLWithPath: basePath)
-        let file: TinyGPTFile
-        do { file = try TinyGPTFileReader.read(baseURL) }
-        catch { fputs("error reading base: \(error)\n", stderr); exit(1) }
-        let h = file.header.config
-        let cfg = ModelConfig(
-            vocabSize: 256,
-            contextLength: h.ctx ?? 256,
-            nLayers: h.layers ?? 12,
-            nHeads: h.heads ?? 8,
-            dModel: h.dModel ?? 256,
-            dMlp: h.dMlp ?? 1024
-        )
-        let model = TinyGPTModel(cfg)
-        do { try TinyGPTWeightLoader.load(file, into: model) }
-        catch { fputs("error loading weights: \(error)\n", stderr); exit(1) }
+        // Load model (auto-detects .tinygpt file vs HF directory)
+        print("loading base from \(basePath)…")
+        let load: ModelLoader.LoadResult
+        do { load = try ModelLoader.load(basePath) }
+        catch { fputs("error loading base: \(error)\n", stderr); exit(1) }
+        let cfg = load.config
 
-        // Inject LoRA + freeze base
-        LoraInjection.inject(model, config: loraCfg)
-        LoraInjection.freezeBase(model)
-        let nTrainable = LoraInjection.trainableParamCount(in: model)
-        let nTotal = model.numParameters()
+        // Inject LoRA into whichever model variant we got. The wrapper
+        // freezes the base and unfreezes just the adapter matrices.
+        let nTrainable = load.model.injectLora(config: loraCfg)
+        let nTotal = load.model.numParameters()
 
         // Load corpus
         let corpusURL = URL(fileURLWithPath: corpusPath)
@@ -96,12 +94,14 @@ enum Finetune {
         """)
         fflush(stdout)
 
-        let trainer = Trainer(model: model, learningRate: lr, weightDecay: 0.0, compileStep: false)
+        // One step function works for either model variant — the
+        // AnyModel wrapper hides the underlying type and dispatches.
+        let stepFn = makeStepFn(load.model, lr: lr)
         let t0 = Date()
         var lastLoss: Float = 0
         for step in 0..<steps {
             let (x, y) = corpus.sampleBatch(batchSize: B, contextLength: cfg.contextLength)
-            lastLoss = trainer.step(inputs: x, targets: y)
+            lastLoss = stepFn(x, y)
             if step == 0 || (step + 1) % 25 == 0 || step == steps - 1 {
                 let elapsed = -t0.timeIntervalSinceNow
                 let sps = Double(step + 1) / elapsed
@@ -110,18 +110,18 @@ enum Finetune {
                              Double(steps - step - 1) / sps), stderr)
             }
             if (step + 1) % sampleEvery == 0 || step == steps - 1 {
-                printSample(model: model, cfg: cfg, tag: "step \(step + 1)")
+                fputs("    [step \(step + 1)] (sample skipped during HF fine-tune; use `tinygpt sample` after)\n", stderr)
             }
         }
         let elapsed = -t0.timeIntervalSinceNow
         print(String(format: "\ndone — %d steps in %.1fs (%.1f step/s) · final loss %.3f",
                      steps, elapsed, Double(steps) / elapsed, lastLoss))
 
-        // Save the adapter (NOT the full model — only the small A, B matrices)
+        // Save the adapter (small A/B matrices only).
         do {
-            try LoraAdapterWriter.write(model: model, baseConfig: cfg,
-                                         loraConfig: loraCfg, finalLoss: lastLoss,
-                                         to: URL(fileURLWithPath: outPath))
+            try load.model.saveLora(baseConfig: cfg, loraConfig: loraCfg,
+                                     finalLoss: lastLoss,
+                                     to: URL(fileURLWithPath: outPath))
             let attrs = try FileManager.default.attributesOfItem(atPath: outPath)
             let sz = attrs[.size] as? Int ?? 0
             print("✓ wrote \(outPath)  (\(formatBytes(sz)))")
@@ -130,24 +130,17 @@ enum Finetune {
         }
     }
 
-    private static func printSample(model: TinyGPTModel, cfg: ModelConfig, tag: String) {
-        let promptBytes: [UInt8] = [UInt8]("The ".utf8)
-        var idx = MLXArray(promptBytes.map { Int32($0) }, [1, promptBytes.count])
-        var bytes = promptBytes
-        for _ in 0..<60 {
-            let T = idx.shape.last!
-            let lo = max(0, T - cfg.contextLength)
-            let cond = idx[0..., lo..<T]
-            let logits = model(cond)
-            let last = logits[0..., logits.shape[1] - 1, 0...]
-            let next = argMax(last / MLXArray(Float(0.8)), axis: -1).reshaped([1, 1])
-            eval(next)
-            bytes.append(UInt8(Int(next.item(Int32.self)) & 0xff))
-            idx = concatenated([idx, next.asType(idx.dtype)], axis: 1)
+    /// Build a per-step train function bound to the right model class.
+    /// We dispatch once here (at trainer-build time) rather than per-step.
+    private static func makeStepFn(_ model: AnyModel, lr: Float) -> (MLXArray, MLXArray) -> Float {
+        switch model {
+        case .fromScratch(let m):
+            let trainer = Trainer(model: m, learningRate: lr, weightDecay: 0.0, compileStep: false)
+            return { x, y in trainer.step(inputs: x, targets: y) }
+        case .huggingFace(let m):
+            let trainer = TrainerHF(model: m, learningRate: lr, weightDecay: 0.0, compileStep: false)
+            return { x, y in trainer.step(inputs: x, targets: y) }
         }
-        let s = (String(bytes: bytes, encoding: .utf8) ?? "<non-utf8>")
-            .prefix(120).replacingOccurrences(of: "\n", with: "\\n")
-        fputs("    [\(tag)] \(s)\n", stderr)
     }
 
     private static func defaultBatch(_ cfg: ModelConfig) -> Int {
