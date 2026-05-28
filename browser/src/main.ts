@@ -803,6 +803,16 @@ byId<HTMLButtonElement>("reset").addEventListener("click", () => {
   refreshEstimate("reset to defaults");
   refreshSampleNote();
   setModelStatus("✓ reset", "ok");
+  // Auto-clear the ✓ reset feedback after a moment — leaving it sticky
+  // means the user comes back later thinking the page is in a weird
+  // half-state.
+  setTimeout(() => setModelStatus(""), 2400);
+
+  // Navigate back to the Setup screen (Step 1) and bring back the
+  // "Load from gallery" banner so the user has a clear next move.
+  (window as unknown as { __tgGoToSetup?: () => void }).__tgGoToSetup?.();
+  const banner = document.getElementById("demoBanner");
+  if (banner) banner.hidden = false;
 });
 
 els.continueBtn.addEventListener("click", () => {
@@ -2821,6 +2831,10 @@ function setupScreens(): void {
       const name = tab.dataset.screen as "setup" | "watch";
       if (name === "watch" && !modelLoaded) return; // gated
       setActive(name);
+      // Blur so the just-clicked tab doesn't retain a focus ring next to
+      // the now-active style — fixes "the other tab is highlighted for a
+      // long while" feedback when toggling between Setup ↔ Watch.
+      tab.blur();
     });
   });
 
@@ -2850,6 +2864,16 @@ function setupScreens(): void {
   (window as unknown as { __tgGoToWatch?: () => void }).__tgGoToWatch = () => {
     enableWatch();
     setActive("watch");
+  };
+  // After Reset clears the loaded model, callers can navigate the user
+  // back to Setup AND re-disable the Watch tab so they can't navigate
+  // back to an empty Watch screen. Used by the Reset handler.
+  (window as unknown as { __tgGoToSetup?: () => void }).__tgGoToSetup = () => {
+    modelLoaded = false;
+    tabs.forEach((t) => {
+      if (t.dataset.screen === "watch") t.disabled = true;
+    });
+    setActive("setup");
   };
 }
 
@@ -3023,19 +3047,25 @@ async function setupGallery(): Promise<void> {
   const noteEl = document.getElementById("galleryNote");
   if (!banner || !openBtn || !dialog || !grid || !closeBtn) return;
 
-  // Hide once any model is loaded — avoid clutter for return visitors.
-  if (latestState) { banner.hidden = true; return; }
+  // Banner stays visible always now — even after a model is loaded, the
+  // user might want to swap to a different gallery model. The user
+  // explicitly asked: "On step 1 I should still see the option to load
+  // from gallery."
 
   let manifest: GalleryManifest | null = null;
   try {
     const resp = await fetch("/gallery/manifest.json", { cache: "no-cache" });
-    if (!resp.ok) return; // gallery not deployed yet
+    if (!resp.ok) { banner.hidden = true; return; }
     manifest = await resp.json() as GalleryManifest;
   } catch {
+    banner.hidden = true;
     return;
   }
-  if (!manifest || !Array.isArray(manifest.models) || manifest.models.length === 0) return;
-  banner.hidden = false;
+  if (!manifest || !Array.isArray(manifest.models) || manifest.models.length === 0) {
+    banner.hidden = true;
+    return;
+  }
+  // Banner stays visible (it was pre-painted that way to kill layout shift).
 
   closeBtn.addEventListener("click", () => dialog.close());
   // Click on backdrop closes — dialog target is the dialog itself when the

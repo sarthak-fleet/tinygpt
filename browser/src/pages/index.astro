@@ -549,6 +549,11 @@ const pageStyle = `
         padding: 16px 22px;
         font-size: 13px;
         color: var(--muted);
+        /* Reserve vertical space for the eventual capability pills so the
+           "detecting…" → full-pill-row transition doesn't push everything
+           below down — was the visible "shaking" on first paint. Roughly
+           two rows of pills at typical density. */
+        min-height: 64px;
       }
       .machine-card > summary::-webkit-details-marker { display: none; }
       .machine-card > summary:hover { background: var(--panel-2); }
@@ -2900,7 +2905,10 @@ const pageBody = `
         </button>
       </div>
 
-      <div id="demoBanner" class="demo-banner" hidden>
+      <!-- Pre-painted visible. setupGallery() will hide it on the rare case
+           the manifest fetch fails or returns no models. Static visibility
+           from first paint kills the layout-shift the user noticed. -->
+      <div id="demoBanner" class="demo-banner">
         <div class="demo-banner-body">
           <strong>Two ways:</strong>
           <span>browse the <em>gallery</em> for pre-trained models (same architecture, different corpora) and hit Generate, or train your own from scratch using the controls below (~4–15&nbsp;min).</span>
@@ -3116,7 +3124,7 @@ const pageBody = `
             <button id="resetTop" class="ghost-btn reset-top" type="button" title="Clear corpus, config, and trained model (same as Model → Reset)">↺ Reset</button>
             <div class="model-menu">
               <button id="modelMenuBtn" class="secondary" type="button" aria-haspopup="menu" aria-expanded="false">
-                Model <span class="chev-down" aria-hidden="true">▾</span>
+                Export <span class="chev-down" aria-hidden="true">▾</span>
               </button>
               <div id="modelMenu" class="model-menu-list" role="menu" hidden>
                 <button id="continueBtn" class="menu-item" type="button" disabled role="menuitem">

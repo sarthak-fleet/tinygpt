@@ -188,11 +188,11 @@ export class LossChart {
     }
 
     // --- X range -----------------------------------------------------
-    // Live-training case: data begins near step 0; span 0..maxStepHint so
-    // the line GROWS from the left edge as training progresses.
-    // Loaded-model case: data starts mid-run (e.g., step 2956 for a saved
-    // history that was capped at the last 512 points); span first..last
-    // so the line fills the plot instead of leaving 60% empty on the left.
+    // Live training spans 0..maxStepHint (line grows from the left).
+    // Loaded models span first..last of the actual saved data — no
+    // synthetic prefix, no fake interpolation. If the saved history was
+    // truncated, the user sees exactly what's stored; the gap (if any)
+    // is disclosed via the "saved from step N" label below.
     const firstStep = this.points[0].step;
     const lastStep = this.points[this.points.length - 1].step;
     const targetMax = this.maxStepHint || lastStep;
@@ -324,9 +324,10 @@ export class LossChart {
     // Legend.
     this.drawLegend(pad);
 
-    // X-axis labels — show min step on the left (only when nonzero, to
-    // avoid the redundant "step 0" on live training) and last step on the
-    // right. For loaded models with truncated history, both labels appear.
+    // X-axis labels — when minStep is nonzero (a loaded model whose saved
+    // history was truncated), show both ends so it's obvious which range
+    // the chart represents. Live training (minStep=0) only labels the
+    // right side to avoid the redundant "step 0".
     ctx.fillStyle = COLOR_AXIS_TEXT;
     ctx.font = "10.5px ui-monospace, monospace";
     if (minStep > 0) {
