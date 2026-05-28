@@ -225,7 +225,8 @@ const pageStyle = `
           var(--panel);
         border: 1px solid var(--line);
         border-radius: 12px;
-        animation: rise-in 0.45s var(--ease-out-expo) 0.4s both;
+        /* No animation: appearing late = wonky landing. The card is in
+           the HTML from first paint; show it without delay. */
       }
       .intro-card[hidden] { display: none; }
       /* Pre-paint hide for repeat visitors — set by the inline script in
@@ -276,7 +277,7 @@ const pageStyle = `
           var(--panel);
         border: 1px solid var(--accent-dim);
         border-radius: 12px;
-        animation: rise-in 0.45s var(--ease-out-expo) 0.7s both;
+        /* No fade-in: appearing 0.7s later than the page = wonky landing. */
       }
       .demo-banner[hidden] { display: none; }
       .demo-banner-body {
@@ -343,11 +344,16 @@ const pageStyle = `
       .gallery-close {
         position: absolute;
         top: 14px; right: 14px;
+        display: inline-flex; align-items: center; justify-content: center;
         background: transparent;
         border: 1px solid var(--line);
         border-radius: 6px;
         color: var(--muted);
-        font: 18px/1 var(--font-sans);
+        /* No font-size on the × itself — line-height inherits from the
+           flex centering, and an oversized font shifts the glyph off-axis
+           inside the 30×30 box. Use a fixed 20px so the × renders centered. */
+        font: 20px/1 var(--font-sans);
+        padding: 0;
         width: 30px; height: 30px;
         cursor: pointer;
         transition: color 0.15s, border-color 0.15s, background 0.15s;
@@ -397,7 +403,19 @@ const pageStyle = `
         cursor: not-allowed;
       }
       .gallery-card.loading {
-        border-color: var(--accent-dim);
+        border-color: var(--accent);
+        background: var(--panel);
+        position: relative;
+      }
+      .gallery-card.loading::after {
+        content: "loading model…";
+        position: absolute; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(8, 14, 18, 0.84);
+        color: var(--accent);
+        font: 600 13px/1 var(--font-sans);
+        border-radius: 12px;
+        backdrop-filter: blur(2px);
       }
       .gallery-card-head {
         display: flex; align-items: center; gap: 10px;
@@ -793,8 +811,21 @@ const pageStyle = `
       @media (prefers-reduced-motion: reduce) {
         .gpu-active-dot { animation: none; }
       }
+      .reset-nav {
+        margin-left: auto;
+        padding: 7px 14px;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font: 500 12px/1 var(--font-sans);
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+      }
+      .reset-nav:hover { color: var(--fg); border-color: var(--line-strong); background: var(--bg); }
       @media (max-width: 720px) {
         .gpu-active-badge { margin-left: 0; }
+        .reset-nav { margin-left: 0; }
         .screen-nav { flex-wrap: wrap; gap: 8px; }
       }
       .screen-tab {
@@ -2860,6 +2891,13 @@ const pageBody = `
             <span id="gpuActiveTps">– tok/s</span>
           </span>
         </span>
+        <!-- Persistent Reset — visible from both Setup and Watch screens.
+             Clears the loaded model + corpus + config so users can return
+             to the gallery / start fresh. Mirrors the in-Setup #reset. -->
+        <button id="resetNav" class="reset-nav" type="button"
+                title="Clear loaded model + corpus and return to setup">
+          ↺ Reset
+        </button>
       </div>
 
       <div id="demoBanner" class="demo-banner" hidden>
@@ -3237,7 +3275,7 @@ const pageBody = `
               <span class="label-jargon">tokens</span>
               <button class="info" data-explain="genTokens">?</button>
             </label>
-            <input id="genTokens" type="number" value="160" min="16" max="512" />
+            <input id="genTokens" type="number" value="300" min="16" max="512" />
           </div>
           <button id="sample" class="secondary" disabled>Generate</button>
         </div>

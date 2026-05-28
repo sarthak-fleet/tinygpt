@@ -32,7 +32,7 @@ interface TourStep {
 
 const STEPS: TourStep[] = [
   {
-    target: ".machine",
+    target: ".machine-card",
     title: "Step 1 · Your machine",
     body: "We detected your CPU, RAM, and which graphics APIs your browser supports. The Apply button drops in a model size that should train in well under a minute here.",
     placement: "bottom-start",

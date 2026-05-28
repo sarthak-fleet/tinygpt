@@ -30,7 +30,7 @@ import {
   headsFor,
 } from "./sizing";
 import { loadRun, loadState, requestDurableStorage, saveRun, saveState } from "./storage";
-import { hasSeenTour, markTourSeen, startTour } from "./tour";
+import { markTourSeen, startTour } from "./tour";
 import { DEFAULT_CONFIG, type FromWorker, type InspectResult, type RunConfig, type ToWorker } from "./types";
 import {
   initAnalytics,
@@ -733,6 +733,11 @@ function getResetCorpus(): string { return defaultCorpus; }
 {
   const topReset = document.getElementById("resetTop");
   if (topReset) topReset.addEventListener("click", () => document.getElementById("reset")?.click());
+  // Persistent reset button in the screen-nav row (visible from both
+  // Setup and Watch screens, so a user who's loaded a gallery model
+  // can return to the gallery without hunting for the Model ▾ menu).
+  const navReset = document.getElementById("resetNav");
+  if (navReset) navReset.addEventListener("click", () => document.getElementById("reset")?.click());
 }
 
 byId<HTMLButtonElement>("reset").addEventListener("click", () => {
@@ -836,6 +841,14 @@ function finalizeSampleAnalytics(text: string): void {
 }
 
 els.sample.addEventListener("click", () => {
+  // Guard against double-click stacking two concurrent generations in the
+  // worker (which produced interleaved/parallel output). The button is
+  // re-enabled when "sample_done" lands.
+  if (els.sample.disabled) return;
+  els.sample.disabled = true;
+  els.sample.dataset.originalLabel = els.sample.textContent ?? "Generate";
+  els.sample.textContent = "generating…";
+
   const promptVal = byId<HTMLInputElement>("prompt").value;
   const temperatureVal = parseFloat(byId<HTMLInputElement>("temp").value);
   lastSampleRequest = {
@@ -2124,6 +2137,13 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       // Legacy single-shot path (kept for backwards compat — older callers
       // post a full sample at once).
       lastSampleText = msg.text;
+      // Re-enable the Generate button (legacy WASM path doesn't stream).
+      els.sample.disabled = false;
+      const origLabel = els.sample.dataset.originalLabel;
+      if (origLabel) {
+        els.sample.textContent = origLabel;
+        delete els.sample.dataset.originalLabel;
+      }
       typewriteOutput(msg.text);
       requestInspect(msg.text);
       finalizeSampleAnalytics(msg.text);
@@ -2149,6 +2169,13 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       lastSampleText = msg.text;
       els.output.classList.remove("empty");
       els.output.textContent = msg.text;
+      // Re-enable the Generate button now that the worker is idle.
+      els.sample.disabled = false;
+      const originalLabel = els.sample.dataset.originalLabel;
+      if (originalLabel) {
+        els.sample.textContent = originalLabel;
+        delete els.sample.dataset.originalLabel;
+      }
       requestInspect(msg.text);
       finalizeSampleAnalytics(msg.text);
       const statsEl = document.getElementById("sampleStats") as HTMLElement | null;
@@ -2263,6 +2290,16 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
     case "error":
       setRunning(false);
       setStatus(`error: ${msg.message}`, true);
+      // Re-enable the Generate button so the user can retry — otherwise
+      // it stays stuck in "generating…" forever on any worker error.
+      if (els.sample.disabled) {
+        els.sample.disabled = false;
+        const errOrig = els.sample.dataset.originalLabel;
+        if (errOrig) {
+          els.sample.textContent = errOrig;
+          delete els.sample.dataset.originalLabel;
+        }
+      }
       break;
   }
 };
@@ -3133,13 +3170,14 @@ function setupTour(): void {
       maybeFirePlaygroundLoaded();
       markTourSeen();
     });
-    if (!hasSeenTour() && typeof welcome.showModal === "function") {
-      welcome.showModal();
-    } else {
-      // Returning visitor — welcome modal stayed hidden, so fire the event
-      // right away rather than waiting for a click that won't happen.
-      maybeFirePlaygroundLoaded();
-    }
+    // Welcome modal does NOT auto-show on first visit anymore — it was
+    // wonky landing UX (modal blocks the page right as the user lands).
+    // The intro card + the demo banner already communicate "what is this"
+    // without blocking. Tour stays available via the keyboard shortcut (T)
+    // and the explicit tourBtn. Fire the playground_loaded event immediately
+    // — there's no modal dismissal to wait on.
+    maybeFirePlaygroundLoaded();
+    markTourSeen(); // suppress any future auto-show paths too
   } else {
     // No welcome modal in the DOM — fire immediately so the event still lands.
     maybeFirePlaygroundLoaded();
