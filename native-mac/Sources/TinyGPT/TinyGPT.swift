@@ -40,6 +40,8 @@ struct TinyGPT {
             Compare.run(args: Array(args.dropFirst()))
         case "hf-inspect":
             HFInspect.run(args: Array(args.dropFirst()))
+        case "hf-load":
+            HFLoad.run(args: Array(args.dropFirst()))
         case "sample":
             Sample.run(args: Array(args.dropFirst()))
         case "debug-names":
