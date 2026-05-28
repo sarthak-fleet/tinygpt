@@ -40,6 +40,13 @@ export default defineConfig({
   },
 
   vite: {
+    // Astro defaults Vite's envPrefix to "PUBLIC_" only. Our analytics
+    // shim reads VITE_POSTHOG_KEY (the Vite-standard prefix), and the
+    // GitHub Actions secret is named accordingly. Without this override,
+    // Astro/Vite doesn't inline `import.meta.env.VITE_POSTHOG_KEY` and
+    // Rollup tree-shakes the entire posthog.init() branch as dead code —
+    // the bundle ends up with only the "Analytics disabled" cold path.
+    envPrefix: ["PUBLIC_", "VITE_"],
     server: {
       // The WGSL kernels live in ../webgpu (shared Phase 5 location), one
       // level above this Astro root — allow the dev server to serve files
