@@ -1,5 +1,6 @@
 import Foundation
 import TinyGPTIO
+import TinyGPTModel
 
 /// `tinygpt hf-inspect <dir>` — point at a downloaded HuggingFace
 /// model directory (the `config.json`, `tokenizer.json`,
@@ -48,11 +49,16 @@ enum HFInspect {
         let approxParams = estimateParams(cfg: cfg)
         print("  approximate params: \(formatLargeInt(approxParams))")
 
-        if let reason = cfg.unsupportedReason() {
-            print("\n⚠ unsupported by TinyGPTModel's current loader: \(reason)")
-            print("  Adapter work needed before this model loads.")
+        let missing = HFWeightMapping.missingCapabilities(for: cfg)
+        if missing.isEmpty {
+            print("\n✓ TinyGPTModel can load this architecture as-is.")
         } else {
-            print("\n✓ architecture is within TinyGPTModel's current loader scope.")
+            print("\n⚠ TinyGPTModel needs \(missing.count) capability(ies) added before loading this model:")
+            for item in missing {
+                print("    • \(item)")
+            }
+            print("\n  Each is a discrete piece of engineering. Once they land, the same")
+            print("  safetensors + config inspector above will say ✓.")
         }
 
         // Look for safetensors files
