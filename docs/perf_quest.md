@@ -36,6 +36,34 @@ it preserves loss.
 
 Each lever is independently shippable — failure of one doesn't block another.
 
+## Most recent landing (commits `a9a8150` + `9928b71`) — f16-storage matmul SHIPPED
+
+The first opportunistic accelerator from the queue is live and gated.
+`webgpu/train_f16.wgsl` (`matmul_blocked_f16` + `pack_to_f16` kernels)
+ships alongside the existing f32 vec4 path; `webgpu/ops.ts` runs a
+numerics gate at `GpuOps.create()` time (M=64 K=128 N=128 reference
+matmul, magnitude-aware tolerance — see `docs/precision.md` for the full
+framework). On pass, `GpuModel.prepareForInference()` packs every
+matmul-shaped weight to a packed-f16 GPU buffer; `linear()` dispatches
+the f16 path opportunistically. `trainStep` invalidates the cache so
+post-AdamW stale-weight bugs can't happen.
+
+Measured on M-series WebGPU: gate passes with mean_rel=0.075% and
+max_abs=1.33e-4 (both well under threshold). End-to-end smoke
+(`browser/smoke_f16.mjs`) confirms identical generation between f32 and
+f16 paths. The `+f16 storage` pill lights up in the capability cluster
+once the gate passes.
+
+**Status of remaining levers** — the kernel work for #91 / #92 / #93 is
+non-trivial enough (3-5 hours each, including numerics verification per
+[[feedback-no-quality-regression]]) that pushing them all into one
+session risks shipping fragile code. The right move now: let the gallery
+retrain (#85) complete on the SHIPPED stack, ship the launch with #90 as
+the headline perf improvement, and treat #91 (shader-f16 compute), #92
+(cooperative matrix), #93 (WebNN sampling) as the v2 perf drop after the
+HN launch. Each carries an implementation sketch in this doc + the
+gate-framework pattern in `docs/precision.md`.
+
 ## What landed in commit `28f2533`
 
 - `webgpu/tensor.ts` — `createGpuContext` opportunistically requests
@@ -57,14 +85,9 @@ Each lever is independently shippable — failure of one doesn't block another.
 
 ## What's queued (in execution order)
 
-1. **#90 — Wire storage-f16 matmul into the production training path.**
-   The existing kernel `matmul_tiled_f16.wgsl` is a standalone benchmark
-   runner; the production path is `train.wgsl` with a six-storage-buffer
-   bind layout. Work: mirror the `train_vec4.wgsl` approach — write
-   `train_f16.wgsl` with the same bind layout but `array<u32>` inputs
-   (packed f16), add `matmul_blocked_f16` entries to `ops.ts`, pre-pack
-   weight `GpuTensor`s to f16 at upload. Verify against f32 over 500
-   Shakespeare steps; if loss diverges, disable.
+1. **#90 — Storage-f16 matmul in the production path** ✅ SHIPPED in
+   `a9a8150` + `9928b71`. See the "Most recent landing" section above and
+   `docs/precision.md` for the full numerics framework.
 2. **#91 — `shader-f16` full-compute matmul.** New WGSL with `enable f16;`
    and `f16` accumulators. Gated on `capabilities.shaderF16`. Same
    numerics gate.
@@ -145,15 +168,20 @@ That gates publishing on every lever working. Sequencing within that:
 
 ## Cross-references
 
+- `docs/precision.md` — the numerics gate framework. Read this before
+  writing any new fast path.
 - `browser/src/pages/roadmap.astro` lever 21 documents the same frontier
   with public-facing framing (what users see).
 - `docs/lessons.md` carries the parallel-training-on-one-GPU lesson (added
   as part of session retrospective work).
-- `docs/decision_log.md` will get a new entry pinning the "no quality
-  regression" rule and the parallel-training pivot.
+- `docs/decision_log.md` decisions 18, 19, 20 — the scope pivot, the
+  no-regression rule, and the parallel-training-on-one-GPU postmortem.
 - The capability detection layer lives in `webgpu/tensor.ts`; capability UI
   + nudge in `browser/src/main.ts`; pill explainers in
   `browser/src/explainers.ts`.
+- The f16 storage path: `webgpu/train_f16.wgsl` (shader),
+  `webgpu/ops.ts:verifyF16Storage` (gate),
+  `webgpu/gpu_model.ts:prepareForInference` (activation), `browser/smoke_f16.mjs` (test).
 
 This doc is the picking-up-where-we-left-off page for whoever resumes the
 quest. Keep it terse; update it as levers ship.
