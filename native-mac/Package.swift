@@ -25,6 +25,11 @@ let package = Package(
         // MLX-Swift — Apple ML primitives for Apple Silicon. Pinned to a
         // recent stable; bump the lower bound as the API stabilises.
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.25.0"),
+        // HuggingFace's canonical Swift tokenizer library. Supports BPE,
+        // SentencePiece, tiktoken-style; used by mlx-swift-examples and
+        // every production Swift LLM project. We use it for the HF model
+        // loading path; our from-scratch byte-level path doesn't need it.
+        .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
     ],
     targets: [
         .target(
@@ -39,6 +44,8 @@ let package = Package(
                 .product(name: "MLXOptimizers", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
                 .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "Hub", package: "swift-transformers"),
             ]
         ),
         .executableTarget(
