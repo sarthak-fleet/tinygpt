@@ -76,6 +76,14 @@ const SLOTS = [
     corpus: "corbt/all-recipes",
     corpusUrl: "https://huggingface.co/datasets/corbt/all-recipes",
   },
+  {
+    id: "chat",
+    name: "Q&A chat",
+    icon: "💬",
+    blurb: "User → Assistant Q&A pairs from Dolly-15k. Same arch, learned to respond in chat format.",
+    corpus: "databricks/databricks-dolly-15k",
+    corpusUrl: "https://huggingface.co/datasets/databricks/databricks-dolly-15k",
+  },
 ];
 
 // fp32 → fp16 conversion — duplicate of convert_to_fp16.mjs's helper so we
