@@ -522,8 +522,10 @@ async function doRestore(state: ArrayBuffer, cfg: RunConfig): Promise<void> {
         post({ type: "status", message: "restored on WebGPU — warming up inference pipelines…" });
         // Warm up the B=1 inference pipelines so the first Generate click
         // doesn't pay the 10–60s pipeline-compile cost. Cheap (~one forward).
+        // warmupGenerate posts its own final "ready to generate." status —
+        // which carries the optional " · f16-storage matmul active" suffix
+        // when the fast path activates. Don't overwrite it here.
         await warmupGenerate(gpuModel, cfg.ctx);
-        post({ type: "status", message: "ready to generate." });
         return;
       } catch (gpuErr) {
         // GPU restore failed (device unavailable, OOM, shape mismatch).
