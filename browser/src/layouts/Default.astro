@@ -77,6 +77,12 @@ const {
       </>
     )}
 
+    <!-- Preload the gallery manifest so the demo banner doesn't pop in
+         late on a cold load (was waiting for the JS bundle to evaluate
+         before kicking off the fetch). 2 KB JSON, tiny win, big perceived
+         smoothness improvement on first paint. -->
+    <link rel="preload" href="/gallery/manifest.json" as="fetch" crossorigin="anonymous" />
+
     <slot name="head" />
 
     <!-- Pre-paint layout-shift guard. Reads localStorage SYNCHRONOUSLY before

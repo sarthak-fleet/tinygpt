@@ -36,11 +36,17 @@ export class LossChart {
   private readonly ctx: CanvasRenderingContext2D;
   private points: Point[] = [];
   private pulsePhase = 0;
-  private rafId: number | null = null;
+  private pulseTimer: number | null = null;
   private hoverX: number | null = null; // CSS pixels relative to canvas
   private lastPadL = 44;
   private lastPlotW = 0;
   private tooltip: HTMLDivElement | null = null;
+  /** When the consumer knows the target step count (e.g., maxSteps from
+   *  the training config), pass it in so the x-axis spans the FULL run
+   *  from step 0. Without this, the axis auto-scales to "last seen step",
+   *  which makes the first ~10% of training look squished into the left
+   *  edge and unreadable. */
+  private maxStepHint = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d");
@@ -125,26 +131,37 @@ export class LossChart {
     this.draw();
   }
 
+  /** Hint the chart about the full target step count so the x-axis spans
+   *  step 0..maxSteps from the very first frame, instead of squishing
+   *  early points into the left edge as new data arrives. */
+  setMaxStep(maxSteps: number): void {
+    this.maxStepHint = Math.max(0, maxSteps);
+    this.draw();
+  }
+
   addPoint(p: Point): void {
     this.points.push(p);
     this.startPulseLoop();
     this.draw();
   }
 
+  /** Throttled redraw loop — at 60fps the constant draw was visibly
+   *  taxing the CPU on lower-end machines (user reported "feels like
+   *  something's happening a lot" lag). 4Hz is plenty for the pulse to
+   *  read as alive, and the main thread stays mostly idle between ticks. */
   private startPulseLoop(): void {
-    if (this.rafId != null) return;
+    if (this.pulseTimer != null) return;
     const tick = () => {
-      this.pulsePhase += 0.06;
+      this.pulsePhase += 0.5;
       this.draw();
-      this.rafId = requestAnimationFrame(tick);
     };
-    this.rafId = requestAnimationFrame(tick);
+    this.pulseTimer = window.setInterval(tick, 250); // 4 redraws/sec
   }
 
   private stopPulseLoop(): void {
-    if (this.rafId != null) {
-      cancelAnimationFrame(this.rafId);
-      this.rafId = null;
+    if (this.pulseTimer != null) {
+      window.clearInterval(this.pulseTimer);
+      this.pulseTimer = null;
     }
   }
 
@@ -170,7 +187,11 @@ export class LossChart {
       return;
     }
 
-    const maxStep = Math.max(1, this.points[this.points.length - 1].step);
+    // X-axis spans 0..(target maxSteps if known, else last observed step).
+    // Using the target makes the chart line GROW from the left edge instead
+    // of stretching auto-scaled at every new point.
+    const lastStep = this.points[this.points.length - 1].step;
+    const maxStep = Math.max(1, this.maxStepHint || lastStep);
     let maxLoss = 0;
     for (const p of this.points) {
       maxLoss = Math.max(maxLoss, p.trainLoss, p.valLoss ?? 0);

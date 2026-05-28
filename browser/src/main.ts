@@ -601,6 +601,10 @@ els.start.addEventListener("click", () => {
   }
   history = [];
   chart.reset();
+  // Hint the chart about the full step range NOW (before any points
+  // arrive), so the x-axis spans 0..maxSteps from frame one. Otherwise
+  // early points crowd into the left edge as the axis auto-scales.
+  chart.setMaxStep(parseInt(byId<HTMLInputElement>("maxSteps").value, 10) || 0);
   setOutput("Training… generate once a few steps have run.", true);
   setStatus("");
   setProgress(0, 1);
@@ -1497,6 +1501,9 @@ async function loadModelFromFile(file: File, label = file.name): Promise<void> {
     if (meta.lossHistory && meta.lossHistory.length > 0) {
       history = meta.lossHistory.map((p) => ({ step: p.step, trainLoss: p.train, valLoss: p.val ?? undefined }));
       chart.reset();
+      // Span the chart to the last step of the loaded run so the line fills
+      // the plot rather than leaving empty space on the right.
+      chart.setMaxStep(history[history.length - 1]?.step ?? 0);
       for (const pt of history) chart.addPoint(pt);
       // Populate the primary stats with the loaded model's final state so
       // the Watch screen reads as "this is what you'd see if you'd trained
