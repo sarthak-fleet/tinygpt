@@ -313,9 +313,47 @@ struct ContentView: View {
                     .buttonStyle(PrimaryButtonStyle(color: Theme.accent))
                     .disabled(controller.loadedItem == nil)
                 }
+
+                Button(controller.isEvaluating ? "Scoring…" : "Score") {
+                    runEval()
+                }
+                .buttonStyle(.bordered)
+                .disabled(controller.loadedItem == nil || controller.isEvaluating)
+                .help("Pick a text file; the model's cross-entropy loss + BPB + perplexity print to the status line.")
             }
             .padding(20)
             .background(Theme.panel)
+
+            if let result = controller.evalResult {
+                HStack {
+                    Text("EVAL")
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.accent)
+                        .tracking(1)
+                    Text(result)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.fg)
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 8)
+                .background(Theme.accentGlow)
+            }
+        }
+    }
+
+    private func runEval() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .utf8PlainText, .text]
+        panel.allowsMultipleSelection = false
+        panel.message = "Pick a UTF-8 text file to score the model on."
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                let data = try Data(contentsOf: url)
+                controller.evaluate(corpus: data)
+            } catch {
+                controller.evalResult = "couldn't read \(url.lastPathComponent): \(error)"
+            }
         }
     }
 

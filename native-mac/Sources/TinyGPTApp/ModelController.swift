@@ -16,6 +16,8 @@ final class ModelController: ObservableObject {
     @Published var generated: String = ""
     @Published var isGenerating: Bool = false
     @Published var tokensPerSec: Double = 0
+    @Published var evalResult: String? = nil
+    @Published var isEvaluating: Bool = false
 
     private var model: TinyGPTModel? = nil
     private var modelConfig: ModelConfig? = nil
@@ -83,6 +85,37 @@ final class ModelController: ObservableObject {
         if isGenerating {
             isGenerating = false
             status = "ready"
+        }
+    }
+
+    /// Score the loaded model on the given UTF-8 corpus. Sets `evalResult`
+    /// when finished. Mirrors `tinygpt eval` semantics: cross-entropy loss
+    /// + bits-per-byte + perplexity over N random windows.
+    func evaluate(corpus: Data, batches: Int = 20) {
+        guard let model, let cfg = modelConfig else {
+            evalResult = "no model loaded"; return
+        }
+        isEvaluating = true
+        evalResult = nil
+        Task { @MainActor in
+            let byteCorpus = ByteCorpus(corpus)
+            var lossSum: Float = 0
+            var count = 0
+            for _ in 0..<batches {
+                let (x, y) = byteCorpus.sampleBatch(batchSize: 8, contextLength: cfg.contextLength)
+                let l = model.loss(x, y)
+                eval(l)
+                lossSum += l.item(Float.self)
+                count += 1
+            }
+            let avg = lossSum / Float(count)
+            let bpb = avg / log(Float(2))
+            let ppl = exp(avg)
+            self.evalResult = String(
+                format: "loss %.3f · BPB %.3f · perplexity %.1f (over %d batches × 8 × %d tokens)",
+                avg, bpb, ppl, count, cfg.contextLength
+            )
+            self.isEvaluating = false
         }
     }
 
