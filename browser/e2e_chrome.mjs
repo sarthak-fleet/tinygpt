@@ -57,8 +57,8 @@ else fail("intro copy", "missing 'What is this?' or 'ChatGPT'");
 const bannerVisible = await page.locator("#demoBanner").isVisible().catch(() => false);
 bannerVisible ? ok("demo banner visible") : fail("demo banner", "not visible");
 const bannerText = await page.locator("#demoBanner").textContent().catch(() => "");
-if (bannerText?.includes("Two ways") && bannerText.includes("Load pretrained")) ok("banner copy correct");
-else fail("banner copy", "missing 'Two ways' or 'Load pretrained'");
+if (bannerText?.includes("Two ways") && bannerText.includes("gallery")) ok("banner copy correct");
+else fail("banner copy", "missing 'Two ways' or 'gallery'");
 
 // ----- 3. Corpus auto-loads (with idle-callback delay) -----
 console.log("\nPHASE 3 — Default corpus lazy-loads\n");
@@ -67,24 +67,34 @@ const corpusLen = await page.evaluate(() => document.getElementById("corpus")?.v
 if (corpusLen > 1_000_000) ok("Shakespeare auto-fetched", `${corpusLen} chars`);
 else fail("Shakespeare auto-fetched", `only ${corpusLen} chars`);
 
-// ----- 4. Demo file size + reachability -----
-console.log("\nPHASE 4 — Demo model file\n");
-const demoMeta = await page.evaluate(async () => {
-  const r = await fetch("/demo.tinygpt");
-  if (!r.ok) return { ok: false, size: 0 };
+// ----- 4. Gallery manifest + Shakespeare file reachability -----
+console.log("\nPHASE 4 — Gallery files\n");
+const galleryMeta = await page.evaluate(async () => {
+  const m = await fetch("/gallery/manifest.json");
+  if (!m.ok) return { manifest: false };
+  const manifest = await m.json();
+  const r = await fetch(`/gallery/${manifest.models[0].file}`);
+  if (!r.ok) return { manifest: true, file: false };
   const buf = await r.arrayBuffer();
-  return { ok: true, size: buf.byteLength };
+  return { manifest: true, file: true, size: buf.byteLength, count: manifest.models.length };
 });
-if (demoMeta.ok) ok("/demo.tinygpt fetchable");
-else fail("/demo.tinygpt fetchable", "404 or network failure");
-const sizeMB = demoMeta.size / 1024 / 1024;
-if (sizeMB > 0 && sizeMB < 25) ok("demo size under CF cap", `${sizeMB.toFixed(1)} MB`);
-else fail("demo size under CF cap", `${sizeMB.toFixed(1)} MB`);
+if (galleryMeta.manifest) ok("/gallery/manifest.json fetchable");
+else fail("/gallery/manifest.json fetchable", "404 or network failure");
+if (galleryMeta.file) ok("first gallery model fetchable");
+else fail("first gallery model fetchable", "404 or network failure");
+const sizeMB = (galleryMeta.size ?? 0) / 1024 / 1024;
+if (sizeMB > 0 && sizeMB < 25) ok("gallery model under CF cap", `${sizeMB.toFixed(1)} MB`);
+else fail("gallery model under CF cap", `${sizeMB.toFixed(1)} MB`);
+if (galleryMeta.count >= 1) ok("manifest has at least one model", `${galleryMeta.count} model(s)`);
+else fail("manifest models", "none present");
 
-// ----- 5. Load pretrained → auto-switch to Watch + Generate focused -----
-console.log("\nPHASE 5 — Load pretrained flow\n");
+// ----- 5. Open gallery dialog → load first model → auto-switch to Watch -----
+console.log("\nPHASE 5 — Load-from-gallery flow\n");
 const tLoad = Date.now();
-await page.locator("#loadDemoBtn").click({ force: true });
+await page.locator("#openGalleryBtn").click({ force: true });
+await page.locator("#galleryDialog[open]").waitFor({ timeout: 5_000 });
+ok("gallery dialog opens");
+await page.locator(".gallery-card").first().click({ force: true });
 await page.locator("#demoBanner").waitFor({ state: "hidden", timeout: 90_000 }).catch(() => {});
 const loadMs = Date.now() - tLoad;
 if (loadMs < 90_000) ok("pretrained model loads", `${(loadMs / 1000).toFixed(1)}s`);
@@ -102,6 +112,17 @@ if (screenState.focused === "sample") ok("Generate button focused");
 else fail("Generate button focused", `activeElement=#${screenState.focused}`);
 if (screenState.watchTabEnabled) ok("Watch tab enabled");
 else fail("Watch tab enabled", "still disabled");
+
+// ----- 5b. Opportunistic-acceleration capability surface (best-effort) -----
+// On WebGPU-capable browsers, the worker should post `gpu_caps` after the
+// startup numerics gate. The +f16 storage pill appears iff the gate passed.
+// Don't FAIL on absence (the gate could legitimately reject on some GPUs);
+// just log so a regression on this specific path is visible.
+const f16PillVisible = await page.evaluate(() => {
+  return !!document.querySelector('#caps [data-explain="f16Storage"]');
+});
+if (f16PillVisible) ok("+f16 storage pill present (numerics gate passed)");
+else console.log("   note: +f16 storage pill absent — gate may have rejected on this GPU; the f32 vec4 path is still active");
 
 // ----- 6. Generate produces text + real tok/s + real TTFT -----
 console.log("\nPHASE 6 — Generate from pretrained\n");
