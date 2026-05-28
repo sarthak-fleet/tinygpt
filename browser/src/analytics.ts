@@ -149,3 +149,70 @@ export interface SampleGeneratedProps {
 export function trackSampleGenerated(props: SampleGeneratedProps): void {
   capture("sample_generated", props);
 }
+
+// --- fleet page crash monitoring (page_crash_capture requirement) ------------
+// Standard browser crash capture hook (documented equivalent for TinyGPT's
+// Astro + vanilla-TS bundle; see saas-maker/standards/hardening/error-kit).
+// Wires global listeners so uncaught errors and unhandled rejections in
+// production are captured with project slug. Always console.errors (never
+// silent). Sends `foundry_page_crash` via PostHog only when analytics enabled
+// (respects existing VITE_POSTHOG_KEY + opt-out gates; no behavior change).
+
+const PROJECT_SLUG = "tinygpt";
+
+function route(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
+function messageFrom(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return String(error);
+}
+
+export function capturePageCrash(
+  error: unknown,
+  source: "window_error" | "unhandled_rejection",
+): void {
+  const payload = {
+    project: PROJECT_SLUG,
+    project_slug: PROJECT_SLUG,
+    route: route(),
+    source,
+    message: messageFrom(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  };
+
+  // Always surface to console — ops + debugging visibility even when
+  // analytics is fully disabled (matches tinygpt "page must keep working"
+  // rule while giving signal).
+  // eslint-disable-next-line no-console
+  console.error("[tinygpt:page_crash]", payload);
+
+  if (!enabled) return;
+  try {
+    posthog.capture("foundry_page_crash", payload as Record<string, unknown>);
+  } catch {
+    // Swallow — crash monitoring must never throw or break the page.
+  }
+}
+
+export function installBrowserMonitoring(): () => void {
+  if (typeof window === "undefined") return () => {};
+
+  const onError = (event: ErrorEvent) => {
+    capturePageCrash(event.error ?? event.message, "window_error");
+  };
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    capturePageCrash(event.reason, "unhandled_rejection");
+  };
+
+  window.addEventListener("error", onError);
+  window.addEventListener("unhandledrejection", onUnhandledRejection);
+
+  return () => {
+    window.removeEventListener("error", onError);
+    window.removeEventListener("unhandledrejection", onUnhandledRejection);
+  };
+}

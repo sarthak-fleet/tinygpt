@@ -192,6 +192,38 @@ export const EXPLAINERS: Record<string, Explainer> = {
       label: "web.dev — COOP/COEP",
     },
   },
+  shaderF16: {
+    title: "WGSL shader-f16",
+    body: "WGSL extension that lets shaders use the f16 (half-precision) scalar type directly — not just for storage, but for compute. On bandwidth-bound matmuls this halves the memory traffic and on f16-capable hardware also halves the compute throughput cost. Chrome 121+ stable. When on, the matmul + MLP path runs in f16; final accumulation stays in f32 for numerical safety.",
+    link: {
+      href: "https://www.w3.org/TR/WGSL/#extension-f16",
+      label: "WGSL spec — f16 extension",
+    },
+  },
+  subgroups: {
+    title: "WebGPU subgroups",
+    body: "Cross-lane primitives (subgroupAdd, subgroupBroadcast, etc.) for the threads in a workgroup. In TinyGPT we use them for the reductions inside layernorm, softmax, and cross-entropy — one cooperative pass across the row instead of a workgroup-shared-memory scan. Behind chrome://flags#enable-unsafe-webgpu on Chrome 125+; ships in Chrome stable later.",
+    link: {
+      href: "https://developer.chrome.com/blog/new-in-webgpu-125",
+      label: "Chrome — subgroups in WebGPU",
+    },
+  },
+  coopMatrix: {
+    title: "Cooperative matrix (WMMA)",
+    body: "WGSL extension that maps to hardware matrix-multiply-accumulate units — NVIDIA's tensor cores, AMD's MFMA, Apple's AMX. Single instruction replaces a tile of multiply-adds; on NVIDIA that's a ~3× speedup, on Apple ~1.3× (the AMX path is more constrained). Behind chrome://flags#enable-unsafe-webgpu + experimental features. The extension name is chromium_experimental_subgroup_matrix and is still evolving.",
+    link: {
+      href: "https://www.w3.org/TR/WGSL/#cooperative-matrix",
+      label: "WGSL spec (proposal)",
+    },
+  },
+  webnn: {
+    title: "WebNN API",
+    body: "Web Neural Network API. Hands a model graph to the OS — CoreML on macOS (which can route to the Apple Neural Engine), DirectML on Windows, TFLite on Android. Used here for inference / sampling only; training stays on WebGPU. Behind chrome://flags#enable-webnn-api.",
+    link: {
+      href: "https://developer.chrome.com/docs/ai/built-in",
+      label: "Chrome — built-in AI APIs",
+    },
+  },
   heap: {
     title: "JavaScript heap usage",
     body: "Live JS heap (in MB), updated every 2 s. Shows used / V8's per-tab limit. Training a 0.8M model typically lives in 30–80 MB; bigger configs scale roughly linearly with params plus the Adam optimizer state (≈ 8× params bytes). Chromium-only — Safari/Firefox don't expose this.",

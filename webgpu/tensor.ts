@@ -12,29 +12,157 @@
  * Guide: docs/performance.md ("WebGPU training")
  */
 
+/** Full set of opportunistic WebGPU capabilities we feature-detect at startup.
+ *
+ * Each flag here gates a faster code path that falls back gracefully when the
+ * capability is absent. The capability set is also surfaced in the UI so users
+ * can see which accelerated paths are active.
+ */
+export interface GpuCapabilities {
+  /** Adapter `subgroups` feature. Chrome 125+ behind
+   *  `chrome://flags#enable-unsafe-webgpu`. Enables subgroupAdd / shuffles. */
+  subgroups: boolean;
+  /** Adapter `shader-f16` feature. Chrome 121+ stable. Lets WGSL use the
+   *  `f16` scalar type directly (compute precision, not just storage). */
+  shaderF16: boolean;
+  /** Cooperative matrix support: WGSL `enable chromium_experimental_subgroup_matrix`.
+   *  Maps to tensor cores (NVIDIA), MFMA (AMD), AMX (Apple). Probed via a
+   *  trial shader compile because there's no feature-flag for it as of
+   *  May 2026 — only an extension that may or may not parse. Behind
+   *  `chrome://flags#enable-unsafe-webgpu` + experimental features. */
+  cooperativeMatrix: boolean;
+  /** `timestamp-query` adapter feature. Used for in-shader perf profiling
+   *  (not on the user hot path; useful for telemetry / capability UI). */
+  timestampQuery: boolean;
+  /** Adapter info — used to inform capability nudges (e.g., "you're on
+   *  Chrome on macOS without `enable-unsafe-webgpu`, here's what you're
+   *  missing"). */
+  vendor: string;
+  architecture: string;
+  device: string;
+  description: string;
+}
+
 export interface GpuContext {
   device: GPUDevice;
-  /** True iff the device has the `subgroups` feature — lets layernorm /
-   * softmax / cross-entropy kernels use subgroup intrinsics instead of
-   * shared-memory reductions. Chrome 125+. */
+  capabilities: GpuCapabilities;
+  /** Convenience alias for capabilities.subgroups — kept so older callers
+   *  that read ctx.subgroups don't break. */
   subgroups: boolean;
 }
 
-/** Request a WebGPU device, or null if the browser/platform has none. */
+/** Try compiling a trial shader that uses `enable chromium_experimental_subgroup_matrix`.
+ *  If compilation succeeds we know the device exposes cooperative matrix
+ *  primitives. No actual dispatch — pure parse-time check. */
+async function probeCooperativeMatrix(device: GPUDevice): Promise<boolean> {
+  const trial = `
+    enable chromium_experimental_subgroup_matrix;
+    @group(0) @binding(0) var<storage, read_write> out: array<f32>;
+    @compute @workgroup_size(1)
+    fn main() { out[0] = 0.0; }
+  `;
+  try {
+    // Mute the console error WebGPU prints on compile failure — we expect
+    // most devices to fail this probe.
+    const oldOnError = device.onuncapturederror;
+    device.onuncapturederror = () => {};
+    const mod = device.createShaderModule({ code: trial });
+    const info = await mod.getCompilationInfo();
+    device.onuncapturederror = oldOnError;
+    return !info.messages.some((m) => m.type === "error");
+  } catch {
+    return false;
+  }
+}
+
+/** Request a WebGPU device with every opportunistic feature we can get,
+ *  and detect all the runtime capabilities. */
 export async function createGpuContext(): Promise<GpuContext | null> {
   if (typeof navigator === "undefined" || !navigator.gpu) return null;
   try {
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) return null;
-    // Ask for subgroups optionally — fall back silently if unavailable.
-    const hasSubgroups = adapter.features.has("subgroups" as GPUFeatureName);
-    const device = await adapter.requestDevice({
-      requiredFeatures: hasSubgroups ? (["subgroups" as GPUFeatureName]) : [],
-    });
-    return { device, subgroups: hasSubgroups };
+
+    const wanted = [
+      "subgroups",
+      "shader-f16",
+      "timestamp-query",
+    ] as const;
+    const requiredFeatures: GPUFeatureName[] = [];
+    const supported = {
+      subgroups: false,
+      shaderF16: false,
+      timestampQuery: false,
+    };
+    for (const name of wanted) {
+      if (adapter.features.has(name as GPUFeatureName)) {
+        requiredFeatures.push(name as GPUFeatureName);
+        if (name === "subgroups") supported.subgroups = true;
+        if (name === "shader-f16") supported.shaderF16 = true;
+        if (name === "timestamp-query") supported.timestampQuery = true;
+      }
+    }
+    const device = await adapter.requestDevice({ requiredFeatures });
+
+    // Cooperative matrix needs a real shader compile to probe.
+    const cooperativeMatrix = await probeCooperativeMatrix(device);
+
+    // Adapter info — vendor/arch/device strings used by the UI. `adapter.info`
+    // is the new (sync getter) shape; older Chrome had `requestAdapterInfo()`.
+    let vendor = "", architecture = "", deviceName = "", description = "";
+    try {
+      const adapterAny = adapter as unknown as {
+        info?: { vendor?: string; architecture?: string; device?: string; description?: string };
+        requestAdapterInfo?: () => Promise<{ vendor?: string; architecture?: string; device?: string; description?: string }>;
+      };
+      const info = adapterAny.info ?? await adapterAny.requestAdapterInfo?.();
+      if (info) {
+        vendor = info.vendor ?? "";
+        architecture = info.architecture ?? "";
+        deviceName = info.device ?? "";
+        description = info.description ?? "";
+      }
+    } catch { /* info getters absent on older Chrome */ }
+
+    const capabilities: GpuCapabilities = {
+      subgroups: supported.subgroups,
+      shaderF16: supported.shaderF16,
+      cooperativeMatrix,
+      timestampQuery: supported.timestampQuery,
+      vendor, architecture, device: deviceName, description,
+    };
+    return { device, capabilities, subgroups: supported.subgroups };
   } catch {
     return null;
   }
+}
+
+/** WebNN capability — separate from WebGPU. Lives on `navigator.ml`.
+ *  Routes to OS NN runtime (CoreML on macOS, DirectML on Windows). Used
+ *  by the inference path; training stays on WebGPU. */
+export interface WebNNCapabilities {
+  available: boolean;
+  /** Whether GPU-device context can be created (the fast path). */
+  gpuContext: boolean;
+  /** Whether NPU-device context can be created — Apple Neural Engine on
+   *  Apple Silicon, NPU on Snapdragon, etc. */
+  npuContext: boolean;
+}
+
+export async function probeWebNN(): Promise<WebNNCapabilities> {
+  const result: WebNNCapabilities = { available: false, gpuContext: false, npuContext: false };
+  const ml = (navigator as unknown as { ml?: { createContext?: (opts?: object) => Promise<unknown> } }).ml;
+  if (!ml || typeof ml.createContext !== "function") return result;
+  result.available = true;
+  try {
+    const ctx = await ml.createContext({ deviceType: "gpu" });
+    if (ctx) result.gpuContext = true;
+  } catch { /* GPU device unavailable */ }
+  try {
+    const ctx = await ml.createContext({ deviceType: "npu" });
+    if (ctx) result.npuContext = true;
+  } catch { /* NPU device unavailable */ }
+  return result;
 }
 
 /** Recycles storage buffers, keyed by byte size, so steps reuse them. */

@@ -1178,30 +1178,33 @@ const pageBody = `
         <div class="lever-head">
           <span class="lever-num">17</span>
           <h2 class="lever-title">Pre-trained model gallery</h2>
-          <span class="status planned"><span class="dot"></span> Planned</span>
+          <span class="status partial"><span class="dot"></span> v1 shipping · 4 models</span>
         </div>
         <div class="lever-meta">
-          <span>Impact: <strong>turns one demo into a library of demos</strong></span>
-          <span>Hosting: <code>Cloudflare R2</code></span>
+          <span>v1: <strong>Shakespeare · TinyStories · Python · Recipes</strong></span>
+          <span>Hosting: bundled in <code>browser/public/gallery/</code></span>
         </div>
         <div class="lever-body">
           <p>
-            A <code>/gallery</code> page listing curated <code>.tinygpt</code>
-            checkpoints — one per genre / corpus / size. Each card shows a
-            sample output, params, training data, license, and a
-            <strong>Load</strong> button that pulls the file from R2 and drops
-            it into the playground via the same loader the demo banner uses.
+            A <strong>Load from gallery</strong> button on the Setup screen opens
+            a dialog with 4 cards: same architecture (12L, d=256, ctx=256,
+            ~9.6M params), four different corpora. Each shows a sample, params,
+            training loss, and one click loads the <code>.tinygpt</code> file
+            through the same path as model upload.
           </p>
           <p>
-            v1 ships a handful (5–10): the bundled Shakespeare demo, plus the
-            same architecture trained on code, recipes, song lyrics, poetry,
-            and a couple of multilingual corpora. Each takes 30 min – a few
-            hours to train and is verified before it goes in the gallery.
-            Storage is essentially free (R2: ≈ $0.015/GB-month, no egress
-            fees to Pages); the gating cost is just compute time, which is
-            cheap at this scale. Pairs naturally with lever 18 (diverse data
-            structures) — each gallery entry demonstrates a different kind
-            of structure the same architecture can pick up.
+            All four models were trained in this browser via
+            <code>browser/train_gallery_one.mjs</code> (Playwright drives a
+            real Chromium tab against the dev server, 5000 steps, WebGPU).
+            v1 is bundled in <code>browser/public/gallery/</code>;
+            <code>manifest.json</code> drives the dialog so future entries
+            drop in without code changes. v2 will move to R2 (≈ $0.015/GB-month,
+            zero egress to Pages) once we cross the bundled-asset budget.
+          </p>
+          <p>
+            Pairs naturally with lever 18 (diverse data structures) — each
+            gallery entry demonstrates a different kind of pattern the same
+            architecture can pick up.
           </p>
         </div>
       </article>
@@ -1317,7 +1320,7 @@ const pageBody = `
           <span class="status planned"><span class="dot"></span> Planned · biggest single new project</span>
         </div>
         <div class="lever-meta">
-          <span>Impact: <strong>lift the ceiling from ~10M to billions of params</strong></span>
+          <span>Impact: <strong>~30× training throughput on the same machine</strong></span>
           <span>File format: <code>.tinygpt</code> portable both ways</span>
         </div>
         <div class="lever-body">
@@ -1329,12 +1332,30 @@ const pageBody = `
             continue training at much higher throughput.
           </p>
           <p>
-            <strong>Why it's the big one:</strong> the browser ceiling is
-            roughly ~10M params before the user experience falls apart
+            <strong>How much faster — and why.</strong> Same Huge model
+            (12L, d=256, ctx=256, 5000 steps) on the same M-series Mac:
+          </p>
+          <ul>
+            <li><strong>WebGPU (today):</strong> ~60 min · baseline</li>
+            <li><strong>MLX (Python):</strong> ~5–6 min · <strong>~10×</strong></li>
+            <li><strong>MLX-Swift + hand-tuned Metal:</strong> ~2–3 min · <strong>~20–25×</strong></li>
+            <li><strong>+ Apple Neural Engine for inference:</strong> sampling ~30–50× faster</li>
+          </ul>
+          <p>
+            The compounding wins: <strong>unified memory</strong> (no upload/download
+            tax — WebGPU pays this on every buffer round-trip);
+            <strong>Metal Performance Shaders' GEMM kernels</strong> tuned per Apple GPU
+            generation; <strong>~3× the effective memory bandwidth</strong>
+            (M3 Max: 400 GB/s vs WebGPU's ~150 GB/s effective);
+            <strong>ANE</strong> (16-core, ~38 TOPS on M3) which WebGPU cannot reach;
+            <strong>async compute queues</strong> overlapping compute + memcpy.
+          </p>
+          <p>
+            <strong>The architecture also lifts the parameter ceiling.</strong>
+            Browser caps out around ~10M params before user experience falls apart
             (training-time budget, memory, GPU sharing with the compositor).
-            Apple Silicon native via MLX can comfortably train 100M–1B+ models
-            on a laptop, with the same algorithms — only the runtime gets
-            faster.
+            MLX-Swift can comfortably train 100M–1B+ models on the same laptop —
+            same code path, just a faster runtime.
           </p>
           <p>
             <strong>The boundary</strong> between what belongs in-browser and
@@ -1344,6 +1365,75 @@ const pageBody = `
             Together with the gallery (lever 17), the diverse-data milestone
             (lever 18), and the quant + LoRA bundle (lever 19, which lands
             here), this is the remaining work.
+          </p>
+        </div>
+      </article>
+
+      <!-- 21: Browser frontier — tech we're tracking but haven't shipped -->
+      <article id="frontier" class="lever">
+        <div class="lever-head">
+          <span class="lever-num">21</span>
+          <h2 class="lever-title">Browser frontier — tech we're tracking</h2>
+          <span class="status planned"><span class="dot"></span> Watching · revisit when stable</span>
+        </div>
+        <div class="lever-meta">
+          <span>Theme: <strong>experimental web tech that could narrow the native gap</strong></span>
+          <span>None ships today — each is parked behind a flag or unfinished spec</span>
+        </div>
+        <div class="lever-body">
+          <p>
+            A few in-browser speedups exist on the frontier but aren't ready
+            for production users in 2026. Logged here so future-us knows
+            exactly where to look when the spec or implementation lands.
+          </p>
+
+          <p><strong>WebGPU cooperative matrix (wmma / tensor-core mapping)</strong></p>
+          <ul>
+            <li><strong>What:</strong> a WGSL extension exposing matrix-multiply-accumulate hardware (NVIDIA tensor cores, AMD MFMA, Apple AMX).</li>
+            <li><strong>Expected gain:</strong> ~3–5× on NVIDIA / AMD; ~1.3× on Apple (Apple's AMX is less directly reachable via this path).</li>
+            <li><strong>Status (May 2026):</strong> behind <code>chrome://flags/#enable-unsafe-webgpu</code> + <code>--enable-features=WebGPUExperimentalFeatures</code>. API still moving.</li>
+            <li><strong>Skip rationale:</strong> Apple gain is the small case for our M-series target. NVIDIA gain doesn't help most browser users. Won't ship until API stabilises and Apple win improves.</li>
+          </ul>
+
+          <p><strong>WebNN — route to OS NN runtimes (CoreML / DirectML)</strong></p>
+          <ul>
+            <li><strong>What:</strong> a Web API that hands neural-network graphs to the operating system, which then runs them on CoreML (Apple) / DirectML (Windows) / TFLite (Android). Can route to the Apple Neural Engine.</li>
+            <li><strong>Expected gain:</strong> 3–5× on Apple / Windows for inference; ~2× for training where supported.</li>
+            <li><strong>Status (May 2026):</strong> Chrome 126+ behind <code>chrome://flags/#enable-webnn-api</code>. Training support is minimal; mostly inference. API changing monthly.</li>
+            <li><strong>Skip rationale:</strong> training-side coverage is still thin. Revisit when CoreML/DirectML backends support backward passes and the API freezes.</li>
+          </ul>
+
+          <p><strong>Full <code>enable f16</code> matmul path</strong></p>
+          <ul>
+            <li><strong>What:</strong> WGSL's <code>f16</code> extension is widely available; we already use it inside the FA2 attention kernel. The matmul/MLP kernels still load in fp32.</li>
+            <li><strong>Expected gain:</strong> +1.3–1.5× on the matmul-bound path, less arithmetic on each tile.</li>
+            <li><strong>Status:</strong> production-stable in Chrome and Safari.</li>
+            <li><strong>Skip rationale:</strong> the matmul kernels and weight storage assume fp32; converting weights + accumulator paths to fp16 is a non-trivial refactor. ROI looked thin once FA2 landed (which was the bigger win). Revisit once the cooperative-matrix path is real — they want fp16 inputs anyway.</li>
+          </ul>
+
+          <p><strong>Async compute queues — overlap compute and memcpy</strong></p>
+          <ul>
+            <li><strong>What:</strong> WebGPU lets you create multiple queues; submit copy commands on one while compute runs on another. Hides upload/download latency.</li>
+            <li><strong>Expected gain:</strong> ~1.2–1.5×, mostly during sampling and the small handful of CPU-touching steps.</li>
+            <li><strong>Status:</strong> supported today.</li>
+            <li><strong>Skip rationale:</strong> our hot path is GPU-bound, not transfer-bound — once the first batch is uploaded, training never crosses the boundary. Worth picking up if we ever stream training data dynamically (e.g., gallery-scale corpora that don't fit in tab memory).</li>
+          </ul>
+
+          <p><strong>Hand-tuned WGSL kernels per matmul shape</strong></p>
+          <ul>
+            <li><strong>What:</strong> the current matmul kernel is one general-purpose blocked variant. Writing per-shape kernels (e.g., one specifically for the <code>4 × dModel × ctx</code> attention output, one for the <code>dMlp × dModel</code> MLP), each with workgroup sizes tuned to that shape, would close the gap to the theoretical ceiling.</li>
+            <li><strong>Expected gain:</strong> ~1.5–2× on the matmul path.</li>
+            <li><strong>Status:</strong> pure engineering — no spec dependency.</li>
+            <li><strong>Skip rationale:</strong> weeks of work for a modest gain when the Mac app gets us 20–30× by switching runtimes entirely. We'll only come back here if Apple Neural Engine access to the web never materialises and we're still on WebGPU long-term.</li>
+          </ul>
+
+          <p><strong>If we ever stacked all of these</strong></p>
+          <p>
+            Stacked gains compound, but with diminishing returns: coop-matrix
+            (1.3× on Apple) × full f16 (1.4×) × per-shape kernels (1.7×)
+            × async queues (1.2×) ≈ <strong>~3.7× over today</strong>. Still
+            an order of magnitude short of the Mac app's ~30×. That's the
+            structural fact behind lever 20.
           </p>
         </div>
       </article>

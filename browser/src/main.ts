@@ -2455,6 +2455,23 @@ async function init(): Promise<void> {
   const ramBit = hw.deviceMemoryGB
     ? ` · ${hw.deviceMemoryGB >= 8 ? "≥" : "~"}${hw.deviceMemoryGB} GB RAM`
     : "";
+  // Accelerator sub-pills: each one is a *bonus* path that's only active
+  // when the underlying capability is present. We render only the active
+  // ones (no "off" placeholders) so the row stays tight when the user is
+  // on a vanilla browser.
+  const acceleratorPills: string[] = [];
+  if (caps.webgpu && caps.gpuFeatures.shaderF16) {
+    acceleratorPills.push(`<button type="button" class="pill on pill-btn" data-explain="shaderF16" title="WGSL shader-f16 — half-precision compute in the matmul path">+f16</button>`);
+  }
+  if (caps.webgpu && caps.gpuFeatures.subgroups) {
+    acceleratorPills.push(`<button type="button" class="pill on pill-btn" data-explain="subgroups" title="WebGPU subgroups — fast cross-lane reductions in layernorm / softmax">+subgroups</button>`);
+  }
+  // cooperativeMatrix is undefined until the worker probes it; the post-init
+  // updateGpuAccelPills() function fills the pill in if/when it lands.
+  if (caps.webnnPresent) {
+    acceleratorPills.push(`<button type="button" class="pill on pill-btn" data-explain="webnn" title="WebNN API — routes inference to CoreML / DirectML / NPU">+WebNN</button>`);
+  }
+
   els.caps.innerHTML =
     pill("WebGPU", caps.webgpu, "webgpuPill") +
     pill("WASM SIMD", caps.wasmSimd, "wasmSimd") +
@@ -2465,6 +2482,7 @@ async function init(): Promise<void> {
     `<span class="pill off">${hw.cores} cores${ramBit}</span>` +
     `<button type="button" class="pill off pill-btn" id="heapPill" data-explain="heap" title="JS heap used">heap —</button>` +
     `<span class="pill off" id="gpuPill" hidden></span>` +
+    `<span id="gpuAccel" class="gpu-accel">${acceleratorPills.join("")}</span>` +
     `<span class="muted" style="margin-left:6px">` +
     `Suggested: <strong>${rec.layers}L · d_model ${rec.dModel} · ctx ${rec.ctx}</strong> ` +
     `(~${formatParams(rec.approxParams)} params, ${rec.tier})` +
@@ -2481,7 +2499,15 @@ async function init(): Promise<void> {
            larger ones may misbehave (no Memory64 below 18.4, WebGPU is
            partial). For the smoothest experience, open this in Chrome.
          </div>`
-      : "");
+      : "") +
+    // Soft nudge for Chrome users WITHOUT the unsafe-webgpu flag: they
+    // could be 2-3× faster if they enabled cooperative-matrix + subgroups.
+    // Shown only if Chrome + WebGPU + no subgroups (which is the canonical
+    // "you don't have the flag on" signal). Dismissible.
+    speedNudgeHtml(browser, caps);
+
+  // Wire the nudge dismiss action + restore its hidden state from localStorage.
+  setupSpeedNudge();
 
   // GPU adapter name (Chromium / Safari WebGPU). Display only if available.
   if (caps.webgpu) {
@@ -2576,7 +2602,7 @@ void init().then(() => {
   setupIntroCard();
   setupStickyStats();
   setupKeyboardShortcuts();
-  setupDemoBanner();
+  setupGallery();
   setupDefaultCorpus();
   setupScreens();
   setupSystemPressure();
@@ -2788,52 +2814,210 @@ function setupDefaultCorpus(): void {
   }
 }
 
-// --- demo banner — "Try a trained model" CTA -----------------------------
-// On load, HEAD /demo.tinygpt. If it exists (200), reveal the banner.
-// Click → fetch + load via the same path as model upload.
-async function setupDemoBanner(): Promise<void> {
+// --- speed nudge — soft prompt to enable chrome://flags#enable-unsafe-webgpu --
+// Shown to Chrome users on WebGPU who are MISSING subgroups (canonical
+// "you don't have the experimental flag on" signal). Dismissible — once
+// dismissed, never re-shown for that user.
+const SPEED_NUDGE_KEY = "tinygpt.speedNudgeDismissed";
+function speedNudgeHtml(
+  browser: { name: string; chromium: boolean },
+  caps: { webgpu: boolean; gpuFeatures: { subgroups: boolean; cooperativeMatrix?: boolean } },
+): string {
+  if (!browser.chromium) return "";              // only nudge Chromium users
+  if (!caps.webgpu) return "";                   // no WebGPU — different problem
+  if (caps.gpuFeatures.subgroups) return "";     // they already have the flag
+  if (caps.gpuFeatures.cooperativeMatrix) return "";
+  return `<div class="speed-nudge" id="speedNudge">
+    <span class="speed-nudge-icon" aria-hidden="true">⚡</span>
+    <span class="speed-nudge-body">
+      <strong>Power user?</strong>
+      Enable <code>chrome://flags#enable-unsafe-webgpu</code> and restart Chrome
+      to unlock <strong>cooperative-matrix</strong> + <strong>subgroups</strong>
+      — up to ~2-3× faster training on supported GPUs. Dismissible if not for you.
+    </span>
+    <button class="speed-nudge-close" id="speedNudgeClose" type="button" aria-label="Dismiss">×</button>
+  </div>`;
+}
+function setupSpeedNudge(): void {
+  const node = document.getElementById("speedNudge");
+  if (!node) return;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem(SPEED_NUDGE_KEY) === "1"; } catch { /* private mode */ }
+  if (dismissed) { node.remove(); return; }
+  const close = document.getElementById("speedNudgeClose");
+  close?.addEventListener("click", () => {
+    node.remove();
+    try { localStorage.setItem(SPEED_NUDGE_KEY, "1"); } catch { /* private mode */ }
+  });
+}
+
+/** Add or remove a +coop-matrix pill once the worker probes it post-device-creation. */
+function updateGpuAccelPills(extras: { cooperativeMatrix?: boolean }): void {
+  const slot = document.getElementById("gpuAccel");
+  if (!slot) return;
+  const existing = slot.querySelector('[data-explain="coopMatrix"]');
+  if (extras.cooperativeMatrix && !existing) {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "pill on pill-btn";
+    pill.dataset.explain = "coopMatrix";
+    pill.title = "WebGPU cooperative matrix — maps to tensor cores / MFMA / AMX";
+    pill.textContent = "+coop-matrix";
+    slot.appendChild(pill);
+    // Also: if the speed nudge is still showing, hide it — they're already
+    // running the experimental path.
+    const nudge = document.getElementById("speedNudge");
+    if (nudge) nudge.remove();
+  }
+}
+// Expose for the worker→main bridge to call.
+(window as unknown as { __tgUpdateGpuAccelPills?: (e: { cooperativeMatrix?: boolean }) => void })
+  .__tgUpdateGpuAccelPills = updateGpuAccelPills;
+
+// --- gallery — "Load from gallery" CTA + dialog ---------------------------
+// On load, fetch /gallery/manifest.json. If it lists ≥1 model, reveal the
+// banner. Click → opens the gallery dialog with one card per entry. Click a
+// card → fetch + load via the same path as model upload.
+interface GalleryModel {
+  id: string;
+  name: string;
+  icon?: string;
+  blurb?: string;
+  corpus?: string;
+  corpusUrl?: string;
+  file: string;          // path relative to /gallery/
+  params?: string;
+  trainLoss?: string;
+  steps?: number;
+  sample?: string;
+}
+interface GalleryManifest {
+  version: number;
+  note?: string;
+  models: GalleryModel[];
+}
+
+async function setupGallery(): Promise<void> {
   const banner = document.getElementById("demoBanner");
-  const btn = document.getElementById("loadDemoBtn") as HTMLButtonElement | null;
-  if (!banner || !btn) return;
+  const openBtn = document.getElementById("openGalleryBtn") as HTMLButtonElement | null;
+  const dialog = document.getElementById("galleryDialog") as HTMLDialogElement | null;
+  const grid = document.getElementById("galleryGrid");
+  const closeBtn = document.getElementById("galleryClose") as HTMLButtonElement | null;
+  const noteEl = document.getElementById("galleryNote");
+  if (!banner || !openBtn || !dialog || !grid || !closeBtn) return;
+
   // Hide once any model is loaded — avoid clutter for return visitors.
   if (latestState) { banner.hidden = true; return; }
 
+  let manifest: GalleryManifest | null = null;
   try {
-    const head = await fetch("/demo.tinygpt", { method: "HEAD" });
-    if (!head.ok) return; // demo not deployed yet; banner stays hidden
+    const resp = await fetch("/gallery/manifest.json", { cache: "no-cache" });
+    if (!resp.ok) return; // gallery not deployed yet
+    manifest = await resp.json() as GalleryManifest;
   } catch {
     return;
   }
+  if (!manifest || !Array.isArray(manifest.models) || manifest.models.length === 0) return;
   banner.hidden = false;
 
-  btn.addEventListener("click", async () => {
-    btn.classList.add("loading");
-    btn.textContent = "fetching trained model…";
-    try {
-      const resp = await fetch("/demo.tinygpt");
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const blob = await resp.blob();
-      const file = new File([blob], "demo.tinygpt", { type: "application/octet-stream" });
-      await loadModelFromFile(file, "pre-trained Shakespeare demo");
-      banner.hidden = true;
-      // Take the user straight to the Watch & sample screen and focus the
-      // Generate button. The "restored" worker message that actually
-      // enables #sample lands on a tick AFTER loadModelFromFile resolves,
-      // so poll briefly instead of guessing at a timeout.
-      (window as unknown as { __tgGoToWatch?: () => void }).__tgGoToWatch?.();
-      const tryFocus = (attempts: number) => {
-        const sample = document.getElementById("sample") as HTMLButtonElement | null;
-        if (sample && !sample.disabled) { sample.focus(); return; }
-        if (attempts > 0) setTimeout(() => tryFocus(attempts - 1), 50);
-      };
-      tryFocus(20); // up to 1s total — well past the worker round-trip
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      btn.classList.remove("loading");
-      btn.innerHTML = `<span aria-hidden="true">▶</span> Try a trained model`;
-      setStatus(`couldn't load demo model: ${msg}`, true);
-    }
+  closeBtn.addEventListener("click", () => dialog.close());
+  // Click on backdrop closes — dialog target is the dialog itself when the
+  // click is on the ::backdrop pseudo-element.
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) dialog.close();
   });
+
+  openBtn.addEventListener("click", () => {
+    renderGallery(manifest!, dialog, grid, noteEl);
+    dialog.showModal();
+  });
+}
+
+function renderGallery(
+  manifest: GalleryManifest,
+  dialog: HTMLDialogElement,
+  grid: HTMLElement,
+  noteEl: HTMLElement | null,
+): void {
+  if (noteEl) noteEl.textContent = manifest.note ?? "";
+  grid.innerHTML = "";
+  for (const m of manifest.models) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "gallery-card";
+    card.dataset.id = m.id;
+
+    const head = document.createElement("div");
+    head.className = "gallery-card-head";
+    const icon = document.createElement("span");
+    icon.className = "gallery-card-icon";
+    icon.textContent = m.icon ?? "📄";
+    const title = document.createElement("span");
+    title.className = "gallery-card-title";
+    title.textContent = m.name;
+    head.append(icon, title);
+
+    const blurb = document.createElement("p");
+    blurb.className = "gallery-card-blurb";
+    blurb.textContent = m.blurb ?? "";
+
+    const sample = document.createElement("div");
+    sample.className = "gallery-card-sample";
+    sample.textContent = m.sample ?? "(no sample available)";
+
+    const stats = document.createElement("div");
+    stats.className = "gallery-card-stats";
+    const bits: string[] = [];
+    if (m.params) bits.push(`<em>${m.params}</em> params`);
+    if (m.trainLoss) bits.push(`loss ${m.trainLoss}`);
+    if (m.steps) bits.push(`${m.steps} steps`);
+    if (m.corpus) bits.push(m.corpus);
+    stats.innerHTML = bits.join(" · ");
+
+    card.append(head, blurb, sample, stats);
+    card.addEventListener("click", () => loadGalleryCard(card, m, dialog));
+    grid.appendChild(card);
+  }
+}
+
+async function loadGalleryCard(
+  card: HTMLButtonElement,
+  m: GalleryModel,
+  dialog: HTMLDialogElement,
+): Promise<void> {
+  // Disable all cards while one is loading — prevents double-click into a
+  // half-loaded second model that would corrupt the worker state.
+  const allCards = dialog.querySelectorAll<HTMLButtonElement>(".gallery-card");
+  allCards.forEach((c) => { c.disabled = true; });
+  card.classList.add("loading");
+  const sampleSlot = card.querySelector<HTMLElement>(".gallery-card-sample");
+  const originalSample = sampleSlot?.textContent ?? "";
+  if (sampleSlot) sampleSlot.textContent = "loading…";
+  try {
+    const resp = await fetch(`/gallery/${m.file}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    const file = new File([blob], m.file, { type: "application/octet-stream" });
+    await loadModelFromFile(file, `${m.name} (gallery)`);
+    dialog.close();
+    const banner = document.getElementById("demoBanner");
+    if (banner) banner.hidden = true;
+    // Take the user straight to the Watch & sample screen and focus Generate.
+    // Worker's "restored" message lands a tick after loadModelFromFile resolves.
+    (window as unknown as { __tgGoToWatch?: () => void }).__tgGoToWatch?.();
+    const tryFocus = (attempts: number) => {
+      const sample = document.getElementById("sample") as HTMLButtonElement | null;
+      if (sample && !sample.disabled) { sample.focus(); return; }
+      if (attempts > 0) setTimeout(() => tryFocus(attempts - 1), 50);
+    };
+    tryFocus(20);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (sampleSlot) sampleSlot.textContent = originalSample;
+    card.classList.remove("loading");
+    allCards.forEach((c) => { c.disabled = false; });
+    setStatus(`couldn't load gallery model: ${msg}`, true);
+  }
 }
 
 // --- intro card (first-visit "what is this") ------------------------------

@@ -16,10 +16,39 @@
 
 import type { Backend } from "./types";
 
+/** Opportunistic WebGPU sub-features the page can detect *without* opening a
+ *  device — just adapter feature flags. Cooperative-matrix needs a real shader
+ *  probe and is filled in later (by the worker after device creation).
+ */
+export interface GpuSubFeatures {
+  /** `shader-f16` extension — WGSL `enable f16;` + the `f16` scalar type.
+   *  Stable in Chrome 121+. */
+  shaderF16: boolean;
+  /** `subgroups` extension. Behind `chrome://flags#enable-unsafe-webgpu` on
+   *  Chrome 125+. Used for fast reductions in layernorm / softmax. */
+  subgroups: boolean;
+  /** `timestamp-query` — used for in-shader perf telemetry (not the hot
+   *  path; informational). */
+  timestampQuery: boolean;
+  /** Probed via shader compile inside the worker — undefined until the
+   *  worker reports back. */
+  cooperativeMatrix?: boolean;
+  /** Adapter info strings (vendor / architecture / device / description). */
+  vendor: string;
+  architecture: string;
+  device: string;
+  description: string;
+}
+
 export interface Capabilities {
   webgpu: boolean;
+  /** Sub-features of WebGPU; only meaningful when `webgpu === true`. */
+  gpuFeatures: GpuSubFeatures;
   wasmSimd: boolean;
   crossOriginIsolated: boolean; // needed only for threaded WASM
+  /** WebNN API present on `navigator.ml` (Chrome behind a flag in 2026).
+   *  Full GPU/NPU context probe is done later — this only flags presence. */
+  webnnPresent: boolean;
   /** Best backend that actually has a working kernel build today. */
   active: Backend;
 }
@@ -48,14 +77,25 @@ interface AdapterShape {
   requestAdapterInfo?: () => Promise<AdapterShape["info"]>;
 }
 
-async function probeWebGpu(): Promise<{ available: boolean; gpuName: string | null }> {
+interface AdapterFeatures { has(name: string): boolean }
+
+async function probeWebGpu(): Promise<{
+  available: boolean;
+  gpuName: string | null;
+  gpuFeatures: GpuSubFeatures;
+}> {
+  const empty: GpuSubFeatures = {
+    shaderF16: false, subgroups: false, timestampQuery: false,
+    vendor: "", architecture: "", device: "", description: "",
+  };
   const gpu = (navigator as unknown as {
-    gpu?: { requestAdapter(): Promise<AdapterShape | null> };
+    gpu?: { requestAdapter(): Promise<(AdapterShape & { features?: AdapterFeatures }) | null> };
   }).gpu;
-  if (!gpu) return { available: false, gpuName: null };
+  if (!gpu) return { available: false, gpuName: null, gpuFeatures: empty };
   try {
     const adapter = await gpu.requestAdapter();
-    if (!adapter) return { available: false, gpuName: null };
+    if (!adapter) return { available: false, gpuName: null, gpuFeatures: empty };
+
     let info = adapter.info;
     if (!info && typeof adapter.requestAdapterInfo === "function") {
       info = await adapter.requestAdapterInfo();
@@ -63,14 +103,22 @@ async function probeWebGpu(): Promise<{ available: boolean; gpuName: string | nu
     const parts = [info?.vendor, info?.architecture, info?.device, info?.description]
       .filter((s): s is string => typeof s === "string" && s.length > 0);
     const gpuName = parts.length ? parts.join(" · ") : null;
-    return { available: true, gpuName };
-  } catch {
-    return { available: false, gpuName: null };
-  }
-}
 
-async function hasWebGpu(): Promise<boolean> {
-  return (await probeWebGpu()).available;
+    // Adapter features — cheap to probe, no device creation needed.
+    const features = adapter.features;
+    const gpuFeatures: GpuSubFeatures = {
+      shaderF16: features?.has("shader-f16") ?? false,
+      subgroups: features?.has("subgroups") ?? false,
+      timestampQuery: features?.has("timestamp-query") ?? false,
+      vendor: info?.vendor ?? "",
+      architecture: info?.architecture ?? "",
+      device: info?.device ?? "",
+      description: info?.description ?? "",
+    };
+    return { available: true, gpuName, gpuFeatures };
+  } catch {
+    return { available: false, gpuName: null, gpuFeatures: empty };
+  }
 }
 
 export async function getGpuName(): Promise<string | null> {
@@ -79,14 +127,19 @@ export async function getGpuName(): Promise<string | null> {
 
 /** Probe the browser. `active` is the backend the worker will really use. */
 export async function detectCapabilities(): Promise<Capabilities> {
-  const webgpu = await hasWebGpu();
+  const probe = await probeWebGpu();
   const wasmSimd = hasWasmSimd();
+  // WebNN: just check if `navigator.ml` is a thing. The expensive context
+  // probe (gpu vs npu) happens later, opportunistically.
+  const webnnPresent = typeof (navigator as unknown as { ml?: unknown }).ml === "object" &&
+    (navigator as unknown as { ml?: unknown }).ml !== null;
   return {
-    webgpu,
+    webgpu: probe.available,
+    gpuFeatures: probe.gpuFeatures,
     wasmSimd,
     crossOriginIsolated:
       typeof crossOriginIsolated !== "undefined" && crossOriginIsolated,
-    // Only the scalar WASM kernel is built today — that is what runs.
+    webnnPresent,
     active: "wasm",
   };
 }

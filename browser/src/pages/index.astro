@@ -309,6 +309,148 @@ const pageStyle = `
         border: 1px dashed var(--accent-dim);
       }
 
+      /* Gallery dialog — modal grid of pre-trained models. */
+      dialog.gallery-dialog {
+        width: min(880px, calc(100vw - 32px));
+        max-height: calc(100vh - 64px);
+        padding: 0;
+        border: 1px solid var(--line-strong);
+        border-radius: 16px;
+        background: var(--panel);
+        color: var(--fg);
+        overflow: hidden;
+      }
+      dialog.gallery-dialog::backdrop {
+        background: rgba(4, 8, 12, 0.7);
+        backdrop-filter: blur(2px);
+      }
+      .gallery-head {
+        position: relative;
+        padding: 22px 28px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+      .gallery-head h2 {
+        font: 600 16px/1.2 var(--font-sans);
+        color: var(--fg);
+        margin: 0 0 6px;
+      }
+      .gallery-note {
+        font: 13px/1.55 var(--font-sans);
+        color: var(--muted);
+        margin: 0;
+        max-width: 720px;
+      }
+      .gallery-close {
+        position: absolute;
+        top: 14px; right: 14px;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--muted);
+        font: 18px/1 var(--font-sans);
+        width: 30px; height: 30px;
+        cursor: pointer;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+      }
+      .gallery-close:hover { color: var(--fg); border-color: var(--line-strong); background: var(--bg); }
+      .gallery-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        padding: 20px 24px 24px;
+        max-height: calc(100vh - 220px);
+        overflow-y: auto;
+      }
+      .gallery-loading {
+        grid-column: 1 / -1;
+        text-align: center;
+        color: var(--muted);
+        font: 13px/1.5 var(--font-sans);
+        padding: 40px 0;
+      }
+      .gallery-empty {
+        grid-column: 1 / -1;
+        text-align: center;
+        color: var(--muted);
+        font: 13px/1.5 var(--font-sans);
+        padding: 28px 0;
+      }
+      .gallery-card {
+        display: flex; flex-direction: column;
+        gap: 8px;
+        padding: 16px 18px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        text-align: left;
+        font: inherit; color: inherit;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s, transform 0.15s;
+      }
+      .gallery-card:hover {
+        border-color: var(--accent-dim);
+        background: var(--panel);
+      }
+      .gallery-card:active { transform: scale(0.998); }
+      .gallery-card[disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .gallery-card.loading {
+        border-color: var(--accent-dim);
+      }
+      .gallery-card-head {
+        display: flex; align-items: center; gap: 10px;
+      }
+      .gallery-card-icon {
+        font-size: 22px; line-height: 1;
+        width: 32px; height: 32px;
+        display: inline-flex; align-items: center; justify-content: center;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        flex: 0 0 auto;
+      }
+      .gallery-card-title {
+        font: 600 14px/1.2 var(--font-sans);
+        color: var(--fg);
+      }
+      .gallery-card-blurb {
+        font: 13px/1.5 var(--font-sans);
+        color: var(--muted);
+        margin: 0;
+      }
+      .gallery-card-sample {
+        font: 12px/1.5 var(--font-mono);
+        color: var(--fg);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 8px 10px;
+        white-space: pre-wrap;
+        max-height: 84px;
+        overflow: hidden;
+        position: relative;
+      }
+      .gallery-card-sample::after {
+        content: "";
+        position: absolute; inset: auto 0 0 0; height: 24px;
+        background: linear-gradient(to bottom, transparent, var(--panel));
+        pointer-events: none;
+      }
+      .gallery-card-stats {
+        font: 11px/1.4 var(--font-mono);
+        color: var(--faint);
+        display: flex; flex-wrap: wrap; gap: 8px 12px;
+      }
+      .gallery-card-stats em { font-style: normal; color: var(--accent); }
+      @media (max-width: 720px) {
+        dialog.gallery-dialog { width: calc(100vw - 16px); border-radius: 14px; }
+        .gallery-head { padding: 18px 20px 12px; }
+        .gallery-grid { grid-template-columns: 1fr; padding: 14px 16px 18px; gap: 10px; }
+        .gallery-card { padding: 14px; }
+      }
+
       /* Cards — quieter surfaces, defined by space not lines. */
       .card {
         background: var(--panel);
@@ -460,6 +602,42 @@ const pageStyle = `
       /* Honest "you're on Safari" note. Renders only when Safari is detected
          (see main.ts setupCaps). Soft yellow border, no scare emoji —
          informational, not blocking. */
+      #caps .gpu-accel {
+        display: inline-flex; gap: 6px; flex-wrap: wrap;
+      }
+      #caps .speed-nudge {
+        flex-basis: 100%;
+        display: flex; align-items: center; gap: 10px;
+        margin-top: 10px;
+        padding: 8px 12px 8px 10px;
+        background: rgba(245, 177, 74, 0.06);
+        border: 1px solid rgba(245, 177, 74, 0.25);
+        border-radius: 8px;
+        color: var(--muted);
+        font: 12.5px/1.55 var(--font-sans);
+      }
+      #caps .speed-nudge-icon { font-size: 16px; line-height: 1; }
+      #caps .speed-nudge-body { flex: 1; }
+      #caps .speed-nudge-body strong { color: var(--fg); font-weight: 500; }
+      #caps .speed-nudge-body code {
+        font: 11.5px/1 var(--font-mono);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 2px 6px;
+        color: var(--accent);
+      }
+      #caps .speed-nudge-close {
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--muted);
+        font: 16px/1 var(--font-sans);
+        width: 24px; height: 24px;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      #caps .speed-nudge-close:hover { color: var(--fg); border-color: var(--line-strong); }
       #caps .safari-note {
         flex-basis: 100%;
         margin-top: 10px;
@@ -2638,10 +2816,10 @@ const pageBody = `
       <div id="demoBanner" class="demo-banner" hidden>
         <div class="demo-banner-body">
           <strong>Two ways:</strong>
-          <span>load a 9.6M-param Shakespeare model (train loss 1.22, ~18&nbsp;MB) and hit Generate, or train your own from scratch using the controls below (~4–15&nbsp;min).</span>
+          <span>browse the <em>gallery</em> for 4 pre-trained models (same architecture, different corpora) and hit Generate, or train your own from scratch using the controls below (~4–15&nbsp;min).</span>
         </div>
-        <button id="loadDemoBtn" class="primary-btn demo-load-btn" type="button">
-          <span aria-hidden="true">▶</span> Load pretrained model
+        <button id="openGalleryBtn" class="primary-btn demo-load-btn" type="button">
+          <span aria-hidden="true">▶</span> Load from gallery
         </button>
       </div>
 
@@ -3208,6 +3386,19 @@ const pageBody = `
     </dialog>
     </div>
 
+    <!-- Gallery: dialog showing pre-trained models. Populated at runtime by
+         setupGallery() in main.ts from /gallery/manifest.json. -->
+    <dialog id="galleryDialog" class="gallery-dialog">
+      <header class="gallery-head">
+        <h2>Pre-trained gallery</h2>
+        <p id="galleryNote" class="gallery-note"></p>
+        <button class="gallery-close" id="galleryClose" type="button" aria-label="Close">×</button>
+      </header>
+      <div id="galleryGrid" class="gallery-grid">
+        <div class="gallery-loading">Loading gallery…</div>
+      </div>
+    </dialog>
+
     <!-- Themed confirm dialog, used by the Start pre-flight checks instead of
          native window.confirm(). showConfirm() in main.ts populates the body
          + button labels at call time. -->
@@ -3224,9 +3415,9 @@ const pageBody = `
       <h2>Welcome to TinyGPT</h2>
       <p>
         A complete transformer that trains from scratch — right here, in this tab,
-        with no server. Load the pretrained Shakespeare model to see it work in
-        one click, or train your own from scratch (a few minutes on the small
-        preset, ~15 minutes on the larger ones). Every layer was written by hand.
+        with no server. Browse the gallery to load a pre-trained model in one click,
+        or train your own from scratch (a few minutes on the small preset,
+        ~15 minutes on the larger ones). Every layer was written by hand.
         Want a 90-second tour first?
       </p>
       <div class="welcome-actions">
