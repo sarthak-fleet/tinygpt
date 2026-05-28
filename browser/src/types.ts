@@ -95,4 +95,9 @@ export type FromWorker =
   | { type: "restored" } // a saved model was reloaded into the worker
   | { type: "done"; reason: "finished" | "stopped" }
   | { type: "error"; message: string }
-  | { type: "inspect"; result: InspectResult };
+  | { type: "inspect"; result: InspectResult }
+  // Updates the capability pills with paths discovered post-device-init:
+  // f16Storage is set once GpuModel.prepareForInference() returns true
+  // (numerics gate passed AND weights packed). cooperativeMatrix will land
+  // here when #92 ships. Sent at most once per loaded model.
+  | { type: "gpu_caps"; caps: { f16Storage?: boolean; cooperativeMatrix?: boolean } };

@@ -249,6 +249,16 @@ async function runWebGpu(text: string, cfg: RunConfig): Promise<void> {
 async function warmupGenerate(g: GpuModel, ctx: number): Promise<void> {
   post({ type: "status", message: "warming up inference pipelines…" });
   const t0 = performance.now();
+  // Opportunistic f16-storage path: pack every weight to f16 IF the
+  // ops-level numerics gate has passed. Falls through silently if the gate
+  // failed (we stay on the f32 vec4 path; user sees identical quality).
+  // Doing this here (inside the warmup) means the very first generate()
+  // hits the fast path with packed buffers already in place.
+  const f16Active = await g.prepareForInference();
+  if (f16Active) {
+    // Surface to the main thread so the +f16 pill can update post-init.
+    post({ type: "gpu_caps", caps: { f16Storage: true } });
+  }
   // 32 tokens is a reasonable middle-ground prompt length. One forward at
   // T=32 compiles every inference kernel against bind-group layouts that
   // also cover smaller and bigger Ts (the kernels are shape-uniform; T
@@ -256,7 +266,8 @@ async function warmupGenerate(g: GpuModel, ctx: number): Promise<void> {
   const T = Math.min(32, ctx);
   const prompt = Array.from({ length: T }, (_, i) => 10 + (i % 90));
   await g.generate(prompt, 1, 0, 0, 0);
-  post({ type: "status", message: `inference warmed up in ${((performance.now() - t0) / 1000).toFixed(1)}s — ready to generate.` });
+  const note = f16Active ? " · f16-storage matmul active" : "";
+  post({ type: "status", message: `inference warmed up in ${((performance.now() - t0) / 1000).toFixed(1)}s${note} — ready to generate.` });
 }
 
 /**

@@ -33,6 +33,15 @@ interface Param {
   v: GpuTensor;
   size: number;
   decay: boolean;
+  /** Shape of the weight as [rows, cols] when this param is a 2D matrix
+   *  used in a matmul (q/k/v/o projections, MLP fc_in/fc_out, embeddings).
+   *  Null for 1D params (biases, layernorm gain/bias) that never appear as
+   *  the B side of a matmul. Drives the f16 packing geometry. */
+  matShape: [number, number] | null;
+  /** Packed-f16 storage buffer mirroring `w`, populated by
+   *  GpuModel.prepareForInference() iff the f16-storage numerics gate
+   *  passed. Null otherwise. */
+  wF16: GPUBuffer | null;
 }
 
 interface Layer {
@@ -98,13 +107,18 @@ export class GpuModel {
     return this.ops.upload(data);
   }
 
-  private makeParam(size: number, fill: Float32Array, decay: boolean): Param {
+  private makeParam(
+    size: number, fill: Float32Array, decay: boolean,
+    matShape: [number, number] | null = null,
+  ): Param {
     const p: Param = {
       w: GpuTensor.fromData(this.device, fill, "w"),
       m: GpuTensor.fromData(this.device, new Float32Array(size), "m"),
       v: GpuTensor.fromData(this.device, new Float32Array(size), "v"),
       size,
       decay,
+      matShape,
+      wF16: null,
     };
     this.params.push(p);
     return p;
@@ -133,6 +147,9 @@ export class GpuModel {
     const filled = (n: number, value: number) => new Float32Array(n).fill(value);
     const scaled = 0.02 / Math.sqrt(2 * layers); // residual-path init
 
+    // Embeddings are matmul-shaped (tied head uses tokEmb in matmulAbt) but
+    // they're consumed via embed_forward / matmulAbt, neither of which uses
+    // the f16-storage path today, so leave matShape null on them.
     this.tokEmb = this.makeParam(vocab * C, normal(vocab * C, 0.02), true);
     this.posEmb = this.makeParam(ctx * C, normal(ctx * C, 0.02), true);
     this.lnfG = this.makeParam(C, filled(C, 1), false);
@@ -142,22 +159,76 @@ export class GpuModel {
       this.layers.push({
         ln1g: this.makeParam(C, filled(C, 1), false),
         ln1b: this.makeParam(C, filled(C, 0), false),
-        wq: this.makeParam(C * C, normal(C * C, 0.02), true),
+        // Q/K/V/O projections + MLP fc_in/fc_out are the matmul-B targets in
+        // the forward pass. matShape = [K, N] matches the matmul C = A @ B
+        // signature where B is laid out [K, N] in row-major order.
+        wq: this.makeParam(C * C, normal(C * C, 0.02), true, [C, C]),
         bq: this.makeParam(C, filled(C, 0), false),
-        wk: this.makeParam(C * C, normal(C * C, 0.02), true),
+        wk: this.makeParam(C * C, normal(C * C, 0.02), true, [C, C]),
         bk: this.makeParam(C, filled(C, 0), false),
-        wv: this.makeParam(C * C, normal(C * C, 0.02), true),
+        wv: this.makeParam(C * C, normal(C * C, 0.02), true, [C, C]),
         bv: this.makeParam(C, filled(C, 0), false),
-        wo: this.makeParam(C * C, normal(C * C, scaled), true),
+        wo: this.makeParam(C * C, normal(C * C, scaled), true, [C, C]),
         bo: this.makeParam(C, filled(C, 0), false),
         ln2g: this.makeParam(C, filled(C, 1), false),
         ln2b: this.makeParam(C, filled(C, 0), false),
-        fcInW: this.makeParam(C * M, normal(C * M, 0.02), true),
+        fcInW: this.makeParam(C * M, normal(C * M, 0.02), true, [C, M]),
         fcInB: this.makeParam(M, filled(M, 0), false),
-        fcOutW: this.makeParam(M * C, normal(M * C, scaled), true),
+        fcOutW: this.makeParam(M * C, normal(M * C, scaled), true, [M, C]),
         fcOutB: this.makeParam(C, filled(C, 0), false),
       });
     }
+  }
+
+  /** Has the f16-storage path been activated for this model? Initially false;
+   *  flipped by prepareForInference() once the gate passes AND all matShape
+   *  weights have been packed. linear() uses this to choose the dispatch. */
+  private useF16Storage = false;
+
+  /** Pack every matmul-shaped weight into a packed-f16 storage buffer, IF
+   *  the ops-level numerics gate passes. Idempotent — second call is a
+   *  no-op. Should be invoked after importState() and before the hot loop
+   *  (warmupGenerate / generate / trainStep) so the first matmul on the
+   *  fast path doesn't pay any setup cost.
+   *
+   *  Returns true if the f16 path is now active; false if the gate failed
+   *  (in which case linear() continues to use the f32 matmul path
+   *  unchanged). Always resolves — no throws on gate failure. */
+  async prepareForInference(): Promise<boolean> {
+    if (this.useF16Storage) return true;
+    let gatePassed = false;
+    try {
+      gatePassed = await this.ops.f16Ready;
+    } catch {
+      gatePassed = false;
+    }
+    if (!gatePassed) return false;
+
+    // Pack every matShape'd weight. Skip params that aren't 2D matmul-B
+    // targets (biases, layernorm gain/bias) — those stay f32, used directly
+    // in bias_add / layernorm kernels which already handle f32 scalars.
+    for (const p of this.params) {
+      if (!p.matShape) continue;
+      const [rows, cols] = p.matShape;
+      if (cols % 2 !== 0) continue; // f16 packing requires even N axis
+      const bytes = (rows * cols) * 2; // K*N halfs
+      const buf = this.device.createBuffer({
+        label: "wF16",
+        size: bytes,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+      });
+      this.ops.packToF16(p.w.buffer, buf, rows, cols);
+      p.wF16 = buf;
+    }
+    this.useF16Storage = true;
+    return true;
+  }
+
+  /** True iff inference-time matmuls on weight matrices use the f16-storage
+   *  path. Exposed so the worker can post this back to the main thread for
+   *  the capability pill cluster. */
+  get f16StorageActive(): boolean {
+    return this.useF16Storage;
   }
 
   numParams(): number {
@@ -170,7 +241,16 @@ export class GpuModel {
 
   // --- linear = matmul + bias ----------------------------------------------
   private linear(x: GpuTensor, w: Param, b: Param, N: number, cin: number, cout: number) {
-    const y = this.keep(this.ops.matmul(x, w.w, N, cin, cout));
+    // f16-storage fast path: matmulF16Weight reads B as packed-half (half
+    // the bytes per inner-loop K-step), f32 accumulate. Numerics-gated at
+    // GpuOps create time and again at prepareForInference time, so this
+    // branch is only ever taken on configurations that pass both checks.
+    let y: GpuTensor;
+    if (this.useF16Storage && w.wF16 && w.matShape && cin % 2 === 0 && cout % 2 === 0) {
+      y = this.keep(this.ops.matmulF16Weight(x, w.wF16, N, cin, cout));
+    } else {
+      y = this.keep(this.ops.matmul(x, w.w, N, cin, cout));
+    }
     this.ops.biasAdd(y, b.w, N, cout);
     return y;
   }

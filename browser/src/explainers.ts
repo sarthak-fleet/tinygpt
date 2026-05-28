@@ -192,6 +192,14 @@ export const EXPLAINERS: Record<string, Explainer> = {
       label: "web.dev — COOP/COEP",
     },
   },
+  f16Storage: {
+    title: "f16-storage matmul",
+    body: "The matmul kernel reads weight tensors from a packed-half (f16) GPU buffer instead of the usual f32 — half the bytes per K-step, accumulation stays in f32 for numerical safety. Activates after the startup numerics gate confirms loss is preserved (max relative error < 5%, mean < 0.5% against the f32 reference). On bandwidth-bound matmuls this is ~1.5-2× faster; on Apple Silicon WebGPU the matmul path IS bandwidth-bound, so this lights up across the board. Uses pack2x16float / unpack2x16float — core WGSL, available on every WebGPU device (no shader-f16 extension needed).",
+    link: {
+      href: "https://www.w3.org/TR/WGSL/#pack2x16float-builtin",
+      label: "WGSL — pack2x16float",
+    },
+  },
   shaderF16: {
     title: "WGSL shader-f16",
     body: "WGSL extension that lets shaders use the f16 (half-precision) scalar type directly — not just for storage, but for compute. On bandwidth-bound matmuls this halves the memory traffic and on f16-capable hardware also halves the compute throughput cost. Chrome 121+ stable. When on, the matmul + MLP path runs in f16; final accumulation stays in f32 for numerical safety.",

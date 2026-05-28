@@ -2178,6 +2178,30 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       // A restored model lives in the worker — the Watch screen is now valid.
       (window as unknown as { __tgEnableWatch?: () => void }).__tgEnableWatch?.();
       break;
+    case "gpu_caps":
+      // Post-init capability update — the worker has just activated a
+      // path that wasn't visible to the main-thread startup probe (f16
+      // storage requires running the numerics gate; cooperativeMatrix
+      // requires the experimental WGSL extension compile). Update the
+      // capability pill cluster + dismiss the "Power user?" nudge if a
+      // power-user path lit up.
+      if (msg.caps.f16Storage) {
+        const slot = document.getElementById("gpuAccel");
+        if (slot && !slot.querySelector('[data-explain="f16Storage"]')) {
+          const pill = document.createElement("button");
+          pill.type = "button";
+          pill.className = "pill on pill-btn";
+          pill.dataset.explain = "f16Storage";
+          pill.title = "f16-storage matmul — packed-half weights, ~1.5-2× bandwidth-bound matmuls (passed numerics gate)";
+          pill.textContent = "+f16 storage";
+          slot.appendChild(pill);
+        }
+      }
+      if (msg.caps.cooperativeMatrix) {
+        (window as unknown as { __tgUpdateGpuAccelPills?: (e: { cooperativeMatrix?: boolean }) => void })
+          .__tgUpdateGpuAccelPills?.({ cooperativeMatrix: true });
+      }
+      break;
     case "done": {
       setRunning(false);
       stopElapsedClock();

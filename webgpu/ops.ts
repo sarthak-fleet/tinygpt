@@ -14,6 +14,7 @@
 import shader from "./train.wgsl?raw";
 import sgShader from "./train_sg.wgsl?raw";
 import vec4Shader from "./train_vec4.wgsl?raw";
+import f16Shader from "./train_f16.wgsl?raw";
 import fa2Shader from "./attention_fa2.wgsl?raw";
 import { BufferPool, GpuTensor, type GpuContext } from "./tensor";
 
@@ -34,6 +35,10 @@ const SG_ENTRIES = ["layernorm_forward_sg", "cross_entropy_sg"] as const;
  * WGSL side for 128-bit aligned global loads. Requires K and N to be
  * multiples of 4. */
 const VEC4_ENTRIES = ["matmul_blocked_vec4"] as const;
+/** Entry points that live in train_f16.wgsl — same bind layout, but g1 is
+ *  declared as array<u32> for packed-f16 weight storage. K and N must be
+ *  even. Gated on a startup numerics check (see verifyF16Storage). */
+const F16_ENTRIES = ["matmul_blocked_f16", "pack_to_f16"] as const;
 /** Flash-Attention-2-style fused attention forward. Same bind layout as
  * train.wgsl (g0=q g1=k g2=v g3=attn g4=ctx, p.a=B p.b=T p.c=C p.d=H
  * p.fa=1/sqrt(hd)). Workgroup-cooperative — one workgroup per
@@ -46,6 +51,7 @@ type Entry =
   | (typeof ENTRIES)[number]
   | (typeof SG_ENTRIES)[number]
   | (typeof VEC4_ENTRIES)[number]
+  | (typeof F16_ENTRIES)[number]
   | (typeof FA2_ENTRIES)[number];
 
 /** Params uniform: up to four u32 (dims) and four f32 (eps, scale, ...). */
@@ -75,6 +81,10 @@ export class GpuOps {
     readonly pool: BufferPool,
     /** True iff the device gave us subgroups (train_sg.wgsl pipelines exist). */
     readonly hasSubgroups: boolean,
+    /** True iff the f16-storage matmul kernel both compiled AND passed the
+     *  startup numerics gate. Defaults false; flipped by verifyF16Storage()
+     *  during create(). When false, callers fall back to the f32 vec4 path. */
+    public f16StorageActive: boolean,
   ) {}
 
   /** Start recording a batch of dispatches into a single command buffer. */
@@ -101,6 +111,12 @@ export class GpuOps {
     }
     return this.uniforms[this.uniformIdx++];
   }
+
+  /** Promise resolving when the f16-storage numerics gate has finished.
+   *  Resolves to the verdict: true iff the f16 path passed the check.
+   *  Settable via the static factory; callers await this before relying on
+   *  f16StorageActive being its final value. */
+  public f16Ready: Promise<boolean> = Promise.resolve(false);
 
   static create(ctx: GpuContext): GpuOps {
     const device = ctx.device;
@@ -151,6 +167,17 @@ export class GpuOps {
       });
     }
 
+    // F16-storage matmul + the pack helper. Always compiles (uses core WGSL
+    // pack2x16float / unpack2x16float; no `enable f16;` extension needed),
+    // but only activates after the numerics gate at the end of create().
+    const f16Module = device.createShaderModule({ code: f16Shader });
+    for (const f16Entry of F16_ENTRIES) {
+      pipelines[f16Entry] = device.createComputePipeline({
+        layout: pipelineLayout,
+        compute: { module: f16Module, entryPoint: f16Entry },
+      });
+    }
+
     // FA2 fused attention forward — workgroup-cooperative, online softmax.
     // Separate module because the WGSL declares a workgroup-scope Q tile
     // sized for hd ≤ MAX_HD that train.wgsl doesn't carry.
@@ -167,7 +194,102 @@ export class GpuOps {
     for (let i = 0; i < 6; i++) {
       dummies.push(device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE }));
     }
-    return new GpuOps(device, layout, pipelines, dummies, new BufferPool(device), ctx.subgroups);
+    const ops = new GpuOps(
+      device, layout, pipelines, dummies, new BufferPool(device),
+      ctx.subgroups, /* f16StorageActive */ false,
+    );
+
+    // Kick off the numerics gate in the background. Until it settles, all
+    // matmuls use the f32 vec4 path. Once it passes, f16StorageActive
+    // flips to true and subsequent generate() / training calls can opt in.
+    ops.f16Ready = ops.verifyF16Storage().catch((err) => {
+      console.warn("[ops] f16-storage numerics gate threw:", err);
+      return false;
+    });
+
+    return ops;
+  }
+
+  /** Numerics gate for the f16-storage matmul path.
+   *
+   *  Runs a representative matmul (small enough to be fast, large enough K
+   *  that fp16 rounding has room to compound) on both the f32 vec4 path and
+   *  the new f16 packed-storage path. Compares outputs element-wise.
+   *  Activates the f16 path only if both `max relative error < 5e-2` AND
+   *  `mean relative error < 5e-3` — the looser max bound catches the
+   *  occasional cancellation, the tighter mean catches systematic bias.
+   *
+   *  Worst-case theoretical bound: dot product of K f16-truncated values
+   *  has relative error ~sqrt(K) × eps_f16 ≈ sqrt(128) × 5e-4 ≈ 5.6e-3.
+   *  So the 5e-3 mean threshold is right at the theoretical edge — a path
+   *  that fails this is likely a real bug, not normal f16 drift. */
+  private async verifyF16Storage(): Promise<boolean> {
+    const M = 64, K = 128, N = 128;
+    if (!this.pipelines["matmul_blocked_f16"] || !this.pipelines["pack_to_f16"]) {
+      return false;
+    }
+
+    // Deterministic inputs: small magnitudes so f16 underflow isn't an issue.
+    const aData = new Float32Array(M * K);
+    const bData = new Float32Array(K * N);
+    let seed = 12345;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return (seed / 0x7fffffff) * 0.4 - 0.2; // [-0.2, 0.2] — typical weight scale
+    };
+    for (let i = 0; i < aData.length; i++) aData[i] = rand();
+    for (let i = 0; i < bData.length; i++) bData[i] = rand();
+
+    const a = new GpuTensor(this.device, M * K);
+    a.upload(aData);
+    const b = new GpuTensor(this.device, K * N);
+    b.upload(bData);
+
+    // f32 reference via the existing matmul path (matmul_blocked_vec4).
+    const cF32 = this.matmul(a, b, M, K, N);
+    const refOut = await cF32.download();
+
+    // Pack B to f16 storage in a fresh GPU buffer.
+    const packedBytes = (K * N) * 2; // K*N/2 u32 = K*N halfs = K*N*2 bytes
+    const bPackedBuf = this.device.createBuffer({
+      size: packedBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    this.packToF16(b.buffer, bPackedBuf, K, N);
+
+    // f16-storage matmul.
+    const cF16 = this.matmulF16Weight(a, bPackedBuf, M, K, N);
+    const f16Out = await cF16.download();
+
+    // Element-wise comparison.
+    let maxAbs = 0, maxRel = 0, sumRel = 0, count = 0;
+    for (let i = 0; i < refOut.length; i++) {
+      const r = refOut[i];
+      const f = f16Out[i];
+      const denom = Math.max(Math.abs(r), 1e-6);
+      const rel = Math.abs(f - r) / denom;
+      if (rel > maxRel) maxRel = rel;
+      maxAbs = Math.max(maxAbs, Math.abs(f - r));
+      sumRel += rel;
+      count++;
+    }
+    const meanRel = sumRel / count;
+
+    // Threshold: max < 5%, mean < 0.5%. See header comment for derivation.
+    const passed = maxRel < 5e-2 && meanRel < 5e-3;
+    console.info(
+      `[ops] f16-storage gate: max_abs=${maxAbs.toExponential(2)}, ` +
+      `max_rel=${(maxRel * 100).toFixed(2)}%, mean_rel=${(meanRel * 100).toFixed(3)}% — ` +
+      `${passed ? "PASS — f16 path active" : "FAIL — staying on f32 vec4"}`,
+    );
+
+    this.f16StorageActive = passed;
+    a.destroy();
+    b.destroy();
+    bPackedBuf.destroy();
+    cF32.recycle();
+    cF16.recycle();
+    return passed;
   }
 
   private newTensor(size: number, label: string): GpuTensor {
@@ -282,6 +404,104 @@ export class GpuOps {
       dA: this.matmulAbt(dC, b, M, N, K), // dC:[M,N] @ B:[K,N]ᵀ -> [M,K]
       dB: this.matmulAtb(a, dC, K, M, N), // A:[M,K]ᵀ @ dC:[M,N] -> [K,N]
     };
+  }
+
+  // --- f16-storage matmul --------------------------------------------------
+  /** Same shape as matmul (C = A @ B → [M,N]) but B is a pre-packed f16
+   *  storage buffer instead of an f32 GpuTensor. A stays f32 (activations
+   *  are produced by other f32 kernels in the same submit), accumulation
+   *  stays f32. K and N must be even. The B buffer length is K*N/2 u32
+   *  (two consecutive f16 packed per u32 along the N axis).
+   *
+   *  Use this when the caller has already packed a weight tensor via
+   *  packToF16 (typically once on importState, then again after each AdamW
+   *  step). For matmuls where B is a transient activation/gradient, stick
+   *  with the f32 matmul — the pack-pass cost dominates the bandwidth win
+   *  when B is single-use. */
+  matmulF16Weight(
+    a: GpuTensor, bPackedF16: GPUBuffer, M: number, K: number, N: number,
+  ): GpuTensor {
+    if (K % 2 !== 0 || N % 2 !== 0) {
+      throw new Error(`matmulF16Weight: K and N must be even (got K=${K}, N=${N})`);
+    }
+    const c = this.newTensor(M * N, "matmul.f16.C");
+    this.dispatchMixed(
+      "matmul_blocked_f16",
+      [a.buffer, bPackedF16, c.buffer],
+      { a: M, b: K, c: N },
+      Math.ceil(M / 64), Math.ceil(N / 64),
+    );
+    return c;
+  }
+
+  /** Pack a f32 weight buffer into a packed-f16 storage buffer (each pair
+   *  of consecutive f32 values along the N axis becomes one packed u32).
+   *  Dispatched once on weight load (after importState) and again after
+   *  each AdamW step. N must be even.
+   *
+   *  This kernel reads from srcF32 (length M*N f32) and writes to dstF16
+   *  (length M*N/2 u32 = M*N halfs). Both buffers must be raw GPUBuffers
+   *  with STORAGE usage. */
+  packToF16(srcF32: GPUBuffer, dstF16: GPUBuffer, M: number, N: number): void {
+    if (N % 2 !== 0) {
+      throw new Error(`packToF16: N must be even (got ${N})`);
+    }
+    const totalPairs = (M * N) / 2;
+    this.dispatchMixed(
+      "pack_to_f16",
+      [srcF32, dstF16],
+      { a: M, b: N },
+      Math.ceil(totalPairs / 64),
+    );
+  }
+
+  /** Variant of dispatch() that accepts raw GPUBuffers in the binding slots
+   *  rather than GpuTensors. Used by the f16-storage paths where one buffer
+   *  is the pre-packed weight (not a GpuTensor wrapper).
+   *
+   *  Identical command-recording shape as dispatch — same uniform encoding,
+   *  same beginBatch/endBatch coordination. */
+  private dispatchMixed(
+    entry: Entry,
+    buffers: GPUBuffer[],
+    params: Params,
+    wgX: number,
+    wgY = 1,
+  ): void {
+    const ownBatch = this.pass === null;
+    if (ownBatch) this.beginBatch();
+
+    const u = new ArrayBuffer(32);
+    const dv = new DataView(u);
+    dv.setUint32(0, params.a ?? 0, true);
+    dv.setUint32(4, params.b ?? 0, true);
+    dv.setUint32(8, params.c ?? 0, true);
+    dv.setUint32(12, params.d ?? 0, true);
+    dv.setFloat32(16, params.fa ?? 0, true);
+    dv.setFloat32(20, params.fb ?? 0, true);
+    dv.setFloat32(24, params.fc ?? 0, true);
+    dv.setFloat32(28, params.fd ?? 0, true);
+    const ubuf = this.nextUniform();
+    this.device.queue.writeBuffer(ubuf, 0, u);
+
+    const entries: GPUBindGroupEntry[] = [];
+    for (let i = 0; i < 6; i++) {
+      entries.push({
+        binding: i,
+        resource: { buffer: i < buffers.length ? buffers[i] : this.dummies[i] },
+      });
+    }
+    entries.push({ binding: 6, resource: { buffer: ubuf } });
+    const bind = this.device.createBindGroup({ layout: this.layout, entries });
+
+    const pass = this.pass as GPUComputePassEncoder;
+    const pipeline = this.pipelines[entry];
+    if (!pipeline) throw new Error(`pipeline missing for ${entry}`);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bind);
+    pass.dispatchWorkgroups(wgX, wgY);
+
+    if (ownBatch) this.endBatch();
   }
 
   // --- elementwise ---------------------------------------------------------
