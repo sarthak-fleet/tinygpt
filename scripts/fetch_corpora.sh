@@ -7,23 +7,33 @@
 #   ./scripts/fetch_corpora.sh           # default 11 books
 #   OUT_DIR=./data/corpora ./scripts/fetch_corpora.sh
 #
-# After running, /tmp/tinygpt-corpora/ has:
-#   shakespeare-complete.txt   5.6 MB   the full canon
-#   war-and-peace.txt          3.3 MB
-#   monte-cristo.txt           2.8 MB
-#   don-quixote.txt            2.4 MB
-#   middlemarch.txt            1.8 MB
-#   moby-dick.txt              1.3 MB
-#   pride-prejudice.txt         752 KB
-#   huck-finn.txt               591 KB
-#   frankenstein.txt            429 KB
-#   heart-of-darkness.txt       217 KB
-#   alice.txt                   151 KB
+# After running, /tmp/tinygpt-corpora/ has ~34 MB of varied prose:
+#
+#   shakespeare-complete.txt   5.6 MB   Shakespeare (Complete)
+#   bible-kjv.txt              4.4 MB   King James Bible
+#   les-miserables.txt         3.3 MB   Hugo
+#   war-and-peace.txt          3.3 MB   Tolstoy
+#   monte-cristo.txt           2.8 MB   Dumas
+#   don-quixote.txt            2.4 MB   Cervantes
+#   anna-karenina.txt          2.0 MB   Tolstoy
+#   bleak-house.txt            2.0 MB   Dickens
+#   middlemarch.txt            1.8 MB   Eliot
+#   ulysses.txt                1.6 MB   Joyce
+#   moby-dick.txt              1.3 MB   Melville
+#   crime-and-punishment.txt   1.2 MB   Dostoevsky
+#   pride-prejudice.txt         752 KB  Austen
+#   huck-finn.txt               591 KB  Twain
+#   sherlock-holmes.txt         588 KB  Doyle
+#   frankenstein.txt            429 KB  Shelley
+#   heart-of-darkness.txt       217 KB  Conrad
+#   alice.txt                   151 KB  Carroll
+#   modest-proposal.txt          20 KB  Swift
 #
 # Combine into themed mega-corpora with `cat`:
-#   cat shakespeare-complete.txt pride-prejudice.txt middlemarch.txt > victorian.txt
-#   cat moby-dick.txt frankenstein.txt monte-cristo.txt > adventure.txt
-#   cat *.txt > everything.txt  # ~19 MB unified literary corpus
+#   cat shakespeare-complete.txt pride-prejudice.txt middlemarch.txt bleak-house.txt > english-classics.txt
+#   cat war-and-peace.txt anna-karenina.txt crime-and-punishment.txt > russian-lit.txt
+#   cat moby-dick.txt frankenstein.txt monte-cristo.txt les-miserables.txt > adventure.txt
+#   cat *.txt > everything.txt   # ~34 MB unified literary corpus
 
 set -uo pipefail
 
@@ -61,18 +71,26 @@ fetch_book() {
 # Curated for byte-level training: English prose, narrative + dialogue,
 # varied register from Victorian formal to Twain's vernacular.
 books=(
+  # Top tier — biggest individual works
   "100   shakespeare-complete.txt   Shakespeare (Complete Works)"
+  "10    bible-kjv.txt              King James Bible"
   "2600  war-and-peace.txt          War and Peace (Tolstoy)"
+  "135   les-miserables.txt         Les Misérables (Hugo)"
   "1184  monte-cristo.txt           Count of Monte Cristo (Dumas)"
   "996   don-quixote.txt            Don Quixote (Cervantes)"
+  "1399  anna-karenina.txt          Anna Karenina (Tolstoy)"
+  "1023  bleak-house.txt            Bleak House (Dickens)"
   "145   middlemarch.txt            Middlemarch (Eliot)"
+  "4300  ulysses.txt                Ulysses (Joyce)"
+  "2554  crime-and-punishment.txt   Crime and Punishment (Dostoevsky)"
   "2701  moby-dick.txt              Moby Dick (Melville)"
+  # Mid-tier
   "1342  pride-prejudice.txt        Pride and Prejudice (Austen)"
   "76    huck-finn.txt              Huckleberry Finn (Twain)"
+  "1661  sherlock-holmes.txt        Adventures of Sherlock Holmes (Doyle)"
   "84    frankenstein.txt           Frankenstein (Shelley)"
   "219   heart-of-darkness.txt      Heart of Darkness (Conrad)"
   "11    alice.txt                  Alice in Wonderland (Carroll)"
-  "1661  sherlock-holmes.txt        Adventures of Sherlock Holmes (Doyle)"
   "1080  modest-proposal.txt        A Modest Proposal (Swift)"
 )
 
