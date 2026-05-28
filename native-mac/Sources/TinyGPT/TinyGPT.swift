@@ -38,6 +38,8 @@ struct TinyGPT {
             Finetune.run(args: Array(args.dropFirst()))
         case "compare":
             Compare.run(args: Array(args.dropFirst()))
+        case "hf-inspect":
+            HFInspect.run(args: Array(args.dropFirst()))
         case "sample":
             Sample.run(args: Array(args.dropFirst()))
         case "debug-names":
