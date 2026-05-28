@@ -1,6 +1,6 @@
 # Annotated transcript
 
-The conversation, condensed. Long replies have been squeezed to their actionable conclusion; emoji-free; some early phases reconstructed because the agent's context window had compressed them. What follows is a chat-style record of a long TinyGPT working session between Sarthak (the human, project owner) and an AI pair (Claude Opus 4.7). Sarthak's tone is preserved where it carries signal — the "bruh", the "go", the "saved" — because the texture of the back-and-forth is part of how decisions actually got made.
+The conversation, condensed. Long replies have been squeezed to their actionable conclusion; emoji-free; some early phases reconstructed from compressed records. What follows is a chat-style record of the working session that built much of TinyGPT. Tone preserved where it carries signal — the shorthand that drove decisions in the moment is part of how those decisions actually got made.
 
 ---
 

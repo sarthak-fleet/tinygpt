@@ -1,8 +1,8 @@
 # TinyGPT — Working Session Q&A Log
 
-A chronological reconstruction of a long pairing session between Sarthak (project owner) and Claude Opus 4.7. The format is question-then-answer in the voice the agent used at the time, with an **Outcome** line per entry pointing at what actually shipped. The thread spans four rough phases: an early measurement-and-disillusionment phase, a reframing of what the demo is for, a build-and-ship sprint, and a final round that surfaced the meta-question of "document this thread so it can be re-read."
+A chronological reconstruction of the working session — the questions asked, what shipped in response. Format is question-then-answer, with an **Outcome** line per entry pointing at what actually shipped. The thread spans four rough phases: an early measurement-and-disillusionment phase, a reframing of what the demo is for, a build-and-ship sprint, and a final round that surfaced the meta-question of "document this thread so it can be re-read."
 
-Some of the agent's early answers were wrong; those are kept honest. The pushbacks Sarthak gave were, in retrospect, correct almost every time.
+Some of the early answers were wrong; those are kept honest. The pushbacks were, in retrospect, correct almost every time.
 
 ---
 
