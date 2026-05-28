@@ -2082,6 +2082,18 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       setProgress(p.step, p.maxSteps);
       refreshSampleNote();
       updateStickyStats(p.step, p.maxSteps, p.trainLoss, p.tokensPerSecond, els.stEta.textContent || "–");
+      // Live GPU activity badge — visible during training, shows real
+      // tok/s so users can see their GPU is being driven hard.
+      {
+        const badge = document.getElementById("gpuActiveBadge");
+        const tpsEl = document.getElementById("gpuActiveTps");
+        if (badge && tpsEl) {
+          badge.hidden = false;
+          tpsEl.textContent = p.tokensPerSecond > 0
+            ? `${Math.round(p.tokensPerSecond).toLocaleString()} tok/s`
+            : "warming up…";
+        }
+      }
       // Live time estimate: tokens left ÷ current throughput.
       if (lastConfig && p.tokensPerSecond > 0 && p.step < p.maxSteps) {
         const tokensLeft = (p.maxSteps - p.step) * lastConfig.batchSize * lastConfig.ctx;
@@ -2205,6 +2217,11 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
     case "done": {
       setRunning(false);
       stopElapsedClock();
+      // Hide the GPU active badge — training's done, the GPU is idle.
+      {
+        const badge = document.getElementById("gpuActiveBadge");
+        if (badge) badge.hidden = true;
+      }
       // Re-enable the Generate button: by this point the worker has finished
       // both training and the post-training inference-pipeline warmup, so
       // the first click won't pay the 10–30s WGSL compile cost.
