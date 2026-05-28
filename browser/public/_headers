@@ -20,3 +20,13 @@
 /tinygpt.wasm
   Cross-Origin-Resource-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+# Gallery models — 18 MB binary blobs per model. Without explicit cache
+# headers Cloudflare Pages was serving them as cf-cache-status: DYNAMIC
+# (i.e. ignored the edge cache entirely), so every download hit the origin.
+# Now: aggressive edge caching with stale-while-revalidate so model retrains
+# propagate within ~5 minutes globally without re-fetching on every click.
+/gallery/*.tinygpt
+  Cache-Control: public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800
+/gallery/manifest.json
+  Cache-Control: public, max-age=60, s-maxage=300, stale-while-revalidate=3600

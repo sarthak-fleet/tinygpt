@@ -51,6 +51,7 @@ const SLOTS = [
     staticParams: "9.6M",
     staticTrainLoss: "1.22",
     staticSteps: 5000,
+    staticPrompt: "MENENIUS:\n",
   },
   {
     id: "tinystories",
@@ -314,6 +315,13 @@ for (const slot of SLOTS) {
   const paramCount = tinygptConfig ? paramsFromManifestConfig(tinygptConfig) : 0;
   const gpuBytes = paramCount * 12;
 
+  // Pick a starting prompt per model so the user lands on the right
+  // continuation pattern: "User: " for chat, "def " for code, "Once upon
+  // a time" for stories, "MENENIUS:" for Shakespeare. Prefer the prompt
+  // the model was actually sampled with at training time (in meta.json)
+  // over the static slot fallback.
+  const prompt = meta?.samplePrompt ?? slot.staticPrompt ?? "";
+
   built.push({
     id: slot.id,
     name: slot.name,
@@ -329,6 +337,7 @@ for (const slot of SLOTS) {
     sample: trimSample(sampleText),
     fileBytes: conv?.dstBytes ?? null,
     gpuBytes,
+    prompt,
   });
 }
 

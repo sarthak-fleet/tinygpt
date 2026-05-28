@@ -3066,6 +3066,11 @@ interface GalleryModel {
   /** Persistent GPU buffer footprint when loaded (weights + Adam state).
    *  Doesn't include activations (those are per-step transients). */
   gpuBytes?: number;
+  /** Starting text the model expects — "User: " for chat, "def " for
+   *  code, "Once upon a time" for stories, etc. Set as the prompt input
+   *  value when this card loads so the first Generate click produces
+   *  format-consistent output. */
+  prompt?: string;
 }
 interface GalleryManifest {
   version: number;
@@ -3185,6 +3190,18 @@ async function loadGalleryCard(
     // Surface the loaded model's GPU footprint as a live pill in the
     // capability cluster — answers "how much of my GPU is being used".
     if (m.paramCount) setGpuMemPill(m.paramCount);
+    // Set the prompt input to the model's expected starting text. Each
+    // gallery model was trained on a specific format ("User: ..." for
+    // chat, "def " for code, etc.); the matching prompt makes the first
+    // Generate click produce format-consistent output instead of
+    // bleeding the prior input from a different gallery model.
+    if (m.prompt) {
+      const promptEl = document.getElementById("prompt") as HTMLInputElement | null;
+      if (promptEl) {
+        promptEl.value = m.prompt;
+        promptEl.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    }
     dialog.close();
     // Keep the banner visible; user explicitly asked for the gallery to
     // stay reachable from Setup after loading a model.
