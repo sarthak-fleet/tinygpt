@@ -13,6 +13,7 @@ enum Sample {
         var prompt = "ROMEO:"
         var maxTokens = 200
         var temperature: Float = 0.8
+        var useKVCache = true  // KV-cached path is the default; --no-cache reverts
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -25,6 +26,10 @@ enum Sample {
             case "--temperature", "--temp":
                 guard i + 1 < args.count else { exitUsage() }
                 temperature = Float(args[i + 1]) ?? temperature; i += 2
+            case "--no-cache":
+                useKVCache = false; i += 1
+            case "--cache":
+                useKVCache = true; i += 1
             case "-h", "--help":
                 exitUsage()
             default:
@@ -78,37 +83,66 @@ enum Sample {
         fflush(stdout)
 
         let t0 = Date()
-        // Generate one token at a time so we can stream output. (Calling
-        // model.generate in one shot would buffer until completion.)
-        var idx = promptIds
-        for _ in 0..<maxTokens {
-            let T = idx.shape.last!
-            let lo = max(0, T - cfg.contextLength)
-            let cond = idx[0..., lo..<T]
-            let logits = model(cond)
-            let last = logits[0..., logits.shape[1] - 1, 0...]
-            let nextId: MLXArray
-            if temperature <= 0 {
-                nextId = argMax(last, axis: -1).reshaped([1, 1])
-            } else {
-                let scaled = last / MLXArray(temperature)
-                nextId = MLXRandomCategorical(scaled).reshaped([1, 1])
+        let cache = useKVCache ? KVCache(nLayers: cfg.nLayers) : nil
+
+        if useKVCache, let cache {
+            // PREFILL: run the prompt through the cached path once, populates
+            // K/V for every layer. Then DECODE one token at a time, feeding
+            // only the new token and reusing the cache.
+            let prefillLogits = model.forwardCached(promptIds, cache: cache)
+            var lastLogits = prefillLogits[0..., prefillLogits.shape[1] - 1, 0...]
+            for _ in 0..<maxTokens {
+                let nextId: MLXArray
+                if temperature <= 0 {
+                    nextId = argMax(lastLogits, axis: -1).reshaped([1, 1])
+                } else {
+                    let scaled = lastLogits / MLXArray(temperature)
+                    nextId = MLXRandomCategorical(scaled).reshaped([1, 1])
+                }
+                eval(nextId)
+                let id = Int(nextId.item(Int32.self))
+                if let scalar = UnicodeScalar(id) {
+                    print(String(scalar), terminator: "")
+                    fflush(stdout)
+                }
+                if cache.currentLength >= cfg.contextLength {
+                    // Cache is full — stop. Real production code would slide
+                    // the window, but for the demo we just halt.
+                    break
+                }
+                let logits = model.forwardCached(nextId.asType(promptIds.dtype), cache: cache)
+                lastLogits = logits[0..., 0, 0...]
             }
-            eval(nextId)
-            let id = Int(nextId.item(Int32.self))
-            // 0-255 valid byte; lone bytes inside multibyte UTF-8 sequences
-            // will print as the replacement char. Acceptable for streaming
-            // demo; collect-then-decode would block until end.
-            if let scalar = UnicodeScalar(id) {
-                print(String(scalar), terminator: "")
-                fflush(stdout)
+        } else {
+            // Legacy uncached path — recomputes the whole context every token.
+            // Kept under --no-cache for benchmarking and bug isolation.
+            var idx = promptIds
+            for _ in 0..<maxTokens {
+                let T = idx.shape.last!
+                let lo = max(0, T - cfg.contextLength)
+                let cond = idx[0..., lo..<T]
+                let logits = model(cond)
+                let last = logits[0..., logits.shape[1] - 1, 0...]
+                let nextId: MLXArray
+                if temperature <= 0 {
+                    nextId = argMax(last, axis: -1).reshaped([1, 1])
+                } else {
+                    let scaled = last / MLXArray(temperature)
+                    nextId = MLXRandomCategorical(scaled).reshaped([1, 1])
+                }
+                eval(nextId)
+                let id = Int(nextId.item(Int32.self))
+                if let scalar = UnicodeScalar(id) {
+                    print(String(scalar), terminator: "")
+                    fflush(stdout)
+                }
+                idx = concatenated([idx, nextId.asType(idx.dtype)], axis: 1)
             }
-            idx = concatenated([idx, nextId.asType(idx.dtype)], axis: 1)
         }
         let elapsed = -t0.timeIntervalSinceNow
         let tokensPerSec = Double(maxTokens) / elapsed
         print("\n")
-        print("(\(maxTokens) tokens in \(String(format: "%.2f", elapsed))s — \(String(format: "%.0f", tokensPerSec)) tok/s)")
+        print("(\(maxTokens) tokens in \(String(format: "%.2f", elapsed))s — \(String(format: "%.0f", tokensPerSec)) tok/s · \(useKVCache ? "KV-cached" : "uncached"))")
     }
 
     private static func MLXRandomCategorical(_ logits: MLXArray) -> MLXArray {
