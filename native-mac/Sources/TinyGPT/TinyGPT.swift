@@ -32,6 +32,8 @@ struct TinyGPT {
             Bench.run(args: Array(args.dropFirst()))
         case "train":
             Train.run(args: Array(args.dropFirst()))
+        case "eval":
+            Eval.run(args: Array(args.dropFirst()))
         case "sample":
             Sample.run(args: Array(args.dropFirst()))
         case "debug-names":
