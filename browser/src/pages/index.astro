@@ -2203,6 +2203,10 @@ const pageStyle = `
       }
       .tour-pop {
         position: fixed;
+        /* Floating UI strategy:fixed writes left/top in viewport coords; */
+        /* without explicit zeros the popover briefly renders at its */
+        /* natural-flow position before Floating UI's first callback fires. */
+        left: 0; top: 0;
         z-index: 1001;
         max-width: 360px;
         background: var(--panel-2);
@@ -2210,11 +2214,13 @@ const pageStyle = `
         border-radius: 10px;
         padding: 18px 18px 14px;
         box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(72, 229, 194, 0.06);
+        /* Plain opacity fade; transform on the popover itself fought */
+        /* Floating UI in some Chrome versions, leaving it stuck. */
         animation: tour-in 0.18s ease;
       }
       @keyframes tour-in {
-        from { opacity: 0; transform: translateY(-6px) scale(0.97); }
-        to { opacity: 1; transform: translateY(0) scale(1); }
+        from { opacity: 0; }
+        to { opacity: 1; }
       }
       .tour-pop .tour-step {
         font: 500 10.5px/1 var(--font-mono);
@@ -3524,13 +3530,11 @@ const pageBody = `
       <h2>Welcome to TinyGPT</h2>
       <p>
         A complete transformer that trains from scratch — right here, in this tab,
-        with no server. Browse the gallery to load a pre-trained model in one click,
-        or train your own from scratch (a few minutes on the small preset,
-        ~15 minutes on the larger ones). Every layer was written by hand.
-        Want a 90-second tour first?
+        with no server. Every layer was written by hand. Three ways to start:
       </p>
       <div class="welcome-actions">
         <button class="secondary" id="welcomeSkip">Just explore</button>
+        <button class="secondary" id="welcomeGallery">Load a model</button>
         <button class="primary" id="welcomeStart">Take the tour</button>
       </div>
     </dialog>`;

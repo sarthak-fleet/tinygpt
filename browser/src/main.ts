@@ -30,7 +30,7 @@ import {
   headsFor,
 } from "./sizing";
 import { loadCachedGalleryModel, loadRun, loadState, requestDurableStorage, saveCachedGalleryModel, saveRun, saveState } from "./storage";
-import { markTourSeen, startTour } from "./tour";
+import { hasSeenTour, markTourSeen, startTour } from "./tour";
 import { DEFAULT_CONFIG, type FromWorker, type InspectResult, type RunConfig, type ToWorker } from "./types";
 import {
   initAnalytics,
@@ -3355,6 +3355,7 @@ function setupTour(): void {
   const welcome = document.getElementById("welcome") as HTMLDialogElement | null;
   const welcomeStart = document.getElementById("welcomeStart") as HTMLButtonElement | null;
   const welcomeSkip = document.getElementById("welcomeSkip") as HTMLButtonElement | null;
+  const welcomeGallery = document.getElementById("welcomeGallery") as HTMLButtonElement | null;
 
   tourBtn?.addEventListener("click", () => startTour());
 
@@ -3362,6 +3363,7 @@ function setupTour(): void {
     welcomeStart.addEventListener("click", () => {
       welcome.close();
       maybeFirePlaygroundLoaded();
+      markTourSeen();
       startTour();
     });
     welcomeSkip.addEventListener("click", () => {
@@ -3369,14 +3371,26 @@ function setupTour(): void {
       maybeFirePlaygroundLoaded();
       markTourSeen();
     });
-    // Welcome modal does NOT auto-show on first visit anymore — it was
-    // wonky landing UX (modal blocks the page right as the user lands).
-    // The intro card + the demo banner already communicate "what is this"
-    // without blocking. Tour stays available via the keyboard shortcut (T)
-    // and the explicit tourBtn. Fire the playground_loaded event immediately
-    // — there's no modal dismissal to wait on.
-    maybeFirePlaygroundLoaded();
-    markTourSeen(); // suppress any future auto-show paths too
+    // "Load a model" — close welcome, then click the gallery CTA in the
+    // banner so the user lands directly in the gallery dialog. The button
+    // (#openGalleryBtn) is wired by setupGallery() to showModal the gallery.
+    welcomeGallery?.addEventListener("click", () => {
+      welcome.close();
+      maybeFirePlaygroundLoaded();
+      markTourSeen();
+      document.getElementById("openGalleryBtn")?.click();
+    });
+
+    // Auto-show on first visit only. hasSeenTour() / markTourSeen() use
+    // localStorage so the modal doesn't reappear after the user picked an
+    // option. Returning visitors land straight into the playground.
+    if (!hasSeenTour() && typeof welcome.showModal === "function") {
+      welcome.showModal();
+      // Don't fire playground_loaded yet — wait for the user to pick an
+      // option so the analytics event carries the "took_tour" intent.
+    } else {
+      maybeFirePlaygroundLoaded();
+    }
   } else {
     // No welcome modal in the DOM — fire immediately so the event still lands.
     maybeFirePlaygroundLoaded();
