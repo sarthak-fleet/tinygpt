@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "TinyGPTIO", targets: ["TinyGPTIO"]),
         .library(name: "TinyGPTModel", targets: ["TinyGPTModel"]),
         .library(name: "TinyGPTBench", targets: ["TinyGPTBench"]),
+        .library(name: "TinyGPTServe", targets: ["TinyGPTServe"]),
         .executable(name: "tinygpt", targets: ["TinyGPT"]),
         .executable(name: "TinyGPTApp", targets: ["TinyGPTApp"]),
     ],
@@ -59,12 +60,30 @@ let package = Package(
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ]
         ),
+        // `TinyGPTServe` exposes an OpenAI-compatible HTTP endpoint over a
+        // loaded tinygpt / HF model. This is the adapter that lets
+        // `lm-evaluation-harness` (HellaSwag, MMLU-Pro, GSM8K, IFEval, …)
+        // evaluate any tinygpt-loaded model. Lives in its own library so the
+        // executable target stays a thin CLI shim AND so we can unit-test
+        // the server by calling `Serve.start()` directly from XCTest.
+        // See docs/lm_eval_integration.md.
+        .target(
+            name: "TinyGPTServe",
+            dependencies: [
+                "TinyGPTIO",
+                "TinyGPTModel",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+            ]
+        ),
         .executableTarget(
             name: "TinyGPT",
             dependencies: [
                 "TinyGPTIO",
                 "TinyGPTModel",
                 "TinyGPTBench",
+                "TinyGPTServe",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
@@ -87,6 +106,15 @@ let package = Package(
         .testTarget(
             name: "TinyGPTModelTests",
             dependencies: ["TinyGPTModel"]
+        ),
+        // Exercises the OpenAI-compatible HTTP server by calling
+        // `Serve.start()` directly (no subprocess, no curl). Same caveat as
+        // TinyGPTModelTests — the MLX runtime needs the Metal library, so
+        // these tests must be run via `xcodebuild test` (or Xcode UI),
+        // NOT `swift test`.
+        .testTarget(
+            name: "TinyGPTServeTests",
+            dependencies: ["TinyGPTServe", "TinyGPTModel"]
         ),
     ],
     swiftLanguageModes: [.v6]

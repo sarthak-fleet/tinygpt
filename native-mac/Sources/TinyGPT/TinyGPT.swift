@@ -1,6 +1,7 @@
 import Foundation
 import TinyGPTIO
 import TinyGPTBench
+import TinyGPTServe
 
 /// CLI entry point. Mirrors `python_ref/load_tinygpt.py --inspect`.
 /// Subcommands:
@@ -68,6 +69,8 @@ struct TinyGPT {
             HFLoad.run(args: Array(args.dropFirst()))
         case "sample":
             Sample.run(args: Array(args.dropFirst()))
+        case "serve":
+            Serve.run(args: Array(args.dropFirst()))
         case "debug-names":
             DebugNames.run(args: Array(args.dropFirst()))
         case "debug-load":
