@@ -52,17 +52,22 @@ public enum LoraAdapterWriter {
         var entries: [LoraAdapter.Entry] = []
         var matrices: [(loraA: [Float], loraB: [Float])] = []
 
-        let projections: [(String, KeyPath<TransformerBlock, Linear>)] = [
-            ("attn.q_proj", \.attn.qProj),
-            ("attn.k_proj", \.attn.kProj),
-            ("attn.v_proj", \.attn.vProj),
-            ("attn.o_proj", \.attn.oProj),
-            ("mlp.fc_in",   \.mlp.fcIn),
-            ("mlp.fc_out",  \.mlp.fcOut),
-        ]
+        // Per-block linears in target order. MoE blocks (where `mlp` is
+        // nil) only contribute the four attention projections; MLP-LoRA
+        // on MoE-expert weights is future work.
         for (i, block) in model.blocks.enumerated() {
-            for (suffix, kp) in projections {
-                guard let lora = block[keyPath: kp] as? LoraLinear else { continue }
+            var projections: [(String, Linear)] = [
+                ("attn.q_proj", block.attn.qProj),
+                ("attn.k_proj", block.attn.kProj),
+                ("attn.v_proj", block.attn.vProj),
+                ("attn.o_proj", block.attn.oProj),
+            ]
+            if let dense = block.mlp {
+                projections.append(("mlp.fc_in",  dense.fcIn))
+                projections.append(("mlp.fc_out", dense.fcOut))
+            }
+            for (suffix, lin) in projections {
+                guard let lora = lin as? LoraLinear else { continue }
                 eval(lora.loraA, lora.loraB)
                 let aFloats = lora.loraA.asArray(Float.self)
                 let bFloats = lora.loraB.asArray(Float.self)
@@ -183,10 +188,11 @@ public enum LoraAdapterReader {
                 ])
                 idx += 1
             }
-            let mProjs: [(String, Linear, Bool)] = [
-                ("fc_in",  block.mlp.fcIn,  h.targetSuffixes.contains("fc_in")),
-                ("fc_out", block.mlp.fcOut, h.targetSuffixes.contains("fc_out")),
-            ]
+            var mProjs: [(String, Linear, Bool)] = []
+            if let dense = block.mlp {
+                mProjs.append(("fc_in",  dense.fcIn,  h.targetSuffixes.contains("fc_in")))
+                mProjs.append(("fc_out", dense.fcOut, h.targetSuffixes.contains("fc_out")))
+            }
             for (name, _, isTarget) in mProjs where isTarget {
                 let entry = adapter.matrices[idx]
                 let aShape = h.entries[idx].loraAShape

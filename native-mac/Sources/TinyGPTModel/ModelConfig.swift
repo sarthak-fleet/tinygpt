@@ -37,6 +37,56 @@ public struct ModelConfig: Sendable, Equatable {
     /// default; HF Llama-style models set bias=False to save params and
     /// improve training stability.
     public var attnBias: Bool
+    /// HuggingFace model directory whose `tokenizer.json` the model was
+    /// trained against (BPE / SentencePiece). `nil` means byte-level
+    /// tokenization (vocabSize == 256). Travels with the checkpoint so
+    /// sample/finetune can re-load the matching tokenizer.
+    public var tokenizerSource: String?
+
+    /// Mixture-of-Experts settings. `nExperts > 1` swaps the standard MLP
+    /// for an MoE MLP at every block — a router picks the top-`moeTopK`
+    /// experts per token. `loadBalanceWeight` scales the auxiliary load-
+    /// balance loss that prevents the router from collapsing onto a
+    /// single expert (Switch Transformer recipe: 0.01).
+    ///
+    /// The first-cut implementation uses DENSE compute (every expert sees
+    /// every token, weighted by the router) — the architecture is correct
+    /// and trains, but per-token FLOPs don't drop until we ship a sparse
+    /// scatter-gather kernel. The parameter-count benefit (more total
+    /// capacity per byte of weights loaded) is immediate.
+    public var nExperts: Int
+    public var moeTopK: Int
+    public var loadBalanceWeight: Float
+    public var isMoE: Bool { nExperts > 1 }
+
+    /// Multi-Token Prediction horizon count (DeepSeek-V3 / Gloeckle et al.,
+    /// 2024). When `mtpHorizons > 1`, the model gets `mtpHorizons - 1`
+    /// extra output heads — each one predicts further ahead (h tokens
+    /// rather than 1) from the SAME final hidden state. Loss is the mean
+    /// across all H horizon CEs. The MTP heads are TRAINING-ONLY: they
+    /// aren't serialised, so a saved checkpoint stays drop-in compatible
+    /// with the standard sample path. The regulariser usually drops
+    /// per-token validation loss by 10-20% on small models — capturing
+    /// "what's the local 2-token continuation" disambiguates a noisier
+    /// signal than 1-token-ahead alone.
+    public var mtpHorizons: Int
+
+    /// Sliding-window attention size. `nil` (default) = standard full
+    /// causal attention. When set to W, attention is allowed only on
+    /// the last W positions (including self) — i.e. the model can't
+    /// look further back than W tokens. Mistral / GPT-OSS standard.
+    /// Cuts attention compute from O(T²) to O(T·W) at long context,
+    /// and bounds the KV cache at decoding time.
+    public var slidingWindow: Int?
+
+    /// ALiBi position bias (Press et al., 2021). Adds a per-head
+    /// linear penalty `-slope[h] · (i - j)` to attention scores —
+    /// the model "naturally" learns to attend to nearer positions
+    /// more strongly, without needing RoPE or learned positional
+    /// embeddings. Extrapolates to longer contexts than train. When
+    /// `useALiBi` is set, the model SHOULDN'T also use RoPE or learned
+    /// positional embeddings; the runner disables them upstream.
+    public var useALiBi: Bool
 
     public var headDim: Int { dModel / nHeads }
 
@@ -64,8 +114,22 @@ public struct ModelConfig: Sendable, Equatable {
         ropeBase: Float = 10_000,
         useRMSNorm: Bool = false,
         useSwiGLU: Bool = false,
-        attnBias: Bool = true
+        attnBias: Bool = true,
+        tokenizerSource: String? = nil,
+        nExperts: Int = 1,
+        moeTopK: Int = 1,
+        loadBalanceWeight: Float = 0.01,
+        mtpHorizons: Int = 1,
+        slidingWindow: Int? = nil,
+        useALiBi: Bool = false
     ) {
+        self.tokenizerSource = tokenizerSource
+        self.nExperts = max(1, nExperts)
+        self.moeTopK = max(1, min(moeTopK, max(1, nExperts)))
+        self.loadBalanceWeight = loadBalanceWeight
+        self.mtpHorizons = max(1, mtpHorizons)
+        self.slidingWindow = slidingWindow.flatMap { $0 > 0 ? $0 : nil }
+        self.useALiBi = useALiBi
         self.modelName = modelName
         self.vocabSize = vocabSize
         self.contextLength = contextLength
@@ -101,11 +165,14 @@ public struct ModelConfig: Sendable, Equatable {
         tieEmbeddings: true
     )
 
-    /// Mega preset (24L, d=512, ctx=512). Browser can't run this — Mac can.
+    /// Mega preset (24L, d=512, ctx=1024). Browser can't run this — Mac can.
+    /// Context lifted from 512→1024 for Tier 1: long-context BPE training
+    /// where dense tokens make 1024 BPE-tokens ~ 4 KB of source text per
+    /// window, comparable to a useful paragraph rather than a sentence.
     public static let mega = ModelConfig(
         modelName: "byte-tinygpt-mega",
         vocabSize: 256,
-        contextLength: 512,
+        contextLength: 1024,
         nLayers: 24,
         nHeads: 8,
         dModel: 512,

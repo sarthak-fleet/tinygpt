@@ -62,6 +62,32 @@ public final class HFTokenizer: TGTokenizer {
         return HFTokenizer(tokenizer: tokenizer)
     }
 
+    /// Sync bridge for the CLI. swift-transformers' `AutoTokenizer.from`
+    /// is async; this parks the call on a detached task and blocks the
+    /// calling thread with a semaphore. Necessary because Swift 6 strict
+    /// concurrency rejects shuttling the result across a raw Task
+    /// boundary without an actor-isolated container.
+    public static func loadBlocking(from url: URL) throws -> HFTokenizer {
+        let sem = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var boxed: Tokenizer? = nil
+        nonisolated(unsafe) var error: Error? = nil
+        Task.detached {
+            do {
+                boxed = try await AutoTokenizer.from(modelFolder: url)
+            } catch let e {
+                error = e
+            }
+            sem.signal()
+        }
+        sem.wait()
+        if let e = error { throw e }
+        guard let t = boxed else {
+            throw NSError(domain: "TinyGPT", code: 99,
+                          userInfo: [NSLocalizedDescriptionKey: "tokenizer load returned nothing"])
+        }
+        return HFTokenizer(tokenizer: t)
+    }
+
     private init(tokenizer: Tokenizer) {
         self.tokenizer = tokenizer
         // The HF library exposes vocab via the underlying tokenizer's

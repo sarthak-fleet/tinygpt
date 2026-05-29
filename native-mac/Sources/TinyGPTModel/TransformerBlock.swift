@@ -30,6 +30,15 @@ public final class CausalSelfAttention: Module {
     /// from-scratch models), absolute learned position embeddings are
     /// used (added to the input embedding upstream).
     public let useRoPE: Bool
+    /// Sliding-window size. `nil` = full causal. When set, attention is
+    /// restricted to the last W positions — Mistral / GPT-OSS recipe.
+    /// We build the mask on-demand inside `callAsFunction` because the
+    /// query length T isn't known at construction time.
+    public let slidingWindow: Int?
+    /// ALiBi (Press et al., 2021): when true, add per-head linear-
+    /// distance penalties to attention scores in lieu of positional
+    /// embeddings. Slopes are deterministic from `nHeads`.
+    public let useALiBi: Bool
 
     @ModuleInfo(key: "q_proj") public var qProj: Linear
     @ModuleInfo(key: "k_proj") public var kProj: Linear
@@ -43,6 +52,8 @@ public final class CausalSelfAttention: Module {
         self.scale = 1.0 / sqrt(Float(cfg.headDim))
         self.ropeBase = cfg.ropeBase
         self.useRoPE = cfg.useRoPE
+        self.slidingWindow = cfg.slidingWindow
+        self.useALiBi = cfg.useALiBi
         // Q goes from dModel to (nHeads * headDim) = dModel — unchanged
         // K, V go to (nKvHeads * headDim) which is smaller for GQA models
         let kvDim = cfg.nKvHeads * cfg.headDim
@@ -51,6 +62,64 @@ public final class CausalSelfAttention: Module {
         self._vProj.wrappedValue = Linear(cfg.dModel, kvDim, bias: cfg.attnBias)
         self._oProj.wrappedValue = Linear(cfg.dModel, cfg.dModel, bias: cfg.attnBias)
         super.init()
+    }
+
+    /// Per-head ALiBi geometric slopes (Press et al., 2021).
+    /// `slope[h] = 2^(-8(h+1)/H)` for the closest non-power-of-2
+    /// generalisation. Returns Float array of length `nHeads`.
+    private func aliBiSlopes() -> [Float] {
+        // Standard recipe assumes H is a power of two — handles
+        // arbitrary H by interleaving two geometric sequences. Here we
+        // use the simpler "base = 2^(-8/H), slope_h = base^(h+1)" which
+        // is the recipe most reimplementations ship. Quality difference
+        // from the paper's split sequence is small at our scale.
+        let base = pow(2.0, -8.0 / Float(nHeads))
+        return (0..<nHeads).map { h in pow(base, Float(h + 1)) }
+    }
+
+    /// Build a [1, H, T_q, T_kv] ALiBi + causal mask in additive form.
+    /// bias[h, i, j] = -slope[h] · (i - j)   if j ≤ i  (causal positions)
+    /// bias[h, i, j] = -∞                    if j > i  (future)
+    private func aliBiMask(Tq: Int, Tkv: Int, dtype: DType) -> MLXArray {
+        let slopes = aliBiSlopes()
+        let slopesArr = MLXArray(slopes, [nHeads])
+            .expandedDimensions(axis: 1).expandedDimensions(axis: 2)        // [H, 1, 1]
+        let rows = MLXArray((0..<Tq).map { Int32($0) }).expandedDimensions(axis: 1)  // [Tq, 1]
+        let cols = MLXArray((0..<Tkv).map { Int32($0) }).expandedDimensions(axis: 0) // [1, Tkv]
+        let dist = (rows - cols).asType(dtype)                              // [Tq, Tkv] — positive for past
+        // -slope[h] * dist per head. Broadcasts over the batch axis later.
+        let aliBi = (-slopesArr) * dist.expandedDimensions(axis: 0)         // [H, Tq, Tkv]
+        // Causal: positions where j > i are forbidden — add -1e9 there.
+        let future = (cols .> rows).asType(dtype)
+        let causalNeg = future * MLXArray(Float(-1e9)).asType(dtype)        // [Tq, Tkv]
+        let combined = aliBi + causalNeg.expandedDimensions(axis: 0)        // [H, Tq, Tkv]
+        // Add the leading batch axis so SDPA's broadcasting works:
+        // expected mask shape is [B, H, Tq, Tkv] or broadcastable.
+        return combined.expandedDimensions(axis: 0)                         // [1, H, Tq, Tkv]
+    }
+
+    /// Build a [T_q, T_kv] sliding-window causal mask in additive form
+    /// (0 inside the window, large negative outside — added to scores
+    /// before softmax). Built once per forward and reused across heads.
+    private func slidingMask(Tq: Int, Tkv: Int, window: Int, dtype: DType) -> MLXArray {
+        // rows = query positions [0..Tq), cols = key positions [0..Tkv).
+        // For the prefill (Tq == Tkv) case, "outside window" means
+        // j > i (future, causal) OR j < i - window + 1 (too far back).
+        // For incremental decode (Tq == 1, basePos > 0) we'd need to add
+        // basePos to the row index — that lives in the cached-forward
+        // path, not this one. Here Tq == Tkv always.
+        let rows = MLXArray((0..<Tq).map { Int32($0) }).expandedDimensions(axis: 1)   // [Tq, 1]
+        let cols = MLXArray((0..<Tkv).map { Int32($0) }).expandedDimensions(axis: 0)  // [1, Tkv]
+        // Two block conditions: future (j > i) and too-old (i - j ≥ W).
+        // Cast each Bool tensor to the target dtype (1.0 where blocked,
+        // 0.0 otherwise), then take max: produces 1.0 if EITHER condition
+        // holds, else 0.0 — exactly the boolean OR we need.
+        let futureF = (cols .> rows).asType(dtype)
+        let tooOldF = ((rows - cols) .>= MLXArray(Int32(window))).asType(dtype)
+        let blocked = MLX.maximum(futureF, tooOldF)
+        // Convert blocked-flag → -1e9 (effectively -inf under softmax).
+        let negInf = MLXArray(Float(-1e9)).asType(dtype)
+        return blocked * negInf
     }
 
     /// `x: [B, T, C]` → `[B, T, C]`. Causal mask is created on-the-fly by
@@ -79,9 +148,26 @@ public final class CausalSelfAttention: Module {
         // SDPA natively supports unequal Q vs KV head counts — when
         // nKvHeads < nHeads, the kernel broadcasts each KV head across
         // nHeads/nKvHeads Q heads internally (zero-copy).
-        let out = MLXFast.scaledDotProductAttention(
-            queries: q, keys: k, values: v, scale: scale, mask: .causal
-        )
+        //
+        // Mask selection (priority): ALiBi > sliding window > plain causal.
+        // ALiBi already encodes causality via the future = -∞ band, so
+        // we don't combine it with the .causal flag.
+        let out: MLXArray
+        if useALiBi {
+            let mask = aliBiMask(Tq: T, Tkv: T, dtype: q.dtype)
+            out = MLXFast.scaledDotProductAttention(
+                queries: q, keys: k, values: v, scale: scale, mask: .array(mask)
+            )
+        } else if let window = slidingWindow {
+            let mask = slidingMask(Tq: T, Tkv: T, window: window, dtype: q.dtype)
+            out = MLXFast.scaledDotProductAttention(
+                queries: q, keys: k, values: v, scale: scale, mask: .array(mask)
+            )
+        } else {
+            out = MLXFast.scaledDotProductAttention(
+                queries: q, keys: k, values: v, scale: scale, mask: .causal
+            )
+        }
         let merged = out.transposed(0, 2, 1, 3).reshaped([B, T, nHeads * headDim])
         return oProj(merged)
     }
@@ -143,24 +229,46 @@ public final class SwiGLU: Module {
 }
 
 /// Pre-LayerNorm transformer block: `x = x + attn(ln1(x)); x = x + mlp(ln2(x))`.
+///
+/// MoE option: when `cfg.isMoE`, the block constructs a `MoEMLP` instead
+/// of the dense `MLP`. The two are mutually exclusive — exactly one of
+/// `mlp` and `moe` is populated. Forward routes to whichever is non-nil;
+/// LoRA + save paths gate on `mlp != nil` (MoE blocks aren't LoRA-
+/// targetable or .tinygpt-serialisable in this first cut).
 public final class TransformerBlock: Module {
     @ModuleInfo(key: "ln1") public var ln1: LayerNorm
     @ModuleInfo(key: "attn") public var attn: CausalSelfAttention
     @ModuleInfo(key: "ln2") public var ln2: LayerNorm
-    @ModuleInfo(key: "mlp") public var mlp: MLP
+    @ModuleInfo(key: "mlp") public var mlp: MLP?
+    @ModuleInfo(key: "moe") public var moe: MoEMLP?
+
+    /// Type-erased pointer to whichever MLP-shaped unit owns this block.
+    /// Used by introspection helpers (e.g. `sumMoEAuxLosses`) that need
+    /// to walk the model without caring which flavour is active.
+    public var mlpUnit: Module { (mlp as Module?) ?? moe! }
 
     public init(_ cfg: ModelConfig) {
         self._ln1.wrappedValue = LayerNorm(dimensions: cfg.dModel, eps: 1e-5)
         self._attn.wrappedValue = CausalSelfAttention(cfg)
         self._ln2.wrappedValue = LayerNorm(dimensions: cfg.dModel, eps: 1e-5)
-        self._mlp.wrappedValue = MLP(cfg)
+        if cfg.isMoE {
+            self._mlp.wrappedValue = nil
+            self._moe.wrappedValue = MoEMLP(cfg)
+        } else {
+            self._mlp.wrappedValue = MLP(cfg)
+            self._moe.wrappedValue = nil
+        }
         super.init()
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
         var x = x
         x = x + attn(ln1(x))
-        x = x + mlp(ln2(x))
+        if let moe = moe {
+            x = x + moe(ln2(x))
+        } else if let mlp = mlp {
+            x = x + mlp(ln2(x))
+        }
         return x
     }
 }

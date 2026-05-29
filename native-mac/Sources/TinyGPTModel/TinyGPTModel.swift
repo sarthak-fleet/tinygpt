@@ -17,6 +17,18 @@ public final class TinyGPTModel: Module {
     /// embeddings reuse `token_embedding.weight.T` and never allocate this.
     @ModuleInfo(key: "lm_head") public var lmHead: Linear?
 
+    /// Extra output heads for Multi-Token Prediction (Gloeckle et al.,
+    /// 2024; DeepSeek-V3 popularised). One Linear per horizon beyond 1.
+    /// Training-time only: NOT in the .tinygpt manifest, so saved files
+    /// stay drop-in compatible. nil when `config.mtpHorizons == 1`.
+    @ModuleInfo(key: "mtp_heads") public var mtpHeads: [Linear]?
+
+    /// NEFTune (Jain et al., 2024) — scale of uniform noise added to the
+    /// token-embedding output during forward. 0 (default) = off. SFT/DPO
+    /// flips this to ~5 for the policy; the DPO reference stays at 0.
+    /// Not a Parameter — never serialised, never differentiated.
+    public var nefTuneAlpha: Float = 0
+
     public init(_ config: ModelConfig) {
         self.config = config
         self._tokenEmbedding.wrappedValue = Embedding(
@@ -32,6 +44,16 @@ public final class TinyGPTModel: Module {
         } else {
             self._lmHead.wrappedValue = nil
         }
+        // MTP extra heads: one Linear(d_model → vocab) per horizon beyond 1.
+        // Bias-free to mirror the primary lm_head when untied.
+        if config.mtpHorizons > 1 {
+            let extras = (0..<(config.mtpHorizons - 1)).map { _ in
+                Linear(config.dModel, config.vocabSize, bias: false)
+            }
+            self._mtpHeads.wrappedValue = extras
+        } else {
+            self._mtpHeads.wrappedValue = nil
+        }
         super.init()
         // Note: `python_ref/model.py` applies a GPT-2-style scaled init for
         // residual-path output projections (std = 0.02 / sqrt(2L)). MLX-Swift
@@ -43,7 +65,17 @@ public final class TinyGPTModel: Module {
     }
 
     /// `idx: [B, T]` int32 token ids → `[B, T, vocab_size]` logits.
+    ///
+    /// At inference time only the primary head is consulted; MTP extras
+    /// are training-time auxiliaries (see `forwardMTP`).
     public func callAsFunction(_ idx: MLXArray) -> MLXArray {
+        return projectLogits(forwardToHidden(idx))
+    }
+
+    /// Forward all the way through the blocks + final norm, returning
+    /// the `[B, T, C]` hidden state. Factored out so MTP's multi-head
+    /// path doesn't have to duplicate the block loop.
+    public func forwardToHidden(_ idx: MLXArray) -> MLXArray {
         let T = idx.shape[1]
         precondition(T <= config.contextLength,
                      "sequence length \(T) exceeds context \(config.contextLength)")
@@ -51,22 +83,101 @@ public final class TinyGPTModel: Module {
         // any implicit Range→MLXArray init behaviour. Shape [T].
         let positions = MLXArray((0..<T).map { Int32($0) })
         let posEmb = positionEmbedding(positions).expandedDimensions(axis: 0) // [1, T, C]
-        var x = tokenEmbedding(idx) + posEmb
+        var tokEmb = tokenEmbedding(idx)
+        // NEFTune noise — applied to TOKEN embedding only (not positional),
+        // matching the paper's intent of regularising the input-token signal.
+        // scale s = alpha / sqrt(seq_len · embed_dim), so per-element noise
+        // stays small relative to the embedding norm regardless of T or d.
+        if nefTuneAlpha > 0 {
+            let s = nefTuneAlpha / sqrt(Float(T * config.dModel))
+            let noise = MLXRandom.uniform(
+                low: -s, high: s, tokEmb.shape
+            ).asType(tokEmb.dtype)
+            tokEmb = tokEmb + noise
+        }
+        var x = tokEmb + posEmb
         for block in blocks {
             x = block(x)
         }
-        x = lnFinal(x)
-        return projectLogits(x)
+        return lnFinal(x)
+    }
+
+    /// Multi-Token-Prediction forward. Returns one logits tensor per
+    /// horizon, all sharing the same final hidden state — the only
+    /// difference between horizons is the output head's projection.
+    /// Index 0 is the primary head (predicts t+1), 1..H-1 are the
+    /// MTP extras (predict t+2, t+3, ...).
+    public func forwardMTP(_ idx: MLXArray) -> [MLXArray] {
+        let h = forwardToHidden(idx)
+        var out: [MLXArray] = [projectLogits(h)]
+        if let heads = mtpHeads {
+            for head in heads { out.append(head(h)) }
+        }
+        return out
     }
 
     /// Forward + cross-entropy loss. Targets are next-token ids, same shape as
     /// `idx`. Loss reduced over the full batch × time dimension.
+    ///
+    /// When the model is MoE (`config.isMoE`), the auxiliary load-balance
+    /// loss accumulated by every MoEMLP during this forward is added in,
+    /// scaled by `config.loadBalanceWeight`. The MoE-aware loss MUST be
+    /// computed in the same call as the forward — the aux side-channel is
+    /// populated by the forward and read here while it's still fresh.
+    ///
+    /// When `config.mtpHorizons > 1`, the loss is the MEAN of per-horizon
+    /// cross-entropies: horizon 1 against `targets` directly, horizon h
+    /// against `targets` shifted left by `h-1` positions (the last h-1
+    /// positions are unscored — we run out of look-ahead). MoE aux still
+    /// fires when both are active.
     public func loss(_ idx: MLXArray, _ targets: MLXArray) -> MLXArray {
-        let logits = self(idx)
-        let v = logits.shape.last!
-        let flatLogits = logits.reshaped([-1, v])
-        let flatTargets = targets.reshaped([-1])
-        return crossEntropy(logits: flatLogits, targets: flatTargets, reduction: .mean)
+        let ce: MLXArray
+        if config.mtpHorizons > 1 {
+            ce = mtpCrossEntropy(idx: idx, targets: targets)
+        } else {
+            let logits = self(idx)
+            let v = logits.shape.last!
+            ce = crossEntropy(
+                logits: logits.reshaped([-1, v]),
+                targets: targets.reshaped([-1]),
+                reduction: .mean
+            )
+        }
+        if config.isMoE {
+            let aux = sumMoEAuxLosses(blocks)
+            return ce + MLXArray(config.loadBalanceWeight) * aux
+        }
+        return ce
+    }
+
+    /// Mean per-horizon CE. Horizon `h` (1-indexed) predicts the token
+    /// `h` positions ahead — its target is `targets` shifted left by
+    /// `h-1` (because `targets[t]` already represents the `t+1` ground
+    /// truth, so horizon 2's target at position t is `targets[t+1]`).
+    /// The last `h-1` positions can't be scored at horizon h; we slice
+    /// them off symmetrically from logits and targets.
+    private func mtpCrossEntropy(idx: MLXArray, targets: MLXArray) -> MLXArray {
+        let allLogits = forwardMTP(idx)
+        let H = allLogits.count
+        let T = targets.shape[1]
+        var total = MLXArray(Float(0))
+        var horizonsScored = 0
+        for h in 0..<H {
+            // Shift = h ; valid window length = T - h.
+            let valid = T - h
+            if valid <= 0 { continue }
+            let logitsH = allLogits[h][0..., 0..<valid, 0...]
+            let targetsH = targets[0..., h..<T]
+            let v = logitsH.shape.last!
+            let ce = crossEntropy(
+                logits: logitsH.reshaped([-1, v]),
+                targets: targetsH.reshaped([-1]),
+                reduction: .mean
+            )
+            total = total + ce
+            horizonsScored += 1
+        }
+        return total / MLXArray(Float(max(1, horizonsScored)))
     }
 
     private func projectLogits(_ x: MLXArray) -> MLXArray {

@@ -26,6 +26,12 @@ public final class TransformerBlockHF: Module {
     @ModuleInfo(key: "post_attention_layernorm") public var ln2: RMSNorm
     @ModuleInfo(key: "mlp")                      public var mlp: SwiGLU
 
+    /// HF-block MoE support is not wired yet — kept here so the
+    /// `sumMoEAuxLossesHF` walker compiles. Future: parallel to the
+    /// from-scratch path, swap SwiGLU for an MoE-of-SwiGLU when
+    /// `cfg.isMoE` and the model is HF.
+    public var mlpUnit: Module { mlp }
+
     public init(_ cfg: ModelConfig) {
         // The HF naming convention is `input_layernorm` for ln1 and
         // `post_attention_layernorm` for ln2. We use those keys so

@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXNN
+import MLXRandom
 import TinyGPTIO
 
 /// HF-style top-level transformer model. Mirrors the architecture of
@@ -26,6 +27,11 @@ public final class TinyGPTModelHF: Module {
     @ModuleInfo(key: "norm")         public var lnFinal: RMSNorm
     @ModuleInfo(key: "lm_head")      public var lmHead: Linear?
 
+    /// NEFTune (Jain et al., 2024) — scale of uniform noise added to the
+    /// token-embedding output during forward. 0 (default) = off. See the
+    /// matching field on `TinyGPTModel`.
+    public var nefTuneAlpha: Float = 0
+
     public init(_ cfg: ModelConfig) {
         self.config = cfg
         self._tokenEmbedding.wrappedValue = Embedding(
@@ -42,6 +48,13 @@ public final class TinyGPTModelHF: Module {
 
     public func callAsFunction(_ idx: MLXArray) -> MLXArray {
         var x = tokenEmbedding(idx)
+        if nefTuneAlpha > 0 {
+            // NEFTune: small Uniform[-s, s] noise added at the input.
+            let T = idx.shape[1]
+            let s = nefTuneAlpha / sqrt(Float(T * config.dModel))
+            let noise = MLXRandom.uniform(low: -s, high: s, x.shape).asType(x.dtype)
+            x = x + noise
+        }
         for block in blocks {
             x = block(x)
         }

@@ -86,15 +86,17 @@ public enum LoraStackInjection {
         for block in model.blocks {
             var attn: [String: NestedItem<String, Module>] = [:]
             var mlp:  [String: NestedItem<String, Module>] = [:]
-            let projs: [(String, Linear, Bool, Bool)] = [
+            var projs: [(String, Linear, Bool, Bool)] = [
                 // (name, linear, isAttn, isTarget)
                 ("q_proj", block.attn.qProj, true,  targetSuffixes.contains("q_proj")),
                 ("k_proj", block.attn.kProj, true,  targetSuffixes.contains("k_proj")),
                 ("v_proj", block.attn.vProj, true,  targetSuffixes.contains("v_proj")),
                 ("o_proj", block.attn.oProj, true,  targetSuffixes.contains("o_proj")),
-                ("fc_in",  block.mlp.fcIn,   false, targetSuffixes.contains("fc_in")),
-                ("fc_out", block.mlp.fcOut,  false, targetSuffixes.contains("fc_out")),
             ]
+            if let dense = block.mlp {
+                projs.append(("fc_in",  dense.fcIn,  false, targetSuffixes.contains("fc_in")))
+                projs.append(("fc_out", dense.fcOut, false, targetSuffixes.contains("fc_out")))
+            }
             for (name, lin, isAttn, isTarget) in projs where isTarget {
                 var slots: [StackedLoraLinear.Slot] = []
                 for (k, adapter) in adapters.enumerated() {

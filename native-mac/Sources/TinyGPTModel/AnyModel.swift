@@ -44,6 +44,32 @@ public enum AnyModel {
         }
     }
 
+    /// Cross-entropy averaged only over positions where `mask == 1.0`.
+    /// Used by SFT to score the model on the RESPONSE tokens only,
+    /// ignoring the (instruction, special markers, padding) positions.
+    /// Without this masking, the model learns to predict its own
+    /// instruction back to itself instead of learning the response.
+    public func maskedLoss(_ idx: MLXArray, _ targets: MLXArray, _ mask: MLXArray) -> MLXArray {
+        let logits: MLXArray
+        switch self {
+        case .fromScratch(let m): logits = m(idx)
+        case .huggingFace(let m): logits = m(idx)
+        }
+        let v = logits.shape.last!
+        let flatLogits = logits.reshaped([-1, v])
+        let flatTargets = targets.reshaped([-1])
+        let flatMask = mask.reshaped([-1])
+        // Per-token CE, no reduction — multiply by mask, then average over
+        // mask.sum() (the count of scored positions). `+ 1` denom guards
+        // against an all-masked-out batch (shouldn't happen but defensive).
+        let perTok = crossEntropy(
+            logits: flatLogits, targets: flatTargets, reduction: .none
+        )
+        let masked = perTok * flatMask
+        let denom = flatMask.sum() + MLXArray(Float(1e-6))
+        return masked.sum() / denom
+    }
+
     public func numParameters() -> Int {
         switch self {
         case .fromScratch(let m): return m.numParameters()
@@ -106,6 +132,17 @@ public enum AnyModel {
         case .huggingFace(let m): return m
         }
     }
+
+    /// KV-cached forward pass — works for both model variants. First call
+    /// with an empty cache processes the full prompt; later calls usually
+    /// pass `[B, 1]` for streaming decode. Returns logits of shape
+    /// `[B, T_new, vocab_size]`.
+    public func forwardCached(_ idx: MLXArray, cache: KVCache) -> MLXArray {
+        switch self {
+        case .fromScratch(let m): return m.forwardCached(idx, cache: cache)
+        case .huggingFace(let m): return m.forwardCached(idx, cache: cache)
+        }
+    }
 }
 
 /// Detect whether a path is a from-scratch `.tinygpt` checkpoint or an
@@ -138,19 +175,29 @@ public enum ModelLoader {
                               config: hfResult.config, hfTokenizerDir: url)
         }
 
-        // .tinygpt file path
+        // .tinygpt file path. Pick up vocabSize + tokenizerSource from the
+        // header — BPE-trained from-scratch models pin their tokenizer dir.
+        // MoE fields (nExperts/moeTopK/loadBalanceWeight) are picked up
+        // when present so the router + per-expert structure reconstructs
+        // exactly; absent → dense MLP (the default).
         let file = try TinyGPTFileReader.read(url)
         let h = file.header.config
         let cfg = ModelConfig(
-            vocabSize: 256,
+            vocabSize: h.vocabSize ?? 256,
             contextLength: h.ctx ?? 256,
             nLayers: h.layers ?? 12,
             nHeads: h.heads ?? 8,
             dModel: h.dModel ?? 256,
-            dMlp: h.dMlp ?? 1024
+            dMlp: h.dMlp ?? 1024,
+            tokenizerSource: h.tokenizerSource,
+            nExperts: h.nExperts ?? 1,
+            moeTopK: h.moeTopK ?? 1,
+            loadBalanceWeight: h.loadBalanceWeight ?? 0.01,
+            slidingWindow: h.slidingWindow
         )
         let m = TinyGPTModel(cfg)
         try TinyGPTWeightLoader.load(file, into: m)
-        return LoadResult(model: .fromScratch(m), config: cfg, hfTokenizerDir: nil)
+        let tokDir = h.tokenizerSource.map { URL(fileURLWithPath: $0) }
+        return LoadResult(model: .fromScratch(m), config: cfg, hfTokenizerDir: tokDir)
     }
 }

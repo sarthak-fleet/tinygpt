@@ -18,6 +18,25 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
         public var dMlp: Int?
         public var batchSize: Int?
         public var backend: String?
+        /// Vocabulary size — required when ≠ 256 (BPE-trained models). Absent
+        /// or 256 means byte-level (legacy default).
+        public var vocabSize: Int?
+        /// HF tokenizer directory the model was trained against. nil means
+        /// byte-level. Travels with the checkpoint so sample/finetune can
+        /// re-load the matching tokenizer.
+        public var tokenizerSource: String?
+
+        /// Mixture-of-Experts metadata. All three are nil for a standard
+        /// dense model — backwards-compatible with pre-MoE readers (the
+        /// JSON decoder ignores absent optional fields, and older
+        /// writers just don't emit them).
+        public var nExperts: Int?
+        public var moeTopK: Int?
+        public var loadBalanceWeight: Float?
+
+        /// Sliding-window attention size. `nil` = full causal (standard).
+        /// When set, every query attends only to the last N positions.
+        public var slidingWindow: Int?
 
         public init(
             layers: Int? = nil,
@@ -26,7 +45,13 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
             heads: Int? = nil,
             dMlp: Int? = nil,
             batchSize: Int? = nil,
-            backend: String? = nil
+            backend: String? = nil,
+            vocabSize: Int? = nil,
+            tokenizerSource: String? = nil,
+            nExperts: Int? = nil,
+            moeTopK: Int? = nil,
+            loadBalanceWeight: Float? = nil,
+            slidingWindow: Int? = nil
         ) {
             self.layers = layers
             self.dModel = dModel
@@ -35,6 +60,12 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
             self.dMlp = dMlp
             self.batchSize = batchSize
             self.backend = backend
+            self.vocabSize = vocabSize
+            self.tokenizerSource = tokenizerSource
+            self.nExperts = nExperts
+            self.moeTopK = moeTopK
+            self.loadBalanceWeight = loadBalanceWeight
+            self.slidingWindow = slidingWindow
         }
     }
 
