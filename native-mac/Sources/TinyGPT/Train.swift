@@ -65,6 +65,14 @@ enum Train {
         // drops learned positional embeddings and uses a per-head linear-
         // distance bias instead. Cleaner generalisation to longer contexts.
         var useALiBi: Bool = false
+        // Mixture-of-Depths: per-token sigmoid gate on each block's
+        // residual contribution (Raposo et al., 2024). Pure architecture
+        // change; the dense compute path is unchanged.
+        var useMoD: Bool = false
+        // Differential attention (Ye et al., 2024). Doubles the Q/K
+        // projections per block + adds a learnable λ — used for less-
+        // noisy attention. Mutually exclusive with the standard path.
+        var useDiffAttn: Bool = false
 
         var i = 0
         while i < args.count {
@@ -94,6 +102,8 @@ enum Train {
             case "--mtp-horizons":   mtpHorizons = max(1, Int(args[i+1]) ?? 1); i += 2
             case "--sliding-window": slidingWindow = Int(args[i+1]); i += 2
             case "--alibi":          useALiBi = true; i += 1
+            case "--mod":            useMoD = true; i += 1
+            case "--diff-attn":      useDiffAttn = true; i += 1
             case "-h", "--help":  exitUsage()
             default:
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -130,7 +140,9 @@ enum Train {
                 nExperts: h.nExperts ?? 1,
                 moeTopK: h.moeTopK ?? 1,
                 loadBalanceWeight: h.loadBalanceWeight ?? 0.01,
-                slidingWindow: h.slidingWindow
+                slidingWindow: h.slidingWindow,
+                useMoD: h.useMoD ?? false,
+                useDifferentialAttention: h.useDifferentialAttention ?? false
             )
             cfg.dtype = dtype
             model = TinyGPTModel(cfg)
@@ -178,6 +190,15 @@ enum Train {
             // construct the positional embedding table for parameter-name
             // compatibility with the manifest — it's just frozen at init.
             cfg.useALiBi = useALiBi
+            // MoD: every block gets a per-token sigmoid gate; manifest
+            // gains mod_router.weight/bias per layer.
+            cfg.useMoD = useMoD
+            // Differential attention: every block gets a diff_attn
+            // sibling with 2× Q/K + λ; manifest gains the new
+            // q1_proj/k1_proj/q2_proj/k2_proj/v_proj/o_proj/lambda
+            // entries per layer (the existing attn entries also stay
+            // — see TransformerBlock for the rationale).
+            cfg.useDifferentialAttention = useDiffAttn
             model = TinyGPTModel(cfg)
         }
         // MoE checkpoints now serialise — the manifest gains router +
@@ -514,6 +535,31 @@ enum Train {
                 push("blocks.\(i).mlp.fc_in.bias", [M])
                 push("blocks.\(i).mlp.fc_out.weight", [C, M])
                 push("blocks.\(i).mlp.fc_out.bias", [C])
+            }
+            // MoD: per-block sigmoid gate. Linear(d_model → 1) with bias.
+            // Tiny — adds C + 1 params per layer.
+            if cfg.useMoD {
+                push("blocks.\(i).mod_router.weight", [1, C])
+                push("blocks.\(i).mod_router.bias", [1])
+            }
+            // Differential attention extras (Ye et al., 2024). The
+            // standard attn entries above are still emitted — the
+            // diff_attn sibling adds its own. Bias presence follows
+            // cfg.attnBias just like the standard path.
+            if cfg.useDifferentialAttention {
+                push("blocks.\(i).diff_attn.q1_proj.weight", [C, C])
+                if cfg.attnBias { push("blocks.\(i).diff_attn.q1_proj.bias", [C]) }
+                push("blocks.\(i).diff_attn.k1_proj.weight", [C, C])
+                if cfg.attnBias { push("blocks.\(i).diff_attn.k1_proj.bias", [C]) }
+                push("blocks.\(i).diff_attn.q2_proj.weight", [C, C])
+                if cfg.attnBias { push("blocks.\(i).diff_attn.q2_proj.bias", [C]) }
+                push("blocks.\(i).diff_attn.k2_proj.weight", [C, C])
+                if cfg.attnBias { push("blocks.\(i).diff_attn.k2_proj.bias", [C]) }
+                push("blocks.\(i).diff_attn.v_proj.weight",  [C, C])
+                if cfg.attnBias { push("blocks.\(i).diff_attn.v_proj.bias",  [C]) }
+                push("blocks.\(i).diff_attn.o_proj.weight",  [C, C])
+                if cfg.attnBias { push("blocks.\(i).diff_attn.o_proj.bias",  [C]) }
+                push("blocks.\(i).diff_attn.lambda", [])
             }
         }
         return entries

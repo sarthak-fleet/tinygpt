@@ -241,6 +241,21 @@ public final class TransformerBlock: Module {
     @ModuleInfo(key: "ln2") public var ln2: LayerNorm
     @ModuleInfo(key: "mlp") public var mlp: MLP?
     @ModuleInfo(key: "moe") public var moe: MoEMLP?
+    /// Differential attention (Ye et al., 2024) — when cfg
+    /// .useDifferentialAttention is set, this Optional sibling is
+    /// populated and the forward routes through it instead of `attn`.
+    /// The standard `attn` stays constructed (and its params land in
+    /// the manifest as usual) — a small ~constant cost in exchange
+    /// for keeping every existing call site that touches `block.attn`
+    /// unchanged.
+    @ModuleInfo(key: "diff_attn") public var diffAttn: DifferentialAttention?
+    /// Mixture-of-Depths per-token router (Raposo et al., 2024).
+    /// Linear(d_model → 1), populated when cfg.useMoD. When present,
+    /// the block's contribution is gated by sigmoid(router(x)) per
+    /// token — tokens the router scores low pass through unchanged.
+    /// Soft routing here; hard top-K + scatter is queued behind the
+    /// same scatter_add upstream gap as MoE sparse dispatch.
+    @ModuleInfo(key: "mod_router") public var modRouter: Linear?
 
     /// Type-erased pointer to whichever MLP-shaped unit owns this block.
     /// Used by introspection helpers (e.g. `sumMoEAuxLosses`) that need
@@ -258,17 +273,46 @@ public final class TransformerBlock: Module {
             self._mlp.wrappedValue = MLP(cfg)
             self._moe.wrappedValue = nil
         }
+        if cfg.useMoD {
+            // bias init defaults to 0 — at init the sigmoid gate ≈ 0.5,
+            // i.e. the block applies ~half of its delta on every token.
+            // Training pushes the gate towards 0 or 1 per token.
+            self._modRouter.wrappedValue = Linear(cfg.dModel, 1, bias: true)
+        } else {
+            self._modRouter.wrappedValue = nil
+        }
+        if cfg.useDifferentialAttention {
+            self._diffAttn.wrappedValue = DifferentialAttention(cfg)
+        } else {
+            self._diffAttn.wrappedValue = nil
+        }
         super.init()
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
-        var x = x
-        x = x + attn(ln1(x))
+        let blockIn = x
+        // Pick the attention variant — differential when configured,
+        // standard otherwise. The standard attn module is always
+        // constructed (so it shows up in the manifest); we just don't
+        // call it when diffAttn is active.
+        let attnOut = (diffAttn != nil) ? diffAttn!(ln1(blockIn)) : attn(ln1(blockIn))
+        var y = blockIn + attnOut
         if let moe = moe {
-            x = x + moe(ln2(x))
+            y = y + moe(ln2(y))
         } else if let mlp = mlp {
-            x = x + mlp(ln2(x))
+            y = y + mlp(ln2(y))
         }
-        return x
+        // MoD soft routing: per-token sigmoid gate scales the block's
+        // total delta. gate ≈ 1 → block fires as normal; gate ≈ 0 →
+        // token bypasses the block entirely.
+        if let router = modRouter {
+            // router(x): [B, T, 1]. sigmoid via 1 / (1 + exp(-x)).
+            let logits = router(blockIn)
+            let gate = MLXArray(Float(1)) / (MLXArray(Float(1)) + MLX.exp(-logits))
+            // y = blockIn + gate * (y - blockIn). Broadcast over C via the
+            // trailing dim of size 1 on `gate`.
+            return blockIn + gate * (y - blockIn)
+        }
+        return y
     }
 }

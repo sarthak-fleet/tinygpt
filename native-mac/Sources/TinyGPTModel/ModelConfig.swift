@@ -88,6 +88,23 @@ public struct ModelConfig: Sendable, Equatable {
     /// positional embeddings; the runner disables them upstream.
     public var useALiBi: Bool
 
+    /// Mixture-of-Depths (Raposo et al., 2024). Each TransformerBlock
+    /// gets a per-token router that learns to scale the block's
+    /// contribution — tokens the router deems irrelevant pass
+    /// through unchanged. This implementation uses SOFT routing
+    /// (sigmoid gate, no top-K + STE) so it's trainable end-to-end
+    /// without specialised infrastructure. The compute saving of
+    /// hard top-K MoD is left to the sparse-dispatch follow-up
+    /// (same scatter_add blocker as MoE).
+    public var useMoD: Bool
+
+    /// Differential attention (Ye et al., 2024). Each block's attention
+    /// has TWO Q/K projections instead of one; outputs are subtracted
+    /// to cancel correlated noise. ~1.5-2× per-head compute, often
+    /// improves long-context reasoning. Mutually exclusive with the
+    /// standard attention path.
+    public var useDifferentialAttention: Bool
+
     public var headDim: Int { dModel / nHeads }
 
     public var mlxDType: DType {
@@ -121,7 +138,9 @@ public struct ModelConfig: Sendable, Equatable {
         loadBalanceWeight: Float = 0.01,
         mtpHorizons: Int = 1,
         slidingWindow: Int? = nil,
-        useALiBi: Bool = false
+        useALiBi: Bool = false,
+        useMoD: Bool = false,
+        useDifferentialAttention: Bool = false
     ) {
         self.tokenizerSource = tokenizerSource
         self.nExperts = max(1, nExperts)
@@ -130,6 +149,8 @@ public struct ModelConfig: Sendable, Equatable {
         self.mtpHorizons = max(1, mtpHorizons)
         self.slidingWindow = slidingWindow.flatMap { $0 > 0 ? $0 : nil }
         self.useALiBi = useALiBi
+        self.useMoD = useMoD
+        self.useDifferentialAttention = useDifferentialAttention
         self.modelName = modelName
         self.vocabSize = vocabSize
         self.contextLength = contextLength

@@ -121,7 +121,9 @@ enum TrainSupport {
                 nExperts: cfg.isMoE ? cfg.nExperts : nil,
                 moeTopK: cfg.isMoE ? cfg.moeTopK : nil,
                 loadBalanceWeight: cfg.isMoE ? cfg.loadBalanceWeight : nil,
-                slidingWindow: cfg.slidingWindow
+                slidingWindow: cfg.slidingWindow,
+                useMoD: cfg.useMoD ? true : nil,
+                useDifferentialAttention: cfg.useDifferentialAttention ? true : nil
             ),
             manifest: entries,
             savedAt: ISO8601DateFormatter().string(from: Date()),

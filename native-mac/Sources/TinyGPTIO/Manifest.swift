@@ -38,6 +38,16 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
         /// When set, every query attends only to the last N positions.
         public var slidingWindow: Int?
 
+        /// Mixture-of-Depths flag. `nil` / false = standard dense. When
+        /// set, each TransformerBlock has a learned per-token sigmoid
+        /// gate that scales the block's contribution.
+        public var useMoD: Bool?
+
+        /// Differential attention flag (Ye et al., 2024). `nil` / false =
+        /// standard MHA. When set, each block gains a `diff_attn` sibling
+        /// with 2× Q/K projections + λ scalar.
+        public var useDifferentialAttention: Bool?
+
         public init(
             layers: Int? = nil,
             dModel: Int? = nil,
@@ -51,7 +61,9 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
             nExperts: Int? = nil,
             moeTopK: Int? = nil,
             loadBalanceWeight: Float? = nil,
-            slidingWindow: Int? = nil
+            slidingWindow: Int? = nil,
+            useMoD: Bool? = nil,
+            useDifferentialAttention: Bool? = nil
         ) {
             self.layers = layers
             self.dModel = dModel
@@ -66,6 +78,8 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
             self.moeTopK = moeTopK
             self.loadBalanceWeight = loadBalanceWeight
             self.slidingWindow = slidingWindow
+            self.useMoD = useMoD
+            self.useDifferentialAttention = useDifferentialAttention
         }
     }
 
