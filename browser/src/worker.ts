@@ -73,6 +73,9 @@ ctx.onmessage = (e: MessageEvent<ToWorker>) => {
     case "patch":
       void doPatch(msg.prompt, msg.tokens, msg.temperature, msg.patches);
       break;
+    case "set_tuned_lenses":
+      setTunedLenses(msg.data);
+      break;
   }
 };
 
@@ -615,11 +618,97 @@ async function doRestore(state: ArrayBuffer, cfg: RunConfig): Promise<void> {
  * so we return `benchmark_skipped` with a clear reason so the UI can
  * point users to the WebGPU backend instead of failing red.
  */
+/// In-memory tuned-lens probes loaded from a `.lenses` sidecar.
+/// When non-null, `doLens` applies these on CPU to each layer's
+/// raw hidden state instead of the raw final-LN + LM-head projection.
+interface TunedLens {
+  vocabSize: number;
+  dModel: number;
+  /// per-layer (weight [vocab, dModel] row-major, bias [vocab]).
+  layers: { weight: Float32Array; bias: Float32Array }[];
+}
+let tunedLenses: TunedLens | null = null;
+
+/// Parse a `.lenses` sidecar produced by `tinygpt tuned-lens`.
+/// Layout (little-endian):
+///   magic "TGTL"  (4 bytes)
+///   version u32   (== 1)
+///   nLayers u32   vocabSize u32   dModel u32
+///   per-layer (vocab·dModel Float32 weight, vocab Float32 bias)
+function parseTunedLenses(buf: ArrayBuffer): TunedLens {
+  const view = new DataView(buf);
+  // Magic check.
+  const magic = String.fromCharCode(view.getUint8(0), view.getUint8(1),
+                                    view.getUint8(2), view.getUint8(3));
+  if (magic !== "TGTL") {
+    throw new Error(`not a .lenses file (magic "${magic}" ≠ "TGTL")`);
+  }
+  const version = view.getUint32(4, /*little*/ true);
+  if (version !== 1) throw new Error(`unsupported .lenses version ${version}`);
+  const nLayers = view.getUint32(8, true);
+  const vocab = view.getUint32(12, true);
+  const dModel = view.getUint32(16, true);
+  let off = 20;
+  const layers: { weight: Float32Array; bias: Float32Array }[] = [];
+  for (let l = 0; l < nLayers; l++) {
+    const wLen = vocab * dModel;
+    const weight = new Float32Array(buf.slice(off, off + wLen * 4));
+    off += wLen * 4;
+    const bias = new Float32Array(buf.slice(off, off + vocab * 4));
+    off += vocab * 4;
+    layers.push({ weight, bias });
+  }
+  return { vocabSize: vocab, dModel, layers };
+}
+
+function setTunedLenses(buf: ArrayBuffer | null): void {
+  if (buf == null) {
+    tunedLenses = null;
+    post({ type: "tuned_lenses_loaded", nLayers: 0, vocabSize: 0, dModel: 0 });
+    return;
+  }
+  try {
+    const parsed = parseTunedLenses(buf);
+    tunedLenses = parsed;
+    post({
+      type: "tuned_lenses_loaded",
+      nLayers: parsed.layers.length,
+      vocabSize: parsed.vocabSize,
+      dModel: parsed.dModel,
+    });
+  } catch (err) {
+    post({ type: "tuned_lenses_failed",
+            message: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/// Apply a single tuned-lens probe to a raw hidden tensor.
+/// `hidden` is row-major [T, C]; output is row-major [T, V].
+function applyTunedProbe(hidden: Float32Array, T: number, C: number,
+                         weight: Float32Array, bias: Float32Array,
+                         V: number): Float32Array {
+  const out = new Float32Array(T * V);
+  for (let t = 0; t < T; t++) {
+    const hBase = t * C;
+    const oBase = t * V;
+    for (let v = 0; v < V; v++) {
+      const wBase = v * C;
+      let acc = bias[v];
+      for (let c = 0; c < C; c++) acc += hidden[hBase + c] * weight[wBase + c];
+      out[oBase + v] = acc;
+    }
+  }
+  return out;
+}
+
 /**
  * Logit lens — per-layer top-K predictions. Pure WebGPU today (the
  * WASM model doesn't expose per-layer hidden states). When called
  * with a WASM-only model we emit an `unavailable` payload so the UI
  * shows a friendly note instead of failing red.
+ *
+ * Uses tuned probes (uploaded via `set_tuned_lenses`) when available;
+ * falls back to the raw final-LN + LM-head projection otherwise.
  */
 async function doLens(prompt: Uint8Array, topK: number): Promise<void> {
   if (!gpuModel) {
@@ -636,9 +725,23 @@ async function doLens(prompt: Uint8Array, topK: number): Promise<void> {
     return;
   }
   try {
-    const perLayer = await gpuModel.logitLens([...prompt]);
     const tokens = [...prompt];
     const V = gpuModel.cfg.vocab;
+    const C = gpuModel.cfg.dModel;
+    // Choose lens variant: tuned (if probes uploaded) vs raw.
+    let perLayer: Float32Array[];
+    if (tunedLenses != null && tunedLenses.layers.length > 0) {
+      if (tunedLenses.vocabSize !== V || tunedLenses.dModel !== C) {
+        throw new Error(`tuned lens vocab/dModel (${tunedLenses.vocabSize}/${tunedLenses.dModel}) doesn't match the loaded model (${V}/${C})`);
+      }
+      const hiddens = await gpuModel.forwardLayerwise(tokens);
+      perLayer = hiddens.map((h, l) => {
+        const probe = tunedLenses!.layers[l];
+        return applyTunedProbe(h, tokens.length, C, probe.weight, probe.bias, V);
+      });
+    } else {
+      perLayer = await gpuModel.logitLens(tokens);
+    }
     // For each layer, softmax + top-K per input position.
     const layers: { token: number; prob: number }[][][] = [];
     for (const logits of perLayer) {

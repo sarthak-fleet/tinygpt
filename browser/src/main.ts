@@ -70,6 +70,8 @@ const els = {
   benchResult: byId<HTMLDivElement>("benchResult"),
   runLens: byId<HTMLButtonElement>("runLens"),
   lensResult: byId<HTMLPreElement>("lensResult"),
+  lensUpload: byId<HTMLInputElement>("lensUpload"),
+  lensUploadLabel: byId<HTMLLabelElement>("lensUploadLabel"),
   ablateLayer: byId<HTMLInputElement>("ablateLayer"),
   ablateTarget: byId<HTMLSelectElement>("ablateTarget"),
   runAblate: byId<HTMLButtonElement>("runAblate"),
@@ -932,6 +934,12 @@ function setBenchAvailable(enabled: boolean): void {
   // `unavailable` payload when the backend can't service it (WASM today).
   els.runLens.hidden = !enabled;
   els.runLens.disabled = !enabled;
+  els.lensUploadLabel.hidden = !enabled;
+  if (enabled) {
+    els.lensUploadLabel.removeAttribute("disabled");
+  } else {
+    els.lensUploadLabel.setAttribute("disabled", "true");
+  }
   if (!enabled) els.lensResult.hidden = true;
   // Per-layer ablation controls share the same gate.
   els.ablateLayer.hidden = !enabled;
@@ -994,6 +1002,23 @@ els.runBench.addEventListener("click", () => {
   els.benchResult.hidden = false;
   els.benchResult.textContent = `${id}: running…`;
   send({ type: "benchmark", id });
+});
+
+els.lensUpload.addEventListener("change", async () => {
+  const file = els.lensUpload.files?.[0];
+  if (!file) return;
+  els.lensResult.hidden = false;
+  els.lensResult.textContent = `loading ${file.name}…`;
+  try {
+    const data = await file.arrayBuffer();
+    send({ type: "set_tuned_lenses", data });
+  } catch (err) {
+    els.lensResult.textContent = `couldn't read .lenses file: ${
+      err instanceof Error ? err.message : String(err)
+    }`;
+  }
+  // Reset the input so the same file can be re-selected to retry.
+  els.lensUpload.value = "";
 });
 
 els.runLens.addEventListener("click", () => {
@@ -2613,6 +2638,20 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       els.ablateResult.textContent = `ablate failed: ${msg.message}`;
       els.runAblate.disabled = false;
       els.runAblate.textContent = "Ablate & sample";
+      break;
+    case "tuned_lenses_loaded":
+      els.lensResult.hidden = false;
+      if (msg.nLayers === 0) {
+        els.lensResult.textContent = "tuned lens cleared — using raw lens next.";
+      } else {
+        els.lensResult.textContent =
+          `tuned lens loaded: ${msg.nLayers} probes, vocab ${msg.vocabSize}, dModel ${msg.dModel}. ` +
+          `Click "Logit lens" to use them.`;
+      }
+      break;
+    case "tuned_lenses_failed":
+      els.lensResult.hidden = false;
+      els.lensResult.textContent = `tuned lens load failed: ${msg.message}`;
       break;
     case "done": {
       setRunning(false);

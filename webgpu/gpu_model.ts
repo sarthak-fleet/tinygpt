@@ -515,6 +515,57 @@ export class GpuModel {
     return ids;
   }
 
+  /** Run forward, returning each block's POST-BLOCK residual-stream
+   *  hidden state as a downloaded Float32Array. No final-LN, no
+   *  logit projection — that's the caller's job (used by the tuned
+   *  lens, which applies per-layer trained probes on CPU). Shape
+   *  per Float32Array: row-major [T, C] = T·C floats.
+   *
+   *  Cost: one full forward + L round-trip downloads. Modest for the
+   *  small models we run in-browser; if scaling up, batch the
+   *  downloads or upload the probes to GpuTensors instead. */
+  async forwardLayerwise(promptIds: number[]): Promise<Float32Array[]> {
+    const { vocab: V, ctx, layers: L, heads: H, dModel: C, dMlp: M } = this.cfg;
+    void V;
+    if (promptIds.length === 0) return [];
+    const T = Math.min(promptIds.length, ctx);
+    const N = T;
+    const window = new Float32Array(promptIds.slice(promptIds.length - T));
+
+    this.ops.beginBatch();
+    const idsT = this.keep(this.tensorFrom(window));
+    const x0 = this.keep(
+      this.ops.embedForward(this.tokEmb.w, this.posEmb.w, idsT, N, C, T));
+    let x = x0;
+    const perLayer: import("./tensor").GpuTensor[] = [];
+    for (let l = 0; l < L; l++) {
+      const ly = this.layers[l];
+      const ln1 = this.ops.layernormForward(x, ly.ln1g.w, ly.ln1b.w, N, C);
+      this.keep(ln1.y); this.keep(ln1.mean); this.keep(ln1.rstd);
+      const q = this.linear(ln1.y, ly.wq, ly.bq, N, C, C);
+      const k = this.linear(ln1.y, ly.wk, ly.bk, N, C, C);
+      const v = this.linear(ln1.y, ly.wv, ly.bv, N, C, C);
+      const att = this.ops.attentionForward(q, k, v, 1, T, C, H);
+      this.keep(att.attn); this.keep(att.ctx);
+      if (att.L) this.keep(att.L);
+      const ao = this.linear(att.ctx, ly.wo, ly.bo, N, C, C);
+      const r1 = this.keep(this.ops.add(x, ao, N * C));
+      const ln2 = this.ops.layernormForward(r1, ly.ln2g.w, ly.ln2b.w, N, C);
+      this.keep(ln2.y); this.keep(ln2.mean); this.keep(ln2.rstd);
+      const hpre = this.linear(ln2.y, ly.fcInW, ly.fcInB, N, C, M);
+      const hact = this.keep(this.ops.gelu(hpre, N * M));
+      const mo = this.linear(hact, ly.fcOutW, ly.fcOutB, N, M, C);
+      const r2 = this.keep(this.ops.add(r1, mo, N * C));
+      x = r2;
+      perLayer.push(x);
+    }
+    this.ops.endBatch();
+    const out: Float32Array[] = [];
+    for (const h of perLayer) out.push(await h.download());
+    this.freeScratch();
+    return out;
+  }
+
   /**
    * Logit lens (Nostalgebraist 2020): project each layer's residual-
    * stream hidden state through the final layernorm + tied LM head,

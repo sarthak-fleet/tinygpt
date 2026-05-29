@@ -90,6 +90,14 @@ export type ToWorker =
   | {
       type: "patch"; prompt: string; tokens: number; temperature: number;
       patches: { layer: number; position: number }[];
+    }
+  // Upload a `.lenses` sidecar (per-layer trained projection probes
+  // from `tinygpt tuned-lens`). The worker stores them in-memory; the
+  // next `lens` request uses them in lieu of the raw final-LN + LM-
+  // head projection. Pass `null` to clear and revert to the raw lens.
+  | {
+      type: "set_tuned_lenses";
+      data: ArrayBuffer | null;
     };
 
 /** Logit-lens output: one layer-slot per transformer block. Each slot
@@ -159,4 +167,7 @@ export type FromWorker =
   | { type: "ablate_done"; text: string; ablations: { layer: number; target: string }[] }
   | { type: "ablate_failed"; message: string }
   | { type: "patch_done"; text: string; patches: { layer: number; position: number }[] }
-  | { type: "patch_failed"; message: string };
+  | { type: "patch_failed"; message: string }
+  /** Tuned-lens upload result. `nLayers > 0` = loaded successfully; `error` = failure mode. */
+  | { type: "tuned_lenses_loaded"; nLayers: number; vocabSize: number; dModel: number }
+  | { type: "tuned_lenses_failed"; message: string };
