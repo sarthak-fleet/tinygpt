@@ -109,3 +109,26 @@ jobs:
           name: mac-test-result
           path: /tmp/test-result.xcresult
           retention-days: 7
+
+  swift-quality:
+    name: swift-quality (swiftformat --lint)
+    # macos-15 has Homebrew preinstalled. We deliberately don't reuse the
+    # `mac` job's runner: that one's slow (15+ minutes with the full test
+    # matrix) and swift-quality is the fast linter we want feedback from
+    # before the heavy tests finish. Each job runs on its own runner so
+    # they execute in parallel.
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install swiftformat
+        # Homebrew is preinstalled on macos-15 runners.
+        run: brew install swiftformat
+
+      - name: swiftformat --lint
+        # The `.swiftformat` at repo root pins every rule. `--lint` fails
+        # the job (exit 1) on any drift; running `swiftformat` (no
+        # `--lint`) locally auto-fixes. Excludes are also in `.swiftformat`,
+        # so they apply both to lint and to the developer's auto-fix run.
+        run: swiftformat --lint native-mac/Sources native-mac/Tests

@@ -49,7 +49,7 @@ enum Finetune {
         // Default LoRA targets differ between from-scratch (q+v on plain
         // MLP) and HF (q+v on SwiGLU MLP). User-supplied --targets always
         // wins; otherwise we pick sensible defaults per model kind below.
-        var url = URL(fileURLWithPath: basePath); var isDir: ObjCBool = false
+        let url = URL(fileURLWithPath: basePath); var isDir: ObjCBool = false
         _ = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         let userSetTargets = (targetSuffixesArg != "q_proj,v_proj")
         if isDir.boolValue && !userSetTargets {

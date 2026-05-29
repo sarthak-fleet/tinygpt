@@ -1,0 +1,58 @@
+# SwiftFormat config for tinygpt (native-mac Swift).
+#
+# Goal: enforce the existing house style as a regression gate. The
+# codebase has its own multi-space-alignment / column-aligned-comment
+# style that doesn't line up with swiftformat's defaults, so we opt-in
+# via `--rules` to ONLY the rules the codebase already conforms to.
+# Lint mode (`swiftformat --lint`) fails CI on drift; running
+# `swiftformat native-mac/Sources native-mac/Tests` (no --lint) auto-
+# fixes.
+#
+# Rules we don't enable — and why:
+#   indent / consecutiveSpaces — code uses column-aligned comments and
+#       8-space continuation indent in MLX argument lists.
+#   spaceAroundOperators — `let a = b*c + d*e` is intentional in math-
+#       heavy MLX code; auto-format would space every `*` and `+`.
+#   redundantSelf — SwiftUI views use `self.foo` for clarity.
+#   hoistPatternLet — `case let .foo(x)` style is preferred at a few
+#       SFT / DPO sites and gets used as documentation.
+#   wrapPropertyBodies / wrapFunctionBodies — many one-liners like
+#       `public var isMoE: Bool { nExperts > 1 }` are clearer compact.
+#   andOperator — `&&` vs `,` choice is per-site; some `if let` chains
+#       intentionally use `,`, others `&&`. Not worth automating.
+#   sortImports — the codebase isn't strictly alphabetical (test files
+#       put `@testable` at the bottom; some sources keep MLX adjacent).
+#
+# Scope: native-mac Swift sources + tests only. The browser TS / WGSL /
+# Python paths are linted by their own tools.
+
+--exclude .build,**/.build,**/.swiftpm,build,DerivedData,Pods
+--swiftversion 6.0
+
+# Enable ONLY this curated set. Everything else is implicitly disabled.
+--rules linebreakAtEndOfFile
+--rules duplicateImports
+--rules semicolons
+--rules void
+--rules todos
+--rules spaceInsideBrackets
+--rules spaceInsideParens
+--rules spaceAroundBraces
+--rules spaceAroundComments
+--rules spaceInsideComments
+--rules emptyBraces
+--rules initCoderUnavailable
+--rules typeSugar
+--rules redundantInternal
+--rules isEmpty
+--rules strongOutlets
+--rules strongifiedSelf
+--rules headerFileName
+--rules redundantBackticks
+--rules redundantBreak
+--rules redundantExtensionACL
+--rules redundantFileprivate
+--rules redundantGet
+--rules redundantInit
+--rules redundantPublic
+--rules redundantClosure

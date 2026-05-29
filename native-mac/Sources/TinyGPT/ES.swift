@@ -204,7 +204,7 @@ enum ES {
             let plus: ModuleParameters = basePV.mapValues(noise) { v, n in
                 v + (n ?? MLXArray(Float(0))) * sigmaA
             }
-            try? model.update(parameters: plus, verify: [])
+            _ = try? model.update(parameters: plus, verify: [])
             let lossPlus = model.loss(x, y)
             MLX.eval(lossPlus)
             rewards.append(-lossPlus.item(Float.self))
@@ -213,7 +213,7 @@ enum ES {
             let minus: ModuleParameters = basePV.mapValues(noise) { v, n in
                 v - (n ?? MLXArray(Float(0))) * sigmaA
             }
-            try? model.update(parameters: minus, verify: [])
+            _ = try? model.update(parameters: minus, verify: [])
             let lossMinus = model.loss(x, y)
             MLX.eval(lossMinus)
             rewards.append(-lossMinus.item(Float.self))
@@ -244,7 +244,7 @@ enum ES {
         let newParams: ModuleParameters = basePV.mapValues(update) { v, u in
             v + (u ?? MLXArray(Float(0))) * scaleA
         }
-        try? model.update(parameters: newParams, verify: [])
+        _ = try? model.update(parameters: newParams, verify: [])
         MLX.eval(model)
 
         return (meanLoss: -meanR, ())

@@ -244,4 +244,158 @@ final class TinyGPTIOTests: XCTestCase {
         XCTAssertEqual(e.elementCount, 60)
         XCTAssertEqual(e.byteLength, 240)
     }
+
+    // MARK: - Manifest schema — current-set field coverage
+    //
+    // The header gained a small avalanche of optional fields over the
+    // last few weeks (BPE / MoE / MoD / DiffAttn / YOCO / grad-ckpt /
+    // sliding-window). A regression in any of them would silently corrupt
+    // a `--resume` continuation (architecture flag dropped → checkpoint
+    // re-loaded with a different topology). Each of these tests pins one
+    // field's round-trip behaviour so a future Codable refactor can't
+    // accidentally drop it.
+
+    func test_configFields_roundTripBPEMetadata() throws {
+        let cfg = TinyGPTHeader.Config(
+            layers: 4, dModel: 128, ctx: 256, heads: 4, dMlp: 512,
+            batchSize: 8, backend: "mlx-swift",
+            vocabSize: 32_000,
+            tokenizerSource: "/models/llama-3-tokenizer"
+        )
+        let encoded = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(TinyGPTHeader.Config.self, from: encoded)
+        XCTAssertEqual(decoded.vocabSize, 32_000)
+        XCTAssertEqual(decoded.tokenizerSource, "/models/llama-3-tokenizer")
+    }
+
+    func test_configFields_roundTripMoEMetadata() throws {
+        let cfg = TinyGPTHeader.Config(
+            layers: 4, dModel: 128,
+            nExperts: 8, moeTopK: 2, loadBalanceWeight: 0.01
+        )
+        let encoded = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(TinyGPTHeader.Config.self, from: encoded)
+        XCTAssertEqual(decoded.nExperts, 8)
+        XCTAssertEqual(decoded.moeTopK, 2)
+        XCTAssertEqual(decoded.loadBalanceWeight, 0.01)
+    }
+
+    func test_configFields_roundTripArchitectureFlags() throws {
+        // The architecture-feature bools (MoD, DiffAttn, YOCO, GradCkpt) +
+        // sliding-window. Together these reproduce a checkpoint's
+        // structural identity; dropping ANY of them on round-trip
+        // breaks --resume.
+        let cfg = TinyGPTHeader.Config(
+            layers: 12, dModel: 256, ctx: 1024,
+            slidingWindow: 256,
+            useMoD: true,
+            useDifferentialAttention: true,
+            useYOCO: true,
+            useGradCheckpoint: true
+        )
+        let encoded = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(TinyGPTHeader.Config.self, from: encoded)
+        XCTAssertEqual(decoded.slidingWindow, 256)
+        XCTAssertEqual(decoded.useMoD, true)
+        XCTAssertEqual(decoded.useDifferentialAttention, true)
+        XCTAssertEqual(decoded.useYOCO, true)
+        XCTAssertEqual(decoded.useGradCheckpoint, true)
+    }
+
+    func test_configFields_omitNilFieldsFromJSON() throws {
+        // We need backwards-compatibility for the writer: when a flag
+        // isn't set, it MUST NOT appear in the encoded JSON. Older
+        // readers (pre-YOCO, pre-MoE) wouldn't have its key and the
+        // encoder would otherwise produce `"useYOCO": null` for them.
+        let cfg = TinyGPTHeader.Config(layers: 4, dModel: 128)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(cfg)
+        let str = String(data: data, encoding: .utf8) ?? ""
+        XCTAssertFalse(str.contains("useYOCO"),
+                       "nil useYOCO leaked into encoded JSON: \(str)")
+        XCTAssertFalse(str.contains("useMoD"),
+                       "nil useMoD leaked into encoded JSON: \(str)")
+        XCTAssertFalse(str.contains("nExperts"),
+                       "nil nExperts leaked into encoded JSON: \(str)")
+        XCTAssertFalse(str.contains("tokenizerSource"),
+                       "nil tokenizerSource leaked into encoded JSON: \(str)")
+    }
+
+    func test_headerRoundTrips_withFullSchema() throws {
+        // End-to-end: build a header with every current field populated,
+        // run it through encode→decode, byte-compare.
+        let entries: [TinyGPTHeader.TensorEntry] = [
+            .init(name: "token_embedding.weight", shape: [256, 8]),
+            .init(name: "output.weight", shape: [8, 256]),
+        ]
+        let header = TinyGPTHeader(
+            config: .init(
+                layers: 2, dModel: 8, ctx: 16, heads: 2, dMlp: 16,
+                batchSize: 2, backend: "mlx-swift",
+                vocabSize: 256,
+                tokenizerSource: nil,
+                nExperts: 2, moeTopK: 1, loadBalanceWeight: 0.05,
+                slidingWindow: 8,
+                useMoD: true,
+                useDifferentialAttention: false,
+                useYOCO: true,
+                useGradCheckpoint: true
+            ),
+            manifest: entries,
+            savedAt: "2026-05-30T00:00:00Z",
+            finalLoss: .init(step: 100, train: 1.5, val: 1.6),
+            sample: "hello"
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(header)
+        let decoded = try JSONDecoder().decode(TinyGPTHeader.self, from: data)
+        // Equality should walk every field.
+        XCTAssertEqual(decoded, header)
+    }
+
+    // MARK: - Legacy v1 file detection
+    //
+    // v1 files predate the `manifest` field — the reader CAN'T decode them
+    // (no schema for tensor layout) but MUST surface a clean
+    // `missingManifest` error so the CLI can print the upgrade hint
+    // instead of a confusing "headerNotJSON" wrapper.
+
+    func test_v1File_withoutManifestReportsMissingManifest() throws {
+        // v1 header has no `manifest` array. Build one by hand:
+        //   magic | version=1 | header_len | header JSON | step
+        var data = Data()
+        data.append(contentsOf: TinyGPTFormat.magic)
+        var version: UInt32 = 1
+        withUnsafeBytes(of: &version) { data.append(contentsOf: $0) }
+        let json = #"{"config":{"layers":4,"dModel":128,"ctx":128,"heads":4,"dMlp":512}}"#
+        let headerBytes = Data(json.utf8)
+        var headerLen = UInt32(headerBytes.count)
+        withUnsafeBytes(of: &headerLen) { data.append(contentsOf: $0) }
+        data.append(headerBytes)
+        data.append(Data(count: 4))  // step counter
+
+        var sawMissingManifest = false
+        do {
+            _ = try TinyGPTFileReader.decode(data, source: tmpURL())
+        } catch TinyGPTFileError.missingManifest {
+            sawMissingManifest = true
+        } catch {
+            // Any other failure also flags v1; the dedicated error path
+            // is the desired one for a clear CLI message.
+        }
+        XCTAssertTrue(sawMissingManifest,
+                      "v1 file without manifest should produce missingManifest, not a generic decode error")
+    }
+
+    func test_v1File_versionIsAcceptedInTheSupportedSet() {
+        // Defensive: the format pin says v1 stays in `supportedVersions`.
+        // If a future cleanup drops it (and there's a reasonable case
+        // for that), this test fires so the corresponding migration
+        // story is reviewed first.
+        XCTAssertTrue(TinyGPTFormat.supportedVersions.contains(1),
+                      "v1 dropped from supportedVersions — was that intentional?")
+        XCTAssertTrue(TinyGPTFormat.supportedVersions.contains(2))
+    }
 }
