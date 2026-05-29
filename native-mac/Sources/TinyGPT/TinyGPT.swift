@@ -36,6 +36,16 @@ struct TinyGPT {
             Eval.run(args: Array(args.dropFirst()))
         case "finetune":
             Finetune.run(args: Array(args.dropFirst()))
+        case "sft":
+            SFT.run(args: Array(args.dropFirst()))
+        case "dpo":
+            DPO.run(args: Array(args.dropFirst()))
+        case "distill":
+            Distill.run(args: Array(args.dropFirst()))
+        case "es":
+            ES.run(args: Array(args.dropFirst()))
+        case "laser":
+            LASER.run(args: Array(args.dropFirst()))
         case "compare":
             Compare.run(args: Array(args.dropFirst()))
         case "hf-inspect":

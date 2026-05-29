@@ -71,11 +71,47 @@ enum Finetune {
         let nTrainable = load.model.injectLora(config: loraCfg)
         let nTotal = load.model.numParameters()
 
-        // Load corpus
+        // Load corpus. For HF models, encode through the model's own BPE
+        // tokenizer; feeding raw bytes through a 49K-vocab embedding would
+        // mean the LoRA trains against the wrong distribution. For from-
+        // scratch byte models, ByteCorpus is the right thing.
         let corpusURL = URL(fileURLWithPath: corpusPath)
-        let corpus: ByteCorpus
-        do { corpus = try ByteCorpus(contentsOf: corpusURL) }
-        catch { fputs("error reading corpus: \(error)\n", stderr); exit(1) }
+        let corpusBytes: Int
+        let corpusDescription: String
+        let sampleBatch: (Int, Int) -> (MLXArray, MLXArray)
+        switch load.model {
+        case .fromScratch:
+            let corpus: ByteCorpus
+            do { corpus = try ByteCorpus(contentsOf: corpusURL) }
+            catch { fputs("error reading corpus: \(error)\n", stderr); exit(1) }
+            corpusBytes = corpus.bytes.count
+            corpusDescription = "\(corpusPath) (\(formatBytes(corpusBytes)) · byte-level)"
+            sampleBatch = { B, T in corpus.sampleBatch(batchSize: B, contextLength: T) }
+        case .huggingFace:
+            // Tokenise the whole corpus once up front through the model's
+            // own BPE. Cost is O(|corpus|) in CPU; memory is ~4 bytes per
+            // token (Int32). For a 1 MB corpus that's ~250K tokens × 4B
+            // = 1 MB — negligible.
+            guard let tokDir = load.hfTokenizerDir else {
+                fputs("HF model loaded but no tokenizer directory recorded\n", stderr); exit(1)
+            }
+            let text: String
+            do { text = try String(contentsOf: corpusURL, encoding: .utf8) }
+            catch { fputs("error reading corpus: \(error)\n", stderr); exit(1) }
+            corpusBytes = text.utf8.count
+            print("loading BPE tokenizer from \(tokDir.lastPathComponent)…")
+            let tok: HFTokenizer
+            do { tok = try HFTokenizer.loadBlocking(from: tokDir) }
+            catch { fputs("tokenizer load failed: \(error)\n", stderr); exit(1) }
+            print("encoding corpus…")
+            let ids: [Int]
+            do { ids = try tok.encode(text) }
+            catch { fputs("tokenizer encode failed: \(error)\n", stderr); exit(1) }
+            let tokens = ids.map { Int32($0) }
+            corpusDescription = "\(corpusPath) (\(formatBytes(corpusBytes)) · \(formatNum(tokens.count)) BPE tokens)"
+            let corpus = TokenizedCorpus(tokens: tokens, vocabSize: cfg.vocabSize)
+            sampleBatch = { B, T in corpus.sampleBatch(batchSize: B, contextLength: T) }
+        }
 
         let B = batchSize ?? defaultBatch(cfg)
         print("""
@@ -83,7 +119,7 @@ enum Finetune {
         TinyGPT — LoRA fine-tune
         ------------------------
         base:           \(basePath)
-        corpus:         \(corpusPath) (\(formatBytes(corpus.bytes.count)))
+        corpus:         \(corpusDescription)
         config:         \(cfg.nLayers)L · d=\(cfg.dModel) · ctx=\(cfg.contextLength)
         LoRA:           rank=\(rank) alpha=\(alpha) targets=\(targetSuffixes.joined(separator: ","))
         trainable:      \(formatNum(nTrainable))  /  total \(formatNum(nTotal))  (\(String(format: "%.2f%%", 100 * Float(nTrainable) / Float(nTotal))))
@@ -99,9 +135,16 @@ enum Finetune {
         let stepFn = makeStepFn(load.model, lr: lr)
         let t0 = Date()
         var lastLoss: Float = 0
+        // Cooperative cancellation — Ctrl-C flushes the in-progress
+        // adapter at the next step boundary rather than killing the run.
+        TrainSupport.installSigintHandler()
+        TrainSupport.stopRequested.reset()
+        var stoppedEarly = false
+        var lastStep = 0
         for step in 0..<steps {
-            let (x, y) = corpus.sampleBatch(batchSize: B, contextLength: cfg.contextLength)
+            let (x, y) = sampleBatch(B, cfg.contextLength)
             lastLoss = stepFn(x, y)
+            lastStep = step + 1
             if step == 0 || (step + 1) % 25 == 0 || step == steps - 1 {
                 let elapsed = -t0.timeIntervalSinceNow
                 let sps = Double(step + 1) / elapsed
@@ -109,15 +152,27 @@ enum Finetune {
                              step + 1, steps, lastLoss, sps,
                              Double(steps - step - 1) / sps), stderr)
             }
+            if TrainSupport.stopRequested.isSet {
+                fputs("\n[SIGINT] saving adapter at step \(lastStep)…\n", stderr)
+                stoppedEarly = true
+                break
+            }
             if (step + 1) % sampleEvery == 0 || step == steps - 1 {
                 fputs("    [step \(step + 1)] (sample skipped during HF fine-tune; use `tinygpt sample` after)\n", stderr)
             }
         }
         let elapsed = -t0.timeIntervalSinceNow
-        print(String(format: "\ndone — %d steps in %.1fs (%.1f step/s) · final loss %.3f",
-                     steps, elapsed, Double(steps) / elapsed, lastLoss))
+        if stoppedEarly {
+            print(String(format: "\ninterrupted at step %d of %d after %.1fs · loss %.3f",
+                          lastStep, steps, elapsed, lastLoss))
+        } else {
+            print(String(format: "\ndone — %d steps in %.1fs (%.1f step/s) · final loss %.3f",
+                          steps, elapsed, Double(steps) / elapsed, lastLoss))
+        }
 
-        // Save the adapter (small A/B matrices only).
+        // Save the adapter (small A/B matrices only). Runs on both clean
+        // completion AND Ctrl-C interrupt, so the partially-trained
+        // adapter is never lost.
         do {
             try load.model.saveLora(baseConfig: cfg, loraConfig: loraCfg,
                                      finalLoss: lastLoss,
@@ -128,6 +183,7 @@ enum Finetune {
         } catch {
             fputs("save failed: \(error)\n", stderr); exit(1)
         }
+        if stoppedEarly { exit(130) }
     }
 
     /// Build a per-step train function bound to the right model class.
@@ -135,10 +191,10 @@ enum Finetune {
     private static func makeStepFn(_ model: AnyModel, lr: Float) -> (MLXArray, MLXArray) -> Float {
         switch model {
         case .fromScratch(let m):
-            let trainer = Trainer(model: m, learningRate: lr, weightDecay: 0.0, compileStep: false)
+            let trainer = Trainer(model: m, learningRate: lr, weightDecay: 0.0)
             return { x, y in trainer.step(inputs: x, targets: y) }
         case .huggingFace(let m):
-            let trainer = TrainerHF(model: m, learningRate: lr, weightDecay: 0.0, compileStep: false)
+            let trainer = TrainerHF(model: m, learningRate: lr, weightDecay: 0.0)
             return { x, y in trainer.step(inputs: x, targets: y) }
         }
     }

@@ -97,23 +97,24 @@ enum HFLoad {
         let promptIds = tokenizer.encode(text: prompt)
         print(prompt, terminator: "")
         fflush(stdout)
-        var idx = MLXArray(promptIds.map { Int32($0) }, [1, promptIds.count])
+        let idx = MLXArray(promptIds.map { Int32($0) }, [1, promptIds.count])
 
-        // Greedy or temperature sample, decoding each new token via the
-        // tokenizer (so multi-byte BPE tokens decode correctly).
+        // KV-cached decode. Prefill on the full prompt populates K/V at
+        // every layer; subsequent steps pass the single next-token id
+        // through TinyGPTModelHF.forwardCached, which re-uses cached K/V
+        // and rotates the new position with the correct RoPE offset.
+        let cache = KVCache(nLayers: cfg.nLayers)
+        let prefillLogits = model.forwardCached(idx, cache: cache)
+        var lastLogits = prefillLogits[0..., prefillLogits.shape[1] - 1, 0...]
+
         var generated: [Int] = []
         let t0 = Date()
         for _ in 0..<maxTokens {
-            let T = idx.shape.last!
-            let lo = max(0, T - cfg.contextLength)
-            let cond = idx[0..., lo..<T]
-            let logits = model(cond)
-            let last = logits[0..., logits.shape[1] - 1, 0...]
             let next: MLXArray
             if temperature <= 0 {
-                next = argMax(last, axis: -1).reshaped([1, 1])
+                next = argMax(lastLogits, axis: -1).reshaped([1, 1])
             } else {
-                next = MLXRandom.categorical(last / MLXArray(temperature))
+                next = MLXRandom.categorical(lastLogits / MLXArray(temperature))
                     .reshaped([1, 1])
             }
             eval(next)
@@ -129,11 +130,13 @@ enum HFLoad {
             let newPiece = String(renderedSoFar.dropFirst(prior.count))
             print(newPiece, terminator: "")
             fflush(stdout)
-            idx = concatenated([idx, next.asType(idx.dtype)], axis: 1)
+            if cache.currentLength >= cfg.contextLength { break }
+            let logits = model.forwardCached(next.asType(idx.dtype), cache: cache)
+            lastLogits = logits[0..., 0, 0...]
         }
         let elapsed = -t0.timeIntervalSinceNow
         print()
-        print("\n(\(maxTokens) tokens in \(String(format: "%.2f", elapsed))s — \(String(format: "%.0f", Double(maxTokens) / elapsed)) tok/s)")
+        print("\n(\(maxTokens) tokens in \(String(format: "%.2f", elapsed))s — \(String(format: "%.0f", Double(maxTokens) / elapsed)) tok/s · KV-cached)")
     }
 
     private static func formatLargeInt(_ n: Int) -> String {

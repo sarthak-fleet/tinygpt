@@ -33,7 +33,11 @@ enum DebugNames {
         print("  blocks[0].attn.q_proj.weight: \(model.blocks[0].attn.qProj.weight.dtype)")
         print("  blocks[0].attn.q_proj.bias: \(String(describing: model.blocks[0].attn.qProj.bias?.dtype))")
         print("  blocks[0].ln1.weight: \(String(describing: model.blocks[0].ln1.weight?.dtype))")
-        print("  blocks[0].mlp.fc_in.weight: \(model.blocks[0].mlp.fcIn.weight.dtype)")
+        if let denseMlp = model.blocks[0].mlp {
+            print("  blocks[0].mlp.fc_in.weight: \(denseMlp.fcIn.weight.dtype)")
+        } else {
+            print("  blocks[0].mlp: <MoE — \(model.blocks[0].moe?.nExperts ?? 0) experts>")
+        }
 
         // Forward pass on one token and inspect signal magnitude per block.
         let idx = MLXArray([Int32(82), Int32(79), Int32(77), Int32(69), Int32(79), Int32(58)], [1, 6])
