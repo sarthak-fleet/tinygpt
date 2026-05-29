@@ -66,7 +66,13 @@ page.on("console", (m) => {
   if (t === "error") console.log("[err]", m.text());
 });
 
-await page.goto("http://localhost:5173/", { waitUntil: "networkidle" });
+// `?autoSave=NAME` makes the browser app fire the model download itself
+// the moment training completes (case "done" with reason "finished").
+// We then await page.waitForEvent("download") and copy the file — no
+// "wait for downloadModel button → click" dance needed, so the artifact
+// persists even if the post-training sample step crashes or times out.
+const APP_URL = `http://localhost:5173/?autoSave=${encodeURIComponent(args.out)}`;
+await page.goto(APP_URL, { waitUntil: "networkidle" });
 await page.locator("#welcomeSkip").click({ timeout: 1500 }).catch(() => {});
 
 await page.evaluate((text) => {
@@ -107,6 +113,17 @@ const cfg = await page.evaluate(() => ({
 }));
 console.log(`[${args.out}] config:`, JSON.stringify(cfg));
 
+// Register the auto-save download listener BEFORE we start training. The
+// `case "done"` handler in main.ts will fire the download the moment the
+// last step lands, and we don't know exactly when between two polling
+// ticks that'll be. `waitForEvent` registered up-front catches the event
+// whenever it actually fires. Timeout is set to MAX_WALL_MS + a buffer.
+const downloadPromise = page.waitForEvent("download", { timeout: MAX_WALL_MS + 5 * 60 * 1000 });
+// Silence unhandled-rejection warnings if training errors out before we
+// await the download. The same promise is still awaited below — the
+// no-op .catch here only swallows the case where we never get there.
+downloadPromise.catch(() => {});
+
 const tStart = Date.now();
 await page.locator("#start").click({ force: true });
 console.log(`[${args.out}] training started at ${new Date().toISOString()}`);
@@ -134,70 +151,64 @@ while (true) {
 }
 const trainWallMs = Date.now() - tStart;
 
-// Generate a sample so the gallery card can show real model output.
-// #sample is enabled in `case "done"` of main.ts after the worker's warmup.
-console.log(`[${args.out}] --- generating sample ---`);
-await page.waitForFunction(
-  () => {
-    const btn = document.getElementById("sample");
-    return btn && !btn.disabled;
-  },
-  null,
-  { timeout: 120_000 },
-);
-await page.evaluate((p) => {
-  const setVal = (id, v) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.value = String(v);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  };
-  setVal("prompt", p);
-  setVal("temp", 0.8);
-  setVal("genTokens", 400);
-}, prompt);
-await page.locator("#sample").click({ force: true });
-
-// Wait for sample text to fill in. The button is re-enabled when generation completes.
-await page.waitForFunction(
-  () => {
-    const out = document.getElementById("output");
-    if (!out) return false;
-    const txt = (out.textContent ?? "").trim();
-    // ignore the initial placeholder
-    if (out.classList.contains("empty")) return false;
-    return txt.length > 50;
-  },
-  null,
-  { timeout: 120_000 },
-);
-// Give streaming a beat to finish.
-await page.waitForTimeout(3000);
-const sample = await page.evaluate(() => document.getElementById("output")?.textContent ?? "");
-console.log(`[${args.out}] sample (${sample.length} chars): ${sample.slice(0, 160)}…`);
-await fs.writeFile(SAMPLE_FILE, sample);
-
-// Download canonical.
-console.log(`[${args.out}] --- saving checkpoint ---`);
-await page.waitForFunction(
-  () => {
-    const btn = document.getElementById("downloadModel");
-    return btn && !btn.disabled;
-  },
-  null,
-  { timeout: 60_000 },
-);
-await page.evaluate(() => document.getElementById("modelMenuBtn").click());
-await page.waitForTimeout(150);
-const [download] = await Promise.all([
-  page.waitForEvent("download", { timeout: 180_000 }),
-  page.evaluate(() => document.getElementById("downloadModel").click()),
-]);
+// SAVE CHECKPOINT FIRST — the .tinygpt is the only critical artifact.
+// The download was kicked off by the browser app's auto-save (URL param)
+// and we registered the listener BEFORE training started, so the event
+// is either pending now or already fired into the listener.
+console.log(`[${args.out}] --- saving checkpoint (auto-save) ---`);
+const download = await downloadPromise;
 const tmp = await download.path();
 await fs.copyFile(tmp, OUT_FILE);
 const stat = await fs.stat(OUT_FILE);
 console.log(`[${args.out}] wrote ${OUT_FILE}: ${(stat.size / 1024 / 1024).toFixed(2)} MB`);
+
+// Generate a sample so the gallery card can show real model output.
+// Failure here no longer loses training: the checkpoint is already on
+// disk. `try/catch` so we can still write meta with the loss + wall time.
+let sample = "";
+try {
+  console.log(`[${args.out}] --- generating sample ---`);
+  await page.waitForFunction(
+    () => {
+      const btn = document.getElementById("sample");
+      return btn && !btn.disabled;
+    },
+    null,
+    { timeout: 120_000 },
+  );
+  await page.evaluate((p) => {
+    const setVal = (id, v) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = String(v);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    setVal("prompt", p);
+    setVal("temp", 0.8);
+    setVal("genTokens", 400);
+  }, prompt);
+  await page.locator("#sample").click({ force: true });
+
+  await page.waitForFunction(
+    () => {
+      const out = document.getElementById("output");
+      if (!out) return false;
+      const txt = (out.textContent ?? "").trim();
+      if (out.classList.contains("empty")) return false;
+      return txt.length > 50;
+    },
+    null,
+    { timeout: 120_000 },
+  );
+  await page.waitForTimeout(3000);
+  sample = await page.evaluate(() => document.getElementById("output")?.textContent ?? "");
+  console.log(`[${args.out}] sample (${sample.length} chars): ${sample.slice(0, 160)}…`);
+  await fs.writeFile(SAMPLE_FILE, sample);
+} catch (err) {
+  console.log(`[${args.out}] sample step failed (non-fatal — checkpoint is saved): ${err.message}`);
+  await fs.writeFile(SAMPLE_FILE, "(sample generation failed — see train log)");
+}
 
 await fs.writeFile(
   META_FILE,

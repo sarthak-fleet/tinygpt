@@ -85,6 +85,15 @@ const SLOTS = [
     corpus: "databricks/databricks-dolly-15k",
     corpusUrl: "https://huggingface.co/datasets/databricks/databricks-dolly-15k",
   },
+  {
+    id: "seatales",
+    name: "Sea Tales",
+    icon: "🐟",
+    blurb: "Maritime literature — Melville's whales and Conrad's rivers, one model.",
+    corpus: "Moby-Dick (first 800K) + Heart of Darkness — both public domain",
+    corpusUrl: "https://www.gutenberg.org/ebooks/2701",
+    staticPrompt: "Captain Nemo",
+  },
 ];
 
 // fp32 → fp16 conversion — duplicate of convert_to_fp16.mjs's helper so we
@@ -272,10 +281,17 @@ for (const slot of SLOTS) {
   }
   const dstPath = resolve(OUT_DIR, `${slot.id}.bin`);
 
-  // Pick the canonical source.
+  // Pick the canonical source. Try `.bin` first (already-fp16-packed
+  // shape some legacy entries shipped in), then `.tinygpt` (canonical
+  // fp32 — the shape every fresh `train_gallery_one.mjs` produces).
+  // `fp16PackCanonical` handles either input transparently.
   let canonicalSrc = slot.canonicalOverride ?? resolve(DATA_DIR, `${slot.id}.bin`);
   let canonicalExists = false;
   try { await fs.access(canonicalSrc); canonicalExists = true; } catch {}
+  if (!canonicalExists && !slot.canonicalOverride) {
+    const altSrc = resolve(DATA_DIR, `${slot.id}.tinygpt`);
+    try { await fs.access(altSrc); canonicalSrc = altSrc; canonicalExists = true; } catch {}
+  }
 
   // If no canonical, but the destination already exists (e.g., the pre-built
   // Shakespeare demo we copied earlier), keep the existing file.
@@ -338,6 +354,18 @@ for (const slot of SLOTS) {
     fileBytes: conv?.dstBytes ?? null,
     gpuBytes,
     prompt,
+    trainWallMs: meta?.trainWallMs ?? null,
+    // Curated gallery cards: featured = true, browser-trained = true,
+    // authored by the project. Submission flow populates these
+    // differently for community uploads.
+    submission: {
+      author: "TinyGPT",
+      submittedAt: meta?.savedAt ?? new Date().toISOString(),
+      browserTrained: true,
+      featured: true,
+    },
+    // benchmarks populated by `score_gallery.mjs` after-the-fact, not here.
+    benchmarks: {},
   });
 }
 

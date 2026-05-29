@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "All four models share the same architecture (12L, d=256, ctx=256, ~9.6M params, char-level). Each was trained from scratch in this browser for 5000 steps on ~1.1 MB of its corpus. Compare the samples — same machinery, different patterns.",
+  "note": "All five models share the same architecture (12L, d=256, ctx=256, ~9.6M params, char-level). Each was trained from scratch in this browser for 5000 steps on ~1.1 MB of its corpus. Compare the samples — same machinery, different patterns.",
   "models": [
     {
       "id": "shakespeare",
@@ -18,8 +18,18 @@
       "fileBytes": 19253009,
       "gpuBytes": 115304448,
       "prompt": "MENENIUS:\n",
-      "fileInt4": "shakespeare.int4.bin",
-      "fileInt4Bytes": 5140277
+      "trainWallMs": null,
+      "submission": {
+        "author": "TinyGPT",
+        "submittedAt": "2026-05-29T09:26:55.179Z",
+        "browserTrained": true,
+        "featured": true
+      },
+      "benchmarks": {
+        "tinystories-ppl": 7.8643341682876375,
+        "sort-6": 0,
+        "reverse-16": 0
+      }
     },
     {
       "id": "tinystories",
@@ -37,8 +47,18 @@
       "fileBytes": 19252815,
       "gpuBytes": 115304448,
       "prompt": "Once upon a time",
-      "fileInt4": "tinystories.int4.bin",
-      "fileInt4Bytes": 5140106
+      "trainWallMs": 2850278,
+      "submission": {
+        "author": "TinyGPT",
+        "submittedAt": "2026-05-29T09:26:56.572Z",
+        "browserTrained": true,
+        "featured": true
+      },
+      "benchmarks": {
+        "tinystories-ppl": 2.152068139374971,
+        "sort-6": 0,
+        "reverse-16": 0
+      }
     },
     {
       "id": "code",
@@ -56,8 +76,18 @@
       "fileBytes": 19252805,
       "gpuBytes": 115304448,
       "prompt": "def ",
-      "fileInt4": "code.int4.bin",
-      "fileInt4Bytes": 5140096
+      "trainWallMs": 2820673,
+      "submission": {
+        "author": "TinyGPT",
+        "submittedAt": "2026-05-29T09:26:57.817Z",
+        "browserTrained": true,
+        "featured": true
+      },
+      "benchmarks": {
+        "tinystories-ppl": 11.221931628820712,
+        "sort-6": 0,
+        "reverse-16": 0
+      }
     },
     {
       "id": "chat",
@@ -75,8 +105,47 @@
       "fileBytes": 19248969,
       "gpuBytes": 115304448,
       "prompt": "User: ",
-      "fileInt4": "chat.int4.bin",
-      "fileInt4Bytes": 5136260
+      "trainWallMs": 3000378,
+      "submission": {
+        "author": "TinyGPT",
+        "submittedAt": "2026-05-29T09:26:59.186Z",
+        "browserTrained": true,
+        "featured": true
+      },
+      "benchmarks": {
+        "tinystories-ppl": 5.345929627164713,
+        "sort-6": 0,
+        "reverse-16": 0
+      }
+    },
+    {
+      "id": "seatales",
+      "name": "Sea Tales",
+      "icon": "🐟",
+      "blurb": "Maritime literature — Melville's whales and Conrad's rivers, one model.",
+      "corpus": "Moby-Dick (first 800K) + Heart of Darkness — both public domain",
+      "corpusUrl": "https://www.gutenberg.org/ebooks/2701",
+      "file": "seatales.bin",
+      "params": "9.6M",
+      "paramCount": 9608704,
+      "trainLoss": "1.28",
+      "steps": 5000,
+      "sample": "(sample generation failed — see train log)",
+      "fileBytes": 19248969,
+      "gpuBytes": 115304448,
+      "prompt": "Captain Nemo",
+      "trainWallMs": 2880809,
+      "submission": {
+        "author": "TinyGPT",
+        "submittedAt": "2026-05-29T09:27:00.692Z",
+        "browserTrained": true,
+        "featured": true
+      },
+      "benchmarks": {
+        "tinystories-ppl": 7.311166017769345,
+        "sort-6": 0,
+        "reverse-16": 0
+      }
     }
   ]
 }
