@@ -23,6 +23,15 @@ public final class TinyGPTModel: Module {
     /// stay drop-in compatible. nil when `config.mtpHorizons == 1`.
     @ModuleInfo(key: "mtp_heads") public var mtpHeads: [Linear]?
 
+    /// Tuned-lens probes (Belrose et al., 2023). One Linear(d_model →
+    /// vocab) per layer, trained on a frozen base to produce a
+    /// LAYER-CALIBRATED projection instead of the noisy "reuse the
+    /// final LN" lens. Loaded from a sidecar `.lenses` file via
+    /// `attachTunedLens`. Inference: forwardTunedLens returns per-
+    /// layer logits via these probes; training: tinygpt tuned-lens
+    /// freezes the base and SGDs the probes on a corpus.
+    @ModuleInfo(key: "tuned_lens") public var tunedLens: [Linear]?
+
     /// NEFTune (Jain et al., 2024) — scale of uniform noise added to the
     /// token-embedding output during forward. 0 (default) = off. SFT/DPO
     /// flips this to ~5 for the policy; the DPO reference stays at 0.
@@ -114,6 +123,52 @@ public final class TinyGPTModel: Module {
             for head in heads { out.append(head(h)) }
         }
         return out
+    }
+
+    /// Per-LAYER hidden states captured during forward. Used by tuned-
+    /// lens training to feed each layer's residual stream through its
+    /// own learned projection probe. Returns `[blocks.count]` of
+    /// `[B, T, C]` tensors — the post-block residual at each depth.
+    /// Includes the EMBEDDING output at index 0? No — we start from
+    /// the FIRST block's output (depth 1). Index k = output of block k.
+    public func forwardLayerwise(_ idx: MLXArray) -> [MLXArray] {
+        let T = idx.shape[1]
+        precondition(T <= config.contextLength,
+                     "sequence length \(T) exceeds context \(config.contextLength)")
+        let positions = MLXArray((0..<T).map { Int32($0) })
+        let posEmb = positionEmbedding(positions).expandedDimensions(axis: 0)
+        var x = tokenEmbedding(idx) + posEmb
+        var states: [MLXArray] = []
+        states.reserveCapacity(blocks.count)
+        for block in blocks {
+            x = block(x)
+            states.append(x)
+        }
+        return states
+    }
+
+    /// Tuned-lens forward: returns one logits `[B, T, vocab]` per
+    /// layer, computed via the trained per-layer probes. Caller must
+    /// have called `attachTunedLens(from:)` (or pre-populated
+    /// `tunedLens`) — fails with a clean error otherwise.
+    public func forwardTunedLens(_ idx: MLXArray) -> [MLXArray] {
+        guard let lenses = tunedLens else {
+            preconditionFailure("forwardTunedLens called without trained lenses — load via attachTunedLens(from:)")
+        }
+        precondition(lenses.count == blocks.count,
+                     "tuned-lens probe count (\(lenses.count)) ≠ layer count (\(blocks.count))")
+        let states = forwardLayerwise(idx)
+        return zip(states, lenses).map { (state, lens) in lens(state) }
+    }
+
+    /// Initialise the tuned-lens probes (one Linear per block). Used by
+    /// `tinygpt tuned-lens` BEFORE training. After training, persist via
+    /// `saveTunedLens` and re-attach next session via `attachTunedLens`.
+    public func initTunedLens() {
+        let probes = (0..<blocks.count).map { _ in
+            Linear(config.dModel, config.vocabSize, bias: true)
+        }
+        _tunedLens.wrappedValue = probes
     }
 
     /// Forward + cross-entropy loss. Targets are next-token ids, same shape as
