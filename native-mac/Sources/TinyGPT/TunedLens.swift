@@ -5,6 +5,20 @@ import MLXOptimizers
 import TinyGPTIO
 import TinyGPTModel
 
+/// Per-layer projection probes as a standalone Module. Decoupled from
+/// `TinyGPTModel` so `valueAndGrad(model: probes, …)` sees ONLY the
+/// probe params — the base model is closure-captured, its weights are
+/// treated as constants by autograd, no freeze gymnastics required.
+final class TunedLensProbes: Module {
+    @ModuleInfo(key: "probes") var probes: [Linear]
+    init(nLayers: Int, dModel: Int, vocab: Int) {
+        self._probes.wrappedValue = (0..<nLayers).map { _ in
+            Linear(dModel, vocab, bias: true)
+        }
+        super.init()
+    }
+}
+
 /// `tinygpt tuned-lens` — train per-layer projection probes that
 /// improve on the raw logit lens (Belrose et al., 2023, "Eliciting
 /// Latent Predictions from Transformers with the Tuned Lens").
@@ -72,15 +86,12 @@ enum TunedLens {
         do { corpus = try ByteCorpus(contentsOf: URL(fileURLWithPath: corpusPath)) }
         catch { fputs("corpus read failed: \(error)\n", stderr); exit(1) }
 
-        // Freeze the base model; init the probes.
-        model.freeze(recursive: true)
-        model.initTunedLens()
-        guard let probes = model.tunedLens else {
-            fputs("internal error: probes not initialised\n", stderr); exit(1)
-        }
-        // Unfreeze only the probes — gradient flows through them, base
-        // tensors stay frozen.
-        for p in probes { p.unfreeze(recursive: true) }
+        // Standalone probes Module — base is just closure-captured and
+        // autograd treats its weights as constants. Far cleaner than
+        // trying to freeze most of an already-built model.
+        let probesModule = TunedLensProbes(
+            nLayers: cfg.nLayers, dModel: cfg.dModel, vocab: cfg.vocabSize
+        )
 
         let B = batchSize ?? defaultBatch(cfg)
         let T = ctxOverride ?? cfg.contextLength
@@ -91,22 +102,27 @@ enum TunedLens {
         -------------------------------------
         model:           \(modelPath)  (\(cfg.nLayers)L · d=\(cfg.dModel))
         corpus:          \(corpusPath) (\(corpus.bytes.count) bytes)
-        probes:          \(probes.count)  (one Linear(\(cfg.dModel) → \(cfg.vocabSize)) per layer)
+        probes:          \(probesModule.probes.count)  (one Linear(\(cfg.dModel) → \(cfg.vocabSize)) per layer)
         steps / lr:      \(steps) / \(lr)
         batch / ctx:     \(B) / \(T)
         output:          \(outPath)
 
         """)
 
-        // Build the train step. The loss is the MEAN of per-layer CE —
-        // each probe pulls its OWN layer toward the next-token target.
-        // Probes don't share gradients, so each one specialises to its
-        // depth.
+        // Train step: autograd targets ONLY `probesModule`. Inside the
+        // loss, `model.forwardLayerwise(x)` runs the base — its weights
+        // appear as captured constants in the trace, so they don't get
+        // grads (and don't get updates). Each layer's hidden state goes
+        // through its OWN probe; per-layer CEs are summed then averaged.
         let opt = AdamW(learningRate: lr, weightDecay: 0)
-        let lossFn = { (m: TinyGPTModel, x: MLXArray, y: MLXArray) -> MLXArray in
-            let perLayer = m.forwardTunedLens(x)   // [layers] of [B, T, V]
+        let baseModel = model   // captured by reference, constants to autograd
+        let lossFn = { (p: TunedLensProbes, x: MLXArray, y: MLXArray) -> MLXArray in
+            let hiddens = baseModel.forwardLayerwise(x)
+            precondition(hiddens.count == p.probes.count,
+                         "lensProbes count must equal layer count")
             var total = MLXArray(Float(0))
-            for logits in perLayer {
+            for (h, probe) in zip(hiddens, p.probes) {
+                let logits = probe(h)
                 let v = logits.shape.last!
                 total = total + crossEntropy(
                     logits: logits.reshaped([-1, v]),
@@ -114,9 +130,9 @@ enum TunedLens {
                     reduction: .mean
                 )
             }
-            return total / MLXArray(Float(perLayer.count))
+            return total / MLXArray(Float(p.probes.count))
         }
-        let gradFn = valueAndGrad(model: model, lossFn)
+        let gradFn = valueAndGrad(model: probesModule, lossFn)
 
         TrainSupport.installSigintHandler()
         TrainSupport.stopRequested.reset()
@@ -127,9 +143,9 @@ enum TunedLens {
         for step in 0..<steps {
             if TrainSupport.stopRequested.isSet { stoppedEarly = true; break }
             let (x, y) = corpus.sampleBatch(batchSize: B, contextLength: T)
-            let (loss, grads) = gradFn(model, x, y)
-            opt.update(model: model, gradients: grads)
-            MLX.eval(loss, model, opt)
+            let (loss, grads) = gradFn(probesModule, x, y)
+            opt.update(model: probesModule, gradients: grads)
+            MLX.eval(loss, probesModule, opt)
             lastLoss = loss.item(Float.self)
             lastStep = step + 1
             if step == 0 || (step + 1) % 25 == 0 || step == steps - 1 {
@@ -147,7 +163,7 @@ enum TunedLens {
                       steps, elapsed, lastLoss))
 
         do {
-            try saveLensFile(probes: probes, vocabSize: cfg.vocabSize,
+            try saveLensFile(probes: probesModule.probes, vocabSize: cfg.vocabSize,
                               dModel: cfg.dModel, to: URL(fileURLWithPath: outPath))
             print("✓ wrote \(outPath)")
         } catch {
