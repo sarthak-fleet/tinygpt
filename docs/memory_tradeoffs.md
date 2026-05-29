@@ -233,8 +233,8 @@ trains the model on shorter windows — but they ship today.
 ## Cross-reference
 
 - `docs/precision.md` — the fp32 vs fp16 vs bf16 numerics study
-- `docs/training_phases.md` — how these levers compose into the full
-  pretrain → SFT → DPO pipeline
+- [`docs/training/`](training/index.md) — how these levers compose into the
+  full pretrain → SFT → DPO pipeline
 - `native-mac/ARCHITECTURE.md` — where in the code each lever lives
 - Mac CLI source for the levers:
   - bf16: `Sources/TinyGPT/Train.swift` (search "bf16 / fp16 training")

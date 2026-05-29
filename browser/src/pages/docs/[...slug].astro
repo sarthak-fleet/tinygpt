@@ -1,0 +1,120 @@
+---
+/**
+ * /docs/[...slug] — dynamic markdown renderer.
+ *
+ * Discovers every .md under src/content/docs/ via import.meta.glob and emits
+ * one static page per file. The slug mirrors the directory layout, so
+ *   src/content/docs/roadmap/tier1.md  →  /docs/roadmap/tier1
+ *   src/content/docs/lessons.md        →  /docs/lessons
+ *
+ * Styling mirrors the old hand-written wrappers — uses DocLayout for the
+ * prose shell, so this route is a drop-in replacement for the per-file
+ * wrappers that previously lived here.
+ *
+ * Source markdown is copied from the repo root docs/ into src/content/docs/
+ * by `scripts/copy_docs.mjs` as a pre-build step.
+ */
+import DocLayout from "../../layouts/DocLayout.astro";
+
+type FrontmatterShape = {
+  title?: string;
+  description?: string;
+};
+
+type MdModule = {
+  Content: any;
+  frontmatter?: FrontmatterShape;
+  rawContent?: () => string;
+  file?: string;
+};
+
+const allDocs = import.meta.glob<MdModule>("../../content/docs/**/*.md", {
+  eager: true,
+});
+
+export async function getStaticPaths() {
+  // Re-glob inside getStaticPaths to avoid module-eval-order surprises.
+  const docs = import.meta.glob<MdModule>("../../content/docs/**/*.md", {
+    eager: true,
+  });
+
+  return Object.keys(docs).map((path) => {
+    const slug = path
+      .replace(/^.*\/content\/docs\//, "")
+      .replace(/\.md$/, "")
+      // index files become their containing directory (e.g. roadmap/index → roadmap)
+      .replace(/\/index$/, "");
+    return { params: { slug } };
+  });
+}
+
+const { slug } = Astro.params as { slug: string };
+
+// Find the matching module. Try the slug as-is first, then with /index.
+const tryPaths = [
+  `../../content/docs/${slug}.md`,
+  `../../content/docs/${slug}/index.md`,
+];
+
+let mod: MdModule | undefined;
+let sourcePath = "";
+for (const tp of tryPaths) {
+  if (allDocs[tp]) {
+    mod = allDocs[tp];
+    sourcePath = tp.replace(/^.*\/content\/docs\//, "docs/");
+    break;
+  }
+}
+
+if (!mod) {
+  // Shouldn't happen because getStaticPaths enumerates the same set, but
+  // keep a friendly error in dev if something drifts.
+  throw new Error(`No markdown found for slug "${slug}"`);
+}
+
+const { Content, frontmatter } = mod;
+
+// Derive a title — prefer frontmatter, else humanize the last path segment.
+const ACRONYMS: Record<string, string> = {
+  dpo: "DPO",
+  sft: "SFT",
+  mtp: "MTP",
+  moe: "MoE",
+  fa2: "FA2",
+  lora: "LoRA",
+  qa: "Q&A",
+  qlora: "QLoRA",
+  hqq: "HQQ",
+  awq: "AWQ",
+  gptq: "GPTQ",
+  yoco: "YOCO",
+  alibi: "ALiBi",
+  rope: "RoPE",
+  bpe: "BPE",
+  hf: "HF",
+  webgpu: "WebGPU",
+  wasm: "WASM",
+  wgsl: "WGSL",
+};
+
+function humanize(s: string): string {
+  return s
+    .split("/")
+    .pop()!
+    .replace(/[_-]+/g, " ")
+    // Split "tier1" → "tier 1", "phase9" → "phase 9".
+    .replace(/([a-zA-Z])(\d)/g, "$1 $2")
+    .split(" ")
+    .map((w) => ACRONYMS[w.toLowerCase()] ?? w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+const title = frontmatter?.title ?? humanize(slug);
+const description =
+  frontmatter?.description ??
+  `TinyGPT docs — ${title}. Rendered from the repo's docs/ markdown.`;
+---
+
+<DocLayout title={title} description={description} sourcePath={sourcePath}>
+  <Content />
+</DocLayout>

@@ -269,25 +269,26 @@ builds and tests them with a normal compiler. Full deploy notes:
 ## Docs
 
 - [`docs/status.md`](docs/status.md) — where the project stands; a review map
+- [`docs/MAP.md`](docs/MAP.md) — where things moved in the recent doc reorganization
 - [`docs/learn.md`](docs/learn.md) — guided learning path through the repo
 - [`docs/performance.md`](docs/performance.md) — the SIMD and WebGPU performance work
 - [`docs/lessons.md`](docs/lessons.md) — the bugs and surprises worth more than the kernels
 - [`docs/model_guide.md`](docs/model_guide.md) — the model, from scratch
 - [`docs/lora_guide.md`](docs/lora_guide.md) — LoRA fine-tuning
-- [`docs/training_phases.md`](docs/training_phases.md) — the three-phase pipeline: pretrain → SFT → DPO, with reproducible commands
+- [`docs/training/`](docs/training/index.md) — the three-phase pipeline: pretrain → SFT → DPO, with reproducible commands
 - [`docs/distillation.md`](docs/distillation.md) — knowledge distillation: making a tiny model punch above its weight
 - [`docs/moe.md`](docs/moe.md) — Mixture-of-Experts: more capacity per byte of weight
 - [`docs/mtp.md`](docs/mtp.md) — Multi-Token Prediction: denser training signal per step
 - [`docs/evolution_strategies.md`](docs/evolution_strategies.md) — gradient-free trainer (`tinygpt es`)
 - [`docs/interpretability.md`](docs/interpretability.md) — attention heatmap + logit lens in the playground
-- [`docs/phase_9_10_status.md`](docs/phase_9_10_status.md) — Phase 9 (quant) + Phase 10 (architecture menu): what shipped, what's queued, and the design for each remaining item
+- [`docs/roadmap/blockers.md`](docs/roadmap/blockers.md) — what we can't build right now (with the Phase 9 quant + Phase 10 architecture-menu status appendix)
 - [`docs/validation_report.md`](docs/validation_report.md) — end-to-end workflows that exercise the Phase 1-10 surfaces
 - [`docs/memory_tradeoffs.md`](docs/memory_tradeoffs.md) — bf16, gradient accumulation, gradient checkpointing — what fits in 48 GB and why
 - [`docs/leaderboard.md`](docs/leaderboard.md) — benchmark framework + how to add a benchmark + how to submit a model
-- [`docs/single_machine_roadmap.md`](docs/single_machine_roadmap.md) — every technique that runs on one Mac, ROI-ranked, with explainers
+- [`docs/roadmap/`](docs/roadmap/index.md) — every technique that runs on one Mac, ROI-ranked, with explainers (split into tiered files)
 - [`HANDOFF.md`](HANDOFF.md) — current session handoff: what's running, what's queued, where to start
 - [`docs/online_softmax_in_attention.md`](docs/online_softmax_in_attention.md) — why and how, ties to the `attn_fused_sv` kernel
-- [`docs/shared_vs_native.md`](docs/shared_vs_native.md) — browser vs. native boundary
+- [`docs/archive/shared_vs_native.md`](docs/archive/shared_vs_native.md) — browser vs. native boundary (archived)
 - [`docs/CITATIONS.md`](docs/CITATIONS.md) — every architectural choice traced to a primary source
 - [`docs/feature_ideas.md`](docs/feature_ideas.md) — the future-ideas backlog
 - [`native-mac/ARCHITECTURE.md`](native-mac/ARCHITECTURE.md) — top-down tour of the Mac codebase

@@ -29,6 +29,21 @@ export default defineConfig({
   // links/social cards keep resolving.
   build: { format: "file" },
 
+  // Redirect docs that moved to docs/archive/ so the original URLs keep
+  // working. Same for the doc that was split into a sub-folder.
+  // These are static 301-style redirects emitted as small HTML pages by
+  // the SSG build.
+  redirects: {
+    "/docs/annotated_transcript": "/docs/archive/annotated_transcript",
+    "/docs/parked_multi_model": "/docs/archive/parked_multi_model",
+    "/docs/shared_vs_native": "/docs/archive/shared_vs_native",
+    "/docs/evaluation": "/docs/validation_report",
+    "/docs/watch_the_model_think": "/docs/interpretability",
+    "/docs/phase_9_10_status": "/docs/roadmap/blockers",
+    "/docs/single_machine_roadmap": "/docs/roadmap",
+    "/docs/training_phases": "/docs/training",
+  },
+
   integrations: [mdx()],
 
   server: {

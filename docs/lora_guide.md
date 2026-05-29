@@ -211,7 +211,7 @@ Result: **one base model, many small adapters** — the right architecture.
 
 LoRA teaches style; retrieval supplies facts. Always compare base / few-shot /
 LoRA / LoRA+retrieval, and always run the memorization test. Full detail in
-`evaluation.md`.
+[`validation_report.md`](validation_report.md) (evaluation-and-safety appendix).
 
 ---
 

@@ -67,6 +67,6 @@ Everything that can be checked by a machine, is — that was the method througho
 - [`performance.md`](performance.md) — the SIMD and WebGPU performance work
 - [`lessons.md`](lessons.md) — the bugs and surprises worth more than the kernels
 - [`model_guide.md`](model_guide.md), [`lora_guide.md`](lora_guide.md),
-  [`browser_notes.md`](browser_notes.md), [`evaluation.md`](evaluation.md) —
-  per-phase detail
+  [`browser_notes.md`](browser_notes.md),
+  [`validation_report.md`](validation_report.md) — per-phase detail
 - [`feature_ideas.md`](feature_ideas.md) — interactive-learning backlog

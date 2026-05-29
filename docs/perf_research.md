@@ -73,17 +73,16 @@ needed — the conversion script will Just Work.
 
 We didn't actually verify fp16 training speedups tonight — the
 preliminary numbers were ambiguous because the `mx.fast` ops
-already auto-cast for some kernels. bf16 has the same range as
-fp32 with half the bytes; less risky than fp16 for accumulator
-overflow.
+already auto-cast for some kernels. Mechanics of bf16 (range, mantissa,
+why not fp16, what breaks at long horizons) live in
+[`docs/memory_tradeoffs.md`](memory_tradeoffs.md); from a perf lens, bf16
+buys 1.5-2× training throughput on Mega/Behemoth and negligible
+on Huge (already memory-bound to MLX-Fast).
 
 **Engineering:** 1-2 days. Set `Device.setDefault(.gpu(precision: .bfloat16))`
 once MLX-Swift exposes it; otherwise cast model parameters
 explicitly. Add the numerics gate from the browser-side
 perf_quest framework.
-
-**Realistic gain:** 1.5-2× training throughput on Mega/Behemoth;
-negligible on Huge (already memory-bound to MLX-Fast).
 
 ### 5. Flash Attention 3 — **diminishing returns**
 
@@ -100,13 +99,11 @@ Probably wait. Don't chase this lever.
 Train a Tiny / Small student to mimic the Huge teacher's logits on
 the same corpus. End up with a 1M-param model that samples at
 ~1000 tok/s and produces nearly-as-good text for a narrow domain.
+Mechanics + KL loss derivation in [`docs/distillation.md`](distillation.md).
 
-**Engineering:** 1 week. Knowledge distillation loss
-(KL between student & teacher distributions), train student on
-teacher-labeled batches. Standard procedure.
-
-**Use case:** Real-time on-device sampling, where you don't need
-the full Huge model's quality but want millisecond response.
+**Engineering:** 1 week. **Use case:** Real-time on-device sampling,
+where you don't need the full Huge model's quality but want millisecond
+response.
 
 ### 7. Sliding-window attention — **enables ctx > 1024**
 

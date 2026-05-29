@@ -19,6 +19,10 @@ Do: implement softmax and cross entropy from scratch; train logistic regression
 or a tiny MLP.
 Ready when: you can explain forward pass, loss, backward pass, and optimizer step
 without handwaving.
+External sources:
+- [3Blue1Brown — Essence of Linear Algebra](https://www.3blue1brown.com/topics/linear-algebra) (chs 1-4: vectors, matmul)
+- [3Blue1Brown — Backpropagation](https://www.3blue1brown.com/lessons/backpropagation)
+- [Karpathy — Spelled-out intro to neural networks and backpropagation](https://www.youtube.com/watch?v=VMj-3S1tku0) (builds a tiny autograd by hand)
 Concepts: `ml-math`, `ml-gradient-descent`, `ml-backprop`, `ml-softmax-xent`, `ml-adamw`
 
 ### Phase 2 — Language modeling basics
@@ -27,6 +31,10 @@ Learn: tokenization, byte/char-level tokens, context windows, causal masking,
 sampling, temperature, top-k, perplexity.
 Do: build a bigram model and a char-level MLP; generate text; measure train/val loss.
 Key idea: a language model is not "answering" — it is predicting the next token.
+External sources:
+- [3Blue1Brown — But what is a GPT?](https://www.3blue1brown.com/lessons/gpt) (25 min big-picture)
+- [Karpathy — makemore series](https://github.com/karpathy/makemore) (bigram → char-level MLP → transformer, notebook-by-notebook)
+- GPT-1/2/3 papers: [Radford et al. 2018](https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf), [Radford et al. 2019](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf), [Brown et al. 2020](https://arxiv.org/abs/2005.14165)
 Concepts: `ml-tokenization`, `ml-language-modeling`, `ml-sampling`
 
 ### Phase 3 — Transformer / GPT internals
@@ -35,6 +43,13 @@ Learn: embeddings, position embeddings, self-attention, causal attention,
 multi-head attention, layernorm, residuals, MLP blocks, GELU, logits.
 Do: build one transformer block, then a full TinyGPT; train 0.8M on a small
 corpus; overfit 10 KB; generate samples.
+External sources:
+- [Attention is All You Need — Vaswani et al. 2017](https://arxiv.org/abs/1706.03762) (the original transformer)
+- [The Annotated Transformer (Harvard NLP)](http://nlp.seas.harvard.edu/annotated-transformer/) (Vaswani paper, code-annotated)
+- [Jay Alammar — The Illustrated Transformer](https://jalammar.github.io/illustrated-transformer/) (the visual canon)
+- [Karpathy — Let's build GPT, from scratch](https://www.youtube.com/watch?v=kCc8FmEb1nY)
+- [RoPE — Su et al. 2021](https://arxiv.org/abs/2104.09864) (rotary position embeddings — what modern models use instead of learned positions)
+- Implemented at: `python_ref/model.py`, `wasm/src/attention.cpp`, `webgpu/attention_fa2.wgsl`.
 Concepts: `ml-embeddings`, `ml-self-attention`, `ml-multi-head`, `ml-transformer-block`
 
 ### Phase 4 — Training & debugging
@@ -54,6 +69,11 @@ Learn: full fine-tuning, frozen base models, adapters, LoRA, rank, alpha, target
 modules, adapter checkpoints, memorization, style-transfer limits.
 Do: build a `LoRALinear`; inject into `q_proj`/`v_proj`; freeze base; train
 adapter only; save/load adapter; compare base vs LoRA outputs.
+External sources:
+- [LoRA — Hu et al. 2021](https://arxiv.org/abs/2106.09685) (the original)
+- [QLoRA — Dettmers et al. 2023](https://arxiv.org/abs/2305.14314) (int4 base + fp16 LoRA)
+- [DoRA — Liu et al. 2024](https://arxiv.org/abs/2402.09353) (magnitude + direction decomposition)
+- Implemented at: `python_ref/lora.py`; mechanics + maths in [`lora_guide.md`](lora_guide.md).
 Concepts: `ml-lora`
 
 ### Phase 6 — Data engineering for style adaptation
@@ -69,6 +89,12 @@ Learn: TypedArray, ArrayBuffer, Web Workers, transferable objects, WASM,
 Emscripten, WASM SIMD, OPFS, IndexedDB, storage quota, feature detection.
 Do: a browser app that trains a tiny model in a Worker; UI stays responsive;
 checkpoint survives reload.
+External sources:
+- [MDN — WebAssembly concepts](https://developer.mozilla.org/en-US/docs/WebAssembly/Concepts)
+- [MDN — Using Web Workers](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers)
+- [MDN — OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
+- [emscripten.org](https://emscripten.org/) (pthreads + SAB build flags)
+- Implemented at: `browser/src/worker.ts`, `wasm/src/`, [`browser_notes.md`](browser_notes.md).
 Concepts: `ml-browser-runtime`
 
 ### Phase 8 — WebGPU
@@ -77,6 +103,12 @@ Learn: WGSL, GPU buffers, bind groups, compute pipelines, command encoders,
 workgroups, matmul/softmax/attention kernels, device limits, buffer sharding.
 Do: WebGPU matmul → CPU parity → linear forward → linear backward → attention
 scores → softmax → attention output → optimizer. Start with matmul only.
+External sources:
+- [WebGPU Fundamentals](https://webgpufundamentals.org/) (compute articles)
+- [WebGPU spec (W3C)](https://www.w3.org/TR/webgpu/)
+- [WGSL spec](https://www.w3.org/TR/WGSL/)
+- [FlashAttention — Dao et al. 2022](https://arxiv.org/abs/2205.14135) and [FlashAttention-2 — Dao 2023](https://arxiv.org/abs/2307.08691) (the online-softmax + recomputation trick we use in WGSL)
+- Implemented at: `webgpu/matmul_blocked.wgsl`, `webgpu/attention_fa2.wgsl`; perf walk-through in [`perf_quest.md`](perf_quest.md).
 Concepts: `ml-webgpu`
 
 ### Phase 9 — Evaluation & safety
@@ -84,7 +116,7 @@ Goal: know what the model is actually doing.
 Learn: validation loss, held-out prompts, qualitative evaluation, memorization
 testing, style similarity, hallucination, copying risk, data leakage.
 Do: a suite producing base / prompt-only / LoRA / LoRA+retrieval outputs.
-See `evaluation.md`.
+See [`validation_report.md`](validation_report.md) (evaluation-and-safety appendix).
 Concepts: `ml-evaluation`
 
 ---

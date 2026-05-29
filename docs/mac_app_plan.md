@@ -5,7 +5,7 @@ architecture, same `.tinygpt` file format, ~20-30× the training throughput.
 This doc translates roadmap lever 20 into a concrete week-by-week build
 plan you can act on.
 
-Boundary is already drawn in `docs/shared_vs_native.md` — read that first.
+Boundary is already drawn in [`docs/archive/shared_vs_native.md`](archive/shared_vs_native.md) — read that first.
 This doc picks up where it leaves off: what to actually build, in what
 order, and what each milestone proves.
 

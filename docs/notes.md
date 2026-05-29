@@ -349,7 +349,7 @@ loss curve smoothly rather than kink.
 ## 9. Evaluation — comparing honestly
 
 `python_ref/evaluate.py` produces, for every held-out prompt, the four
-conditions `docs/evaluation.md` requires:
+conditions `docs/validation_report.md` requires (evaluation-and-safety appendix):
 
 | Condition | What it isolates |
 | --- | --- |
