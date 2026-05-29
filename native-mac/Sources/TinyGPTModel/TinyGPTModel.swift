@@ -105,8 +105,35 @@ public final class TinyGPTModel: Module {
             tokEmb = tokEmb + noise
         }
         var x = tokEmb + posEmb
-        for block in blocks {
-            x = block(x)
+        if config.useYOCO {
+            // YOCO orchestration: first half runs standard self-attn;
+            // the LAST first-half layer captures (K, V) as an "anchor";
+            // second-half layers do cross-attention onto that anchor
+            // instead of computing their own K, V. Halves the KV cache
+            // memory at long-context decode.
+            let anchorIdx = max(0, (blocks.count / 2) - 1)
+            var yocoK: MLXArray? = nil
+            var yocoV: MLXArray? = nil
+            for (i, block) in blocks.enumerated() {
+                if i < anchorIdx {
+                    x = block(x)
+                } else if i == anchorIdx {
+                    let result = block.callCapturingKV(x)
+                    x = result.out; yocoK = result.k; yocoV = result.v
+                } else {
+                    // anchor MUST be set by now — preconditionFailure if
+                    // not (means we entered an "after anchor" iteration
+                    // without ever capturing).
+                    guard let k = yocoK, let v = yocoV else {
+                        preconditionFailure("YOCO anchor missing at layer \(i)")
+                    }
+                    x = block.callWithExternalKV(x, k: k, v: v)
+                }
+            }
+        } else {
+            for block in blocks {
+                x = block(x)
+            }
         }
         return lnFinal(x)
     }

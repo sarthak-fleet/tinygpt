@@ -144,32 +144,69 @@ public final class CausalSelfAttention: Module {
                               base: ropeBase, scale: 1.0, offset: 0)
         }
 
-        // Fused fast attention with built-in causal masking. MLX-Fast's
-        // SDPA natively supports unequal Q vs KV head counts — when
-        // nKvHeads < nHeads, the kernel broadcasts each KV head across
-        // nHeads/nKvHeads Q heads internally (zero-copy).
-        //
-        // Mask selection (priority): ALiBi > sliding window > plain causal.
-        // ALiBi already encodes causality via the future = -∞ band, so
-        // we don't combine it with the .causal flag.
-        let out: MLXArray
+        let out = computeSDPA(q: q, k: k, v: v, T: T)
+        let merged = out.transposed(0, 2, 1, 3).reshaped([B, T, nHeads * headDim])
+        return oProj(merged)
+    }
+
+    /// YOCO anchor variant — standard self-attention, ALSO returns
+    /// the layer's K and V so downstream cross-attention layers can
+    /// reuse them without recomputing. Same math as `callAsFunction`;
+    /// just makes the intermediates public.
+    public func forwardCapturingKV(_ x: MLXArray) -> (out: MLXArray, k: MLXArray, v: MLXArray) {
+        let B = x.shape[0]
+        let T = x.shape[1]
+        var q = qProj(x).reshaped([B, T, nHeads, headDim]).transposed(0, 2, 1, 3)
+        var k = kProj(x).reshaped([B, T, nKvHeads, headDim]).transposed(0, 2, 1, 3)
+        let v = vProj(x).reshaped([B, T, nKvHeads, headDim]).transposed(0, 2, 1, 3)
+        if useRoPE {
+            q = MLXFast.RoPE(q, dimensions: headDim, traditional: false,
+                              base: ropeBase, scale: 1.0, offset: 0)
+            k = MLXFast.RoPE(k, dimensions: headDim, traditional: false,
+                              base: ropeBase, scale: 1.0, offset: 0)
+        }
+        let out = computeSDPA(q: q, k: k, v: v, T: T)
+        let merged = out.transposed(0, 2, 1, 3).reshaped([B, T, nHeads * headDim])
+        return (oProj(merged), k, v)
+    }
+
+    /// YOCO cross-attention variant — Q from current x, (K, V) supplied
+    /// externally (the anchor's saved tensors). kProj / vProj are NOT
+    /// called: that's the KV-cache memory saving. Q gets the same
+    /// RoPE rotation as the anchor's K had — preserving relative
+    /// position information.
+    public func forwardWithExternalKV(_ x: MLXArray, k: MLXArray, v: MLXArray) -> MLXArray {
+        let B = x.shape[0]
+        let T = x.shape[1]
+        var q = qProj(x).reshaped([B, T, nHeads, headDim]).transposed(0, 2, 1, 3)
+        if useRoPE {
+            q = MLXFast.RoPE(q, dimensions: headDim, traditional: false,
+                              base: ropeBase, scale: 1.0, offset: 0)
+        }
+        let out = computeSDPA(q: q, k: k, v: v, T: T)
+        let merged = out.transposed(0, 2, 1, 3).reshaped([B, T, nHeads * headDim])
+        return oProj(merged)
+    }
+
+    /// Shared SDPA dispatch — ALiBi → sliding window → plain causal in
+    /// priority order. Factored out so the three callers (standard
+    /// forward, YOCO anchor, YOCO cross-attn) stay short.
+    private func computeSDPA(q: MLXArray, k: MLXArray, v: MLXArray, T: Int) -> MLXArray {
         if useALiBi {
             let mask = aliBiMask(Tq: T, Tkv: T, dtype: q.dtype)
-            out = MLXFast.scaledDotProductAttention(
+            return MLXFast.scaledDotProductAttention(
                 queries: q, keys: k, values: v, scale: scale, mask: .array(mask)
             )
         } else if let window = slidingWindow {
             let mask = slidingMask(Tq: T, Tkv: T, window: window, dtype: q.dtype)
-            out = MLXFast.scaledDotProductAttention(
+            return MLXFast.scaledDotProductAttention(
                 queries: q, keys: k, values: v, scale: scale, mask: .array(mask)
             )
         } else {
-            out = MLXFast.scaledDotProductAttention(
+            return MLXFast.scaledDotProductAttention(
                 queries: q, keys: k, values: v, scale: scale, mask: .causal
             )
         }
-        let merged = out.transposed(0, 2, 1, 3).reshaped([B, T, nHeads * headDim])
-        return oProj(merged)
     }
 }
 
@@ -290,12 +327,38 @@ public final class TransformerBlock: Module {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
+        return blockAfterAttn(x: x, attnOut: attentionFor(x: x))
+    }
+
+    /// Standard attention path — picks differential variant when
+    /// configured, else the regular self-attention.
+    private func attentionFor(x: MLXArray) -> MLXArray {
+        (diffAttn != nil) ? diffAttn!(ln1(x)) : attn(ln1(x))
+    }
+
+    /// YOCO anchor variant: returns (block output, K, V) so the
+    /// downstream cross-attention layers can reuse the K, V without
+    /// recomputing them. Differential attention has no K, V to capture
+    /// — anchoring at a diff-attn layer falls back to standard
+    /// self-attention for that layer.
+    public func callCapturingKV(_ x: MLXArray) -> (out: MLXArray, k: MLXArray, v: MLXArray) {
+        let (attnOut, k, v) = attn.forwardCapturingKV(ln1(x))
+        let y = blockAfterAttn(x: x, attnOut: attnOut)
+        return (y, k, v)
+    }
+
+    /// YOCO cross-attention variant: Q is fresh from current x; K, V
+    /// come from the anchor. kProj / vProj are NOT invoked — that's
+    /// the KV-cache memory saving downstream.
+    public func callWithExternalKV(_ x: MLXArray, k: MLXArray, v: MLXArray) -> MLXArray {
+        let attnOut = attn.forwardWithExternalKV(ln1(x), k: k, v: v)
+        return blockAfterAttn(x: x, attnOut: attnOut)
+    }
+
+    /// Shared post-attention path (MLP / MoE / MoD gate) for the three
+    /// flavours of attention — standard, anchor-capturing, cross-attn.
+    private func blockAfterAttn(x: MLXArray, attnOut: MLXArray) -> MLXArray {
         let blockIn = x
-        // Pick the attention variant — differential when configured,
-        // standard otherwise. The standard attn module is always
-        // constructed (so it shows up in the manifest); we just don't
-        // call it when diffAttn is active.
-        let attnOut = (diffAttn != nil) ? diffAttn!(ln1(blockIn)) : attn(ln1(blockIn))
         var y = blockIn + attnOut
         if let moe = moe {
             y = y + moe(ln2(y))

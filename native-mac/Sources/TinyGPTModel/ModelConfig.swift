@@ -105,6 +105,16 @@ public struct ModelConfig: Sendable, Equatable {
     /// standard attention path.
     public var useDifferentialAttention: Bool
 
+    /// YOCO — "You Only Cache Once" (Lin et al., 2024). The model is
+    /// split in two halves: first half runs standard self-attention,
+    /// the LAST first-half layer's K, V are captured as an "anchor",
+    /// and every second-half layer skips its own K, V computation —
+    /// instead doing cross-attention onto the anchor's K, V. Roughly
+    /// halves the KV cache at long-context decode. kProj/vProj
+    /// weights ARE still allocated in second-half layers (kept for
+    /// manifest-compatibility) but go unused at forward time.
+    public var useYOCO: Bool
+
     public var headDim: Int { dModel / nHeads }
 
     public var mlxDType: DType {
@@ -140,7 +150,8 @@ public struct ModelConfig: Sendable, Equatable {
         slidingWindow: Int? = nil,
         useALiBi: Bool = false,
         useMoD: Bool = false,
-        useDifferentialAttention: Bool = false
+        useDifferentialAttention: Bool = false,
+        useYOCO: Bool = false
     ) {
         self.tokenizerSource = tokenizerSource
         self.nExperts = max(1, nExperts)
@@ -151,6 +162,7 @@ public struct ModelConfig: Sendable, Equatable {
         self.useALiBi = useALiBi
         self.useMoD = useMoD
         self.useDifferentialAttention = useDifferentialAttention
+        self.useYOCO = useYOCO
         self.modelName = modelName
         self.vocabSize = vocabSize
         self.contextLength = contextLength

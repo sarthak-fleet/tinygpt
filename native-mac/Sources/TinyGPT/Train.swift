@@ -73,6 +73,9 @@ enum Train {
         // projections per block + adds a learnable λ — used for less-
         // noisy attention. Mutually exclusive with the standard path.
         var useDiffAttn: Bool = false
+        // YOCO (Lin et al., 2024). Second half cross-attends to the
+        // anchor; halves KV cache memory at long-context decode.
+        var useYOCO: Bool = false
 
         var i = 0
         while i < args.count {
@@ -104,6 +107,7 @@ enum Train {
             case "--alibi":          useALiBi = true; i += 1
             case "--mod":            useMoD = true; i += 1
             case "--diff-attn":      useDiffAttn = true; i += 1
+            case "--yoco":           useYOCO = true; i += 1
             case "-h", "--help":  exitUsage()
             default:
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -142,7 +146,8 @@ enum Train {
                 loadBalanceWeight: h.loadBalanceWeight ?? 0.01,
                 slidingWindow: h.slidingWindow,
                 useMoD: h.useMoD ?? false,
-                useDifferentialAttention: h.useDifferentialAttention ?? false
+                useDifferentialAttention: h.useDifferentialAttention ?? false,
+                useYOCO: h.useYOCO ?? false
             )
             cfg.dtype = dtype
             model = TinyGPTModel(cfg)
@@ -199,6 +204,10 @@ enum Train {
             // entries per layer (the existing attn entries also stay
             // — see TransformerBlock for the rationale).
             cfg.useDifferentialAttention = useDiffAttn
+            // YOCO: half the layers reuse the first half's K, V via
+            // cross-attention. Manifest stays identical to the standard
+            // dense path; the change is purely in forward orchestration.
+            cfg.useYOCO = useYOCO
             model = TinyGPTModel(cfg)
         }
         // MoE checkpoints now serialise — the manifest gains router +

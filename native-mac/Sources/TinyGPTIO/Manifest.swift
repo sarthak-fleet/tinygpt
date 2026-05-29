@@ -48,6 +48,12 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
         /// with 2× Q/K projections + λ scalar.
         public var useDifferentialAttention: Bool?
 
+        /// YOCO flag (Lin et al., 2024). `nil` / false = full self-
+        /// attention at every layer. When set, the model splits in
+        /// half and second-half layers cross-attend to the first
+        /// half's anchor K, V.
+        public var useYOCO: Bool?
+
         public init(
             layers: Int? = nil,
             dModel: Int? = nil,
@@ -63,7 +69,8 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
             loadBalanceWeight: Float? = nil,
             slidingWindow: Int? = nil,
             useMoD: Bool? = nil,
-            useDifferentialAttention: Bool? = nil
+            useDifferentialAttention: Bool? = nil,
+            useYOCO: Bool? = nil
         ) {
             self.layers = layers
             self.dModel = dModel
@@ -80,6 +87,7 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
             self.slidingWindow = slidingWindow
             self.useMoD = useMoD
             self.useDifferentialAttention = useDifferentialAttention
+            self.useYOCO = useYOCO
         }
     }
 
