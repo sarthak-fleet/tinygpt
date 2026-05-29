@@ -12,9 +12,9 @@ items not yet shipped, what's needed to land them.
 |---|---|---|
 | DoRA | ✅ shipped | `--dora` flag on sft + dpo. Adapter file format extension is queued. |
 | LASER selective rank reduction | ✅ shipped | `tinygpt laser` command. File-level SVD truncation. |
-| QLoRA (int4 base + LoRA) | 📋 designed | See below. Blocker: MLX's quantized arrays don't yet fwd-prop gradients through to the underlying float matrices. |
-| AWQ safetensors reader | 📋 designed | Adds a `--awq-quantized` path to `HFModelLoader`. Mechanical work. |
-| HQQ (half-quadratic quantization) | 📋 designed | Implementing the convex-opt step in Swift is feasible; the inference-time win needs a Metal kernel that consumes the HQQ format. |
+| HQQ (half-quadratic quantization) | ✅ shipped — storage-only | `tinygpt hqq` command. IRLS solver with sub-quadratic loss runs in Swift; writes a model whose weights have been quantize-then-dequantised. Inference-time memory win still needs a packed-int4 matmul kernel. |
+| AWQ safetensors reader | ✅ shipped | `AWQReader.swift`. Detects qweight/scales/qzeros triples in HF safetensors, unpacks the GEMM-pack int4 layout into dense fp32 weights the existing HFModelLoader consumes. |
+| QLoRA (int4 base + LoRA) | 📋 designed | Blocker: MLX-Swift's quantized arrays don't yet fwd-prop gradients through to the underlying float matrices — see "QLoRA" section below. |
 
 ### QLoRA — what's needed
 
@@ -83,12 +83,13 @@ dispatch. The quantization step itself is Swift-side and feasible.
 |---|---|---|
 | Sliding window attention | ✅ shipped | `--sliding-window N` flag, persisted in header. |
 | ALiBi position bias | ✅ shipped | `--alibi` flag, per-head geometric slopes. |
-| Differential attention | 📋 designed | Two SDPAs subtracted; needs 4 attention projections per head. |
-| YOCO cross-layer KV sharing | 📋 designed | First half of layers compute KV; second half cross-attends. Halves the KV cache. |
-| Mixture of Depths | 📋 designed | Per-token, per-layer router skips uninformative layers. |
+| Differential attention | ✅ shipped | `--diff-attn` flag. `DifferentialAttention.swift` with 2× Q/K projections, learnable λ. Wired via Optional sibling on TransformerBlock (same pattern as MoE). |
+| Mixture of Depths | ✅ shipped — soft routing | `--mod` flag. Per-token sigmoid gate on each block's residual contribution. Soft routing (no STE) means it's trainable end-to-end. Hard top-K + scatter still blocked on `scatter_add`. |
+| YOCO cross-layer KV sharing | 📋 designed | Needs CausalSelfAttention to accept externally-cached K/V — bigger API change than other items. Mechanism in detail below. |
 
-### Differential attention (Ye et al., 2024)
+### Differential attention (Ye et al., 2024)  *(shipped)*
 
+`DifferentialAttention.swift` + `--diff-attn` flag on `tinygpt train`.
 Each attention head computes TWO independent softmax attention maps
 and subtracts them, weighted by a learnable scalar λ:
 
@@ -97,51 +98,66 @@ A = softmax(Q1 K1ᵀ / √d) − λ · softmax(Q2 K2ᵀ / √d)
 out = A · V
 ```
 
-The subtraction cancels attention "noise" across the two heads,
-typically improving long-context reasoning and reducing hallucinations.
+Wired via an Optional sibling on TransformerBlock — when
+`cfg.useDifferentialAttention` is set, `diffAttn` is constructed
+alongside the standard `attn` and the forward routes through it.
+The standard `attn` stays constructed (small constant overhead) in
+exchange for keeping every existing LoRA / KVCache / Debug call site
+that touches `block.attn.qProj` etc. unchanged.
 
-**Shipping cost**:
-- Per-block: 4 attention projections instead of 2 (Q1, K1, Q2, K2, V, O).
-- Per-head: 2× λ scalars (`λ_q`, `λ_k`) with the paper's reparam
-  `λ = λ_init − exp(λ_q · λ_k)`.
-- Manifest entries doubled for attention.
-- Per-step compute roughly 1.5× the standard attention path.
+Simplifications from the paper:
+- λ is a SINGLE learnable scalar, not the per-head re-parameterised
+  `λ_init − exp(λ_q · λ_k)`.
+- λ_init defaults to 0.5 (paper uses depth-dependent init).
+Both are precision improvements — bounded follow-up.
 
-The wire-up is bounded — biggest churn is the manifest expansion
-across the .tinygpt format. Single-file change to TransformerBlock +
-manifest entries + checkpoint loaders.
-
-### YOCO — "You Only Cache Once"
+### YOCO — "You Only Cache Once"  *(still designed)*
 
 Lin et al., 2024. The model is split in two halves. The first half
 computes K, V normally. The second half does CROSS-ATTENTION onto the
 last K, V produced by the first half — no new K, V are computed for
 those layers. KV cache memory drops by ~2× at long context.
 
-**Shipping cost**:
-- A new block type for the "cross-attention" layers (no K, V proj, no
-  KV save).
-- Caching glue between the two halves at decode time.
-- Manifest schema change to encode "this layer uses YOCO cross-attn".
+**Why it didn't ship in this round**: CausalSelfAttention's forward
+treats Q, K, V as locally-computed. Adding cross-attention requires
+either:
 
-Single-file changes; estimated ~150-200 lines including tests.
+1. A second "CrossAttention" module with the same call surface but
+   K, V come from a caller-supplied source. Then half the blocks
+   construct CausalSelfAttention, half construct CrossAttention.
+   The model's forward captures the last K, V of the first half and
+   plumbs them through. ~150 lines.
+2. Refactoring CausalSelfAttention itself to optionally take
+   external K, V tensors. Less new code but more invasive (every
+   existing call site has to ignore the new optional). ~100 lines.
 
-### Mixture of Depths (Raposo et al., 2024)
+Either works; both need a careful pass on the KV-cached sampling
+path (`KVCache.swift`, `KVCacheHF.swift`) where the cross-attention
+layers DON'T grow their own cache. The other Phase 10 items shipped
+without touching CausalSelfAttention's call surface; YOCO is the
+exception. Sized as "next focused session" rather than "drop-in to
+this batch".
 
-A small router per layer decides which top-K tokens get processed
-through that layer; the rest skip via residual. Compute scales to
-fewer tokens per layer at the same expressivity.
+### Mixture of Depths (Raposo et al., 2024)  *(shipped — soft routing)*
 
-**Shipping cost**:
-- Per layer: a 1-output Linear router.
-- Per-step: a topK-by-router-prob to pick the active subset.
-- Same scatter/gather pattern as sparse MoE — **blocked on the same
-  MLX-Swift `scatter_add` gap** documented in `docs/moe.md`. A dense-
-  with-masking implementation works (multiply by router-mask, residual
-  takes the no-op path) but gives no compute saving.
+`--mod` flag on `tinygpt train`. Each TransformerBlock gains a
+per-token sigmoid gate:
 
-The architecture's training story (router + load-balance loss) is
-identical to MoE's; the saving requires real sparse dispatch.
+```
+out = x + sigmoid(router(x)) · (block(x) − x)
+```
+
+Tokens the router scores low pass through unchanged; tokens it scores
+high get the full block treatment. Init bias zero → gate ≈ 0.5 → block
+fires half-strength at init; training pushes the gate towards 0 or 1
+per token.
+
+**Shipped variant**: soft routing only. The hard-top-K + scatter
+variant (the version that ACTUALLY saves compute) is blocked on the
+same `scatter_add` upstream gap as sparse MoE — see `docs/moe.md`.
+Soft routing gives the architectural change + training signal
+without the compute saving. When `scatter_add` lands, swap the
+sigmoid gate for argTopK + STE and the compute saving lands too.
 
 ---
 
@@ -152,47 +168,44 @@ identical to MoE's; the saving requires real sparse dispatch.
 | Logit lens | ✅ shipped | Button in browser playground. |
 | Attention heatmap | ✅ shipped | Existing "Watch the model think" panel. |
 | Per-layer ablation | ✅ shipped | New "Ablate & sample" button. |
-| Activation patching | 📋 designed | Donor-recipient swap; see below. |
-| Tuned lens | 📋 designed | Trained linear probe per layer; see below. |
+| Activation patching | ✅ shipped — position-zeroing variant | Worker `patch` message + `GpuModel.generatePatched`. Zeroes the residual stream at (layer, position); donor → recipient SWAP is the next iteration. |
+| Tuned lens | ✅ shipped | `tinygpt tuned-lens` Mac CLI command trains per-layer probes on a frozen base. Sidecar `.lenses` file format. `TinyGPTModel.forwardTunedLens` for inference once loaded. |
 
-### Activation patching (Meng et al., 2022)
+### Activation patching (Meng et al., 2022)  *(shipped — zero-patch variant)*
 
-Run forward TWICE:
+`webgpu/train.wgsl` gains a `patch_zero` kernel; worker exposes a
+`patch` message. The simplest causal intervention: at the specified
+(layer, position), ZERO OUT the residual stream value. The output
+reveals whether that token's representation at that depth was
+load-bearing.
 
-1. **Donor run** on prompt A — save the hidden state at (layer L,
-   position P) — call it `h_donor`.
-2. **Recipient run** on prompt B — at (layer L, position P),
-   REPLACE the hidden state with `h_donor`, then continue forward
-   normally.
+The full donor → recipient SWAP (Meng et al., 2022's original
+variant) requires:
+- A second forward over the donor prompt with hidden-state capture
+  at (layer, position) coords (download to CPU is fine for the
+  small models we run).
+- An "upload + scatter into a row" GPU op (slot the donor's value
+  into the recipient's residual stream at that position).
+- A two-prompt UI to pick donor and recipient.
 
-The recipient's output then reveals "what would the model say if the
-representation at this position had been the donor's?". A causal
-intervention that pinpoints WHERE a piece of information lives in
-the residual stream.
+The shipped zero-patch is mechanically the same gate (replace one
+row of x); the donor-swap path differs only in WHAT we put in that
+row. Bounded follow-up.
 
-**Shipping cost**: extends the existing ablation mechanism with a
-"donor cache" (per-layer, per-position MLXArray). Forward checks if a
-position has a saved donor activation and uses it instead. The UI
-needs two prompt boxes + a layer/position picker — moderate work.
+### Tuned lens (Belrose et al., 2023)  *(shipped)*
 
-### Tuned lens
+`tinygpt tuned-lens <model> --corpus <text>` trains one
+`Linear(d_model → vocab)` per layer with the base model frozen.
+Cross-entropy on each layer's projection, mean across layers, AdamW.
+Output: a small `.lenses` sidecar (~`L × (vocab+1) × d_model` floats)
+in a custom "TGTL v1" format.
 
-Belrose et al., 2023. Train a small `Linear(d_model → d_model)` per
-layer that projects the residual stream into a "better lens" space
-before the final LN + LM head. Lower noise than the standard logit
-lens because it's calibrated per layer rather than reusing the
-final-LN parameters.
-
-**Shipping cost**:
-- Add `tunedLensHeads: [Linear]?` to TinyGPTModel.
-- A training procedure that freezes the base model and trains only
-  the per-layer projections via cross-entropy on each layer's
-  projected logits.
-- Use the trained heads in `logitLens` instead of the raw final-LN
-  reuse.
-
-The training is a side-pass over the same data — cheap relative to
-main training. The architectural addition is one Linear per layer.
+Inference side: `TinyGPTModel.forwardTunedLens(idx)` runs the base
+forward with `forwardLayerwise`, then applies the per-layer probes —
+cleaner than the raw logit lens for "what does layer 3 think the
+next token is?" questions. The browser playground's lens button
+still uses the raw final-LN+LM-head projection; wiring the tuned
+sidecar into the browser is the next iteration.
 
 ---
 
