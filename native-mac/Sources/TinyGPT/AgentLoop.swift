@@ -1,0 +1,442 @@
+import Foundation
+import MLX
+import MLXNN
+import MLXRandom
+import TinyGPTModel
+
+/// The agent conversation loop. Owns:
+///   - the loaded model
+///   - a tokenizer (HF BPE if the model pins one, otherwise byte-level)
+///   - a KV cache that grows across turns within a single session
+///   - a tool schema + executor for dispatching tool calls
+///
+/// # Lifecycle
+///
+///  1. `prefillSystemPrompt(...)` runs once at startup. It feeds the
+///     system prompt + tool descriptions through `forwardCached` so the
+///     cache holds the prefix at the entry to the first user turn. If a
+///     persistent prompt cache was passed in, this hits the fast path
+///     and skips prefill.
+///
+///  2. For each user turn the loop:
+///       a. Appends the user message text to the cache via `forwardCached`.
+///       b. Generates up to `maxTokens` tokens, decoding as it goes.
+///       c. As tokens stream out we look for a complete JSON object in
+///          the decoded text. The model is told via the system prompt to
+///          emit one of two shapes:
+///                { "tool": <name>, "arguments": {...} }
+///                { "answer": <text> }
+///          so a balanced top-level JSON object is the natural turn
+///          boundary. We bail out of generation as soon as we have one.
+///       d. If the JSON is a tool call, execute it (subprocess), format
+///          the result as `<tool_result>{...}</tool_result>`, append THAT
+///          to the cache, and loop back to (b). If it's an answer (or
+///          we couldn't parse JSON after maxTokens), return to the caller.
+///
+/// # Limits we know about
+///
+///  - Context cap: when the cache hits `cfg.contextLength` we stop. No
+///    eviction. A long agent run with many turns will eventually overflow;
+///    we report it honestly and the next call has to start fresh.
+///  - Sampling: temperature is configurable but defaults to 0 (greedy).
+///    Agents want determinism; chat models want creativity. This is the
+///    default for tool-calling.
+///  - JSON robustness: an unspecialized base model will emit malformed
+///    JSON often. We log + degrade to "treat the raw text as a final
+///    answer" instead of crashing the loop.
+public final class AgentLoop {
+
+    // Owned state.
+    private let model: AnyModel
+    private let cfg: ModelConfig
+    private let tokenizer: HFTokenizer?
+    private let schema: ToolSchema
+    private var cache: KVCache
+    private let temperature: Float
+    private let maxTokensPerTurn: Int
+    private let toolTimeoutSec: Double
+    private let transcriptURL: URL?
+    private let jsonOut: Bool
+    private let maxAgentSteps: Int
+
+    /// Token boundary the agent expects between turns. We use a ChatML-ish
+    /// scheme so models trained with that template have a fighting chance
+    /// of producing the right shape. For byte-level models this is just
+    /// plain ASCII that we look for in the decoded stream.
+    private let userPreface = "<|im_start|>user\n"
+    private let userSuffix = "<|im_end|>\n<|im_start|>assistant\n"
+    private let toolResultPreface = "<|im_start|>tool\n"
+    private let toolResultSuffix = "<|im_end|>\n<|im_start|>assistant\n"
+    private let assistantTerminator = "<|im_end|>"
+
+    public init(model: AnyModel, cfg: ModelConfig, tokenizer: HFTokenizer?,
+                schema: ToolSchema, cache: KVCache,
+                temperature: Float = 0.0, maxTokensPerTurn: Int = 256,
+                toolTimeoutSec: Double = 30.0,
+                transcriptURL: URL? = nil, jsonOut: Bool = false,
+                maxAgentSteps: Int = 8)
+    {
+        self.model = model
+        self.cfg = cfg
+        self.tokenizer = tokenizer
+        self.schema = schema
+        self.cache = cache
+        self.temperature = temperature
+        self.maxTokensPerTurn = maxTokensPerTurn
+        self.toolTimeoutSec = toolTimeoutSec
+        self.transcriptURL = transcriptURL
+        self.jsonOut = jsonOut
+        self.maxAgentSteps = maxAgentSteps
+    }
+
+    // MARK: - Prefill
+
+    /// Build the system prompt as a single string. The exact wording
+    /// matters less than the structural commitments: tool descriptions
+    /// up top, then the two JSON shapes the model can emit.
+    public static func systemPrompt(userSystem: String, schema: ToolSchema) -> String {
+        let toolList = schema.systemPromptDescription()
+        let header = userSystem.isEmpty
+            ? "You are a specialized on-device agent."
+            : userSystem
+        return """
+        <|im_start|>system
+        \(header)
+
+        You have access to these tools:
+        <tools>
+        \(toolList)
+        </tools>
+
+        When you need to use a tool, respond with a SINGLE valid JSON object on its own line:
+        { "tool": "<name>", "arguments": { ... } }
+
+        After the tool runs you will receive its output between <tool_result>...</tool_result>.
+        Use as many tool calls as you need.
+
+        When you have the final answer, respond with a SINGLE valid JSON object:
+        { "answer": "..." }
+
+        Do not include any other text outside the JSON object.<|im_end|>
+        """
+    }
+
+    /// Run the prompt through the cache so subsequent turns can start
+    /// from `cache.currentLength == prefixLen`. Returns the token count.
+    @discardableResult
+    public func prefillSystemPrompt(_ text: String,
+                                     alreadyPrefilled: Bool = false) -> Int
+    {
+        // If the cache was loaded from disk for this prompt, currentLength
+        // is already populated. Caller signals via `alreadyPrefilled`.
+        if alreadyPrefilled {
+            // Track last token so the rewind/recover path in
+            // `generateUntilJSONOrLimit` has a valid id to feed back.
+            // We don't know the actual id from a disk-loaded cache, so
+            // we encode the prompt just to recover the tail.
+            let ids = encode(text)
+            if let last = ids.last { lastFedToken = last }
+            return cache.currentLength
+        }
+        var ids = encode(text)
+        if ids.isEmpty { return 0 }
+        // Don't try to push more tokens than the model can attend to.
+        // We leave a small budget for the first user turn — without it
+        // every byte-level model with ctx=256 would crash on the first
+        // forward. Real agent models (ctx ≥ 2048) won't hit this.
+        let prefillCap = max(8, cfg.contextLength - 64)
+        if ids.count > prefillCap {
+            fputs("warning: system prompt (\(ids.count) tokens) > context (\(cfg.contextLength)) — truncating head. The model will likely produce gibberish at this context size.\n", stderr)
+            ids = Array(ids.suffix(prefillCap))
+        }
+        lastFedToken = ids.last!
+        let arr = MLXArray(ids.map { Int32($0) }, [1, ids.count])
+        _ = model.forwardCached(arr, cache: cache)
+        return ids.count
+    }
+
+    // MARK: - Turn
+
+    /// One user turn. May fire multiple model generations + tool calls
+    /// internally. Returns the model's final-answer text (or the raw
+    /// text we fell back to when JSON parsing failed).
+    public func runTurn(userText: String) -> String {
+        recordEvent(event: ["type": "user", "text": userText])
+        // Append the user message to the cache.
+        feedText(userPreface + userText + userSuffix)
+        var lastAnswer: String? = nil
+
+        for step in 0..<maxAgentSteps {
+            if TrainSupport.stopRequested.isSet { break }
+            let result = generateUntilJSONOrLimit()
+            // Trim any closing ChatML tag the model emitted around the
+            // JSON so the parser doesn't have to deal with it.
+            let trimmed = stripChatML(result)
+
+            if jsonOut {
+                emitJSONEvent(["type": "assistant", "step": step, "raw": trimmed])
+            } else {
+                print(trimmed)
+            }
+            recordEvent(event: ["type": "assistant_raw", "step": step, "text": trimmed])
+
+            // Parse JSON. On failure we treat the raw text as a final
+            // answer — the unspecialized-base-model degradation path.
+            if let obj = extractJSONObject(trimmed) {
+                if let answer = obj["answer"] as? String {
+                    recordEvent(event: ["type": "answer", "text": answer])
+                    if jsonOut {
+                        emitJSONEvent(["type": "answer", "text": answer])
+                    }
+                    return answer
+                }
+                if let toolName = obj["tool"] as? String {
+                    let args = (obj["arguments"] as? [String: Any]) ?? [:]
+                    let toolResult = runToolCall(name: toolName, arguments: args)
+                    if jsonOut {
+                        emitJSONEvent([
+                            "type": "tool_call",
+                            "tool": toolName,
+                            "arguments": args,
+                            "stdout": toolResult.stdout,
+                            "stderr": toolResult.stderr,
+                            "exit_code": Int(toolResult.exitCode),
+                            "duration_sec": toolResult.durationSec,
+                        ])
+                    }
+                    recordEvent(event: [
+                        "type": "tool_result",
+                        "tool": toolName,
+                        "stdout": toolResult.stdout,
+                        "stderr": toolResult.stderr,
+                        "exit_code": Int(toolResult.exitCode),
+                    ])
+                    let resultJSON = encodeToolResult(toolName, result: toolResult)
+                    feedText(toolResultPreface + resultJSON + toolResultSuffix)
+                    continue
+                }
+                // JSON but neither shape we expect. Treat as freeform.
+                lastAnswer = trimmed
+                break
+            } else {
+                // No parseable JSON — degrade.
+                lastAnswer = trimmed
+                break
+            }
+        }
+        let final = lastAnswer ?? "(no answer)"
+        recordEvent(event: ["type": "answer", "text": final, "fallback": true])
+        if jsonOut {
+            emitJSONEvent(["type": "answer", "text": final, "fallback": true])
+        }
+        return final
+    }
+
+    private func runToolCall(name: String, arguments: [String: Any]) -> ToolExecutor.Result {
+        do {
+            return try ToolExecutor.execute(toolName: name, arguments: arguments,
+                                              schema: schema,
+                                              timeoutSec: toolTimeoutSec)
+        } catch {
+            // Synthesise a Result so the model gets *something* back.
+            return ToolExecutor.Result(
+                stdout: "",
+                stderr: "tool error: \(error)",
+                exitCode: 2,
+                durationSec: 0)
+        }
+    }
+
+    private func encodeToolResult(_ name: String, result: ToolExecutor.Result) -> String {
+        // Compact JSON; the model just needs to see the contents.
+        let obj: [String: Any] = [
+            "tool": name,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": Int(result.exitCode),
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: obj),
+           let s = String(data: data, encoding: .utf8) { return s }
+        return "{\"tool\":\"\(name)\",\"stdout\":\"\(result.stdout)\"}"
+    }
+
+    // MARK: - Generation
+
+    /// Stream tokens through `forwardCached`, decode incrementally, and
+    /// stop as soon as we've accumulated a balanced top-level JSON
+    /// object OR we hit `maxTokensPerTurn` / cache cap / assistant
+    /// terminator. Returns the decoded assistant text.
+    private func generateUntilJSONOrLimit() -> String {
+        var generated: [Int] = []
+        var lastLogits: MLXArray
+        // Seed with the cache's last logits — we just appended text via
+        // `forwardCached`, so the *next* token's logits live in the tail
+        // of that pass's output. The cache doesn't store logits, so we
+        // do one tiny forward on a single token equal to the last input
+        // byte to recover them. Simpler approach: feed a no-op "<assistant
+        // marker has already been fed>" placeholder. Since `feedText`
+        // discards its logits, we re-feed the LAST byte to get them back
+        // here. To avoid double-counting, we rewind first.
+        cache.rewind(by: 1)
+        // Reconstruct the last token id we appended. We track it via
+        // `lastFedToken`, set inside `feedText`.
+        let lastTok = lastFedToken
+        let oneTok = MLXArray([Int32(lastTok)], [1, 1])
+        let l0 = model.forwardCached(oneTok, cache: cache)
+        lastLogits = l0[0..., l0.shape[1] - 1, 0...]
+
+        for _ in 0..<maxTokensPerTurn {
+            if TrainSupport.stopRequested.isSet { break }
+            let nextId: MLXArray
+            if temperature <= 0 {
+                nextId = argMax(lastLogits, axis: -1).reshaped([1, 1])
+            } else {
+                let scaled = lastLogits / MLXArray(temperature)
+                nextId = MLXRandom.categorical(scaled).reshaped([1, 1])
+            }
+            eval(nextId)
+            let id = Int(nextId.item(Int32.self))
+            generated.append(id)
+            // Decoded-so-far view for stop & JSON detection.
+            let decoded = decode(generated)
+            if isCompleteJSONObject(decoded) { break }
+            if decoded.contains(assistantTerminator) { break }
+            if cache.currentLength >= cfg.contextLength { break }
+            let logits = model.forwardCached(nextId.asType(.int32), cache: cache)
+            lastLogits = logits[0..., 0, 0...]
+        }
+        return decode(generated)
+    }
+
+    // MARK: - Cache feeding
+
+    private var lastFedToken: Int = 0
+
+    /// Encode + forward through the cache. We track the last token id so
+    /// `generateUntilJSONOrLimit` can rewind + recover the next-token
+    /// logits without buffering them at every call site.
+    private func feedText(_ text: String) {
+        var ids = encode(text)
+        if ids.isEmpty { return }
+        // Cap any single chunk at remaining context. Without this a
+        // chatty tool result on a small-context model would crash the
+        // forward pass with a positional-encoding out-of-range error.
+        let remaining = cfg.contextLength - cache.currentLength
+        if ids.count > remaining {
+            if remaining <= 0 {
+                fputs("warning: KV cache full (\(cache.currentLength)/\(cfg.contextLength)); dropping chunk.\n", stderr)
+                return
+            }
+            fputs("warning: chunk (\(ids.count) tokens) exceeds remaining context (\(remaining)); truncating tail.\n", stderr)
+            ids = Array(ids.prefix(remaining))
+        }
+        lastFedToken = ids.last!
+        let arr = MLXArray(ids.map { Int32($0) }, [1, ids.count])
+        _ = model.forwardCached(arr, cache: cache)
+    }
+
+    // MARK: - Tokenization
+
+    private func encode(_ s: String) -> [Int] {
+        if let tok = tokenizer {
+            do { return try tok.encode(s) }
+            catch {
+                fputs("tokenizer encode failed (\(error)), falling back to bytes\n", stderr)
+                return [UInt8](s.utf8).map { Int($0) }
+            }
+        }
+        return [UInt8](s.utf8).map { Int($0) }
+    }
+
+    private func decode(_ ids: [Int]) -> String {
+        if let tok = tokenizer { return tok.decode(ids) }
+        let bytes = ids.compactMap { (id: Int) -> UInt8? in
+            (id >= 0 && id < 256) ? UInt8(id) : nil
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    // MARK: - JSON detection / extraction
+
+    /// True iff `text` contains a top-level balanced `{ ... }` object.
+    /// We scan from the first `{` and track brace depth, respecting
+    /// strings and escapes. Whitespace-only between objects is fine.
+    private func isCompleteJSONObject(_ text: String) -> Bool {
+        return findFirstBalancedObject(in: text) != nil
+    }
+
+    private func extractJSONObject(_ text: String) -> [String: Any]? {
+        guard let s = findFirstBalancedObject(in: text) else { return nil }
+        guard let data = s.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    private func findFirstBalancedObject(in text: String) -> String? {
+        var depth = 0
+        var inString = false
+        var escape = false
+        var start: String.Index? = nil
+        for i in text.indices {
+            let c = text[i]
+            if escape { escape = false; continue }
+            if inString {
+                if c == "\\" { escape = true }
+                else if c == "\"" { inString = false }
+                continue
+            }
+            switch c {
+            case "\"":
+                inString = true
+            case "{":
+                if depth == 0 { start = i }
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0, let s = start {
+                    let end = text.index(after: i)
+                    return String(text[s..<end])
+                }
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func stripChatML(_ text: String) -> String {
+        // Drop a leading <|im_start|>assistant\n if the model echoed one.
+        var t = text
+        let leading = "<|im_start|>assistant\n"
+        if t.hasPrefix(leading) { t = String(t.dropFirst(leading.count)) }
+        if let r = t.range(of: assistantTerminator) {
+            t = String(t[..<r.lowerBound])
+        }
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Transcript / JSON output
+
+    private func recordEvent(event: [String: Any]) {
+        guard let url = transcriptURL else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: event,
+                                                      options: []) else { return }
+        if let fh = try? FileHandle(forWritingTo: url) {
+            fh.seekToEndOfFile()
+            fh.write(data)
+            fh.write(Data([0x0A]))
+            try? fh.close()
+        } else {
+            // First write — create the file.
+            var combined = data
+            combined.append(0x0A)
+            try? combined.write(to: url, options: .atomic)
+        }
+    }
+
+    private func emitJSONEvent(_ obj: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let s = String(data: data, encoding: .utf8) else { return }
+        print(s)
+        fflush(stdout)
+    }
+}

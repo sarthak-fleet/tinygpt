@@ -64,6 +64,26 @@ struct TinyGPT {
         // shim because the structured-head path is still shape-preserving
         // (zero-out, not physical-removal — see docs/pruning.md "Caveats");
         // when the asymmetric-attention module lands, the case rolls up.
+        //
+        // Pre-switch shim for the agent runtime — `tinygpt agent <model>
+        // --tools tools.json` ties together the cold-start loader, the
+        // persistent KV cache, and a tool-dispatch loop into the product
+        // surface ("user installs the app, runs `tinygpt agent specialist
+        // .tinygpt`, gets a specialized agent"). Lives behind the shim
+        // because A3 is concurrently adding flags in Sample.swift; see
+        // TODO(agent-merge) below. Module files:
+        //   - Agent.swift        — CLI entry
+        //   - AgentLoop.swift    — conversation + tool dispatch
+        //   - ToolSchema.swift   — JSON tool definitions
+        //   - ToolExecutor.swift — subprocess execution backend
+        if cmd == "agent" {
+            Agent.run(args: Array(args.dropFirst()))
+            return
+        }
+        // TODO(agent-merge): once the agent runtime stabilises and the
+        // companion Sample.swift flag additions land (A3), move dispatch
+        // for `agent` into the switch below (next to `case "sample":`)
+        // and delete the pre-switch shim above.
         switch cmd {
         case "inspect":
             guard let path = args.dropFirst().first else {
