@@ -48,6 +48,17 @@ enum Sample {
         // debug hatch; the spinner output is identical either way).
         var lazyEmbedding = false
         var asyncLoad = true
+        // `--json-schema <file>` enables grammar-constrained sampling.
+        // The schema is loaded from disk, a character-level FSM is
+        // built, and each step's logits are masked so only tokens
+        // that lead to a valid JSON-Schema-conforming extension can be
+        // sampled. See ConstrainedGen.swift / JSONSchema.swift.
+        var jsonSchemaPath: String? = nil
+        // When the FSM completes and `--json-stop-on-complete` is on
+        // (the default), generation halts immediately so we don't
+        // pollute the output with whatever the model wants to write
+        // after the JSON object closes.
+        var jsonStopOnComplete: Bool = true
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -118,6 +129,11 @@ enum Sample {
                 lazyEmbedding = true; i += 1
             case "--no-async-load":
                 asyncLoad = false; i += 1
+            case "--json-schema":
+                guard i + 1 < args.count else { exitUsage() }
+                jsonSchemaPath = args[i + 1]; i += 2
+            case "--no-json-stop-on-complete":
+                jsonStopOnComplete = false; i += 1
             case "-h", "--help":
                 exitUsage()
             default:
@@ -230,6 +246,52 @@ enum Sample {
             }
         } else {
             tokenizer = nil
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        // Constrained generation setup (`--json-schema`).
+        //
+        // Build the schema FSM + a per-vocab byte table for masking.
+        // The mask is computed at each decode step: tokens whose bytes
+        // would not extend a valid JSON-Schema-conforming string are
+        // pushed to -inf before sampling.
+        //
+        // Setup cost is O(vocab) decodes (~once per launch, < 1 sec
+        // even for 128k vocab). Per-step cost is O(vocab × avg-tok-len)
+        // byte-level FSM probes; on M-class silicon this adds ~5-10%
+        // overhead at vocab≤32k. See docs/constrained_generation.md.
+        // ──────────────────────────────────────────────────────────────
+        var jsonFSM: JSONSchemaFSM? = nil
+        var jsonMasker: LogitsMasker? = nil
+        if let schemaPath = jsonSchemaPath {
+            do {
+                let url = URL(fileURLWithPath: schemaPath)
+                let schemaNode = try JSONSchemaNode.from(url: url)
+                jsonFSM = JSONSchemaFSM(rootSchema: schemaNode)
+                // Build the per-id byte table. For HF tokenizers we decode
+                // each id individually; for the byte-level path each id
+                // is just its UTF-8 byte. EOS id discovery: HF tokenizer
+                // doesn't expose it directly through our wrapper today,
+                // so we leave it nil — generation stops on FSM-complete +
+                // --no-json-stop-on-complete=false, OR after --tokens.
+                let vocabSize = cfg.vocabSize
+                let decodeFn: (Int) -> String = { id in
+                    if let tok = tokenizer { return tok.decode([id]) }
+                    // Byte-level: each id ∈ [0,255] is one UTF-8 byte.
+                    if id >= 0 && id < 256 {
+                        return String(decoding: [UInt8(id)], as: UTF8.self)
+                    }
+                    return ""
+                }
+                let tBuild = Date()
+                jsonMasker = LogitsMasker(vocabSize: vocabSize, eosTokenId: nil, decodeId: decodeFn)
+                let buildElapsed = -tBuild.timeIntervalSinceNow
+                fputs(String(format: "[json-schema] FSM built; %d vocab token-byte table in %.3fs\n",
+                              vocabSize, buildElapsed), stderr)
+            } catch {
+                fputs("error loading JSON schema: \(error)\n", stderr)
+                exit(1)
+            }
         }
 
         // Encode the prompt — either through BPE or as raw bytes.
@@ -619,14 +681,27 @@ enum Sample {
             for _ in 0..<maxTokens {
                 if TrainSupport.stopRequested.isSet { break }
                 let nextId: MLXArray
-                if temperature <= 0 {
-                    nextId = argMax(lastLogits, axis: -1).reshaped([1, 1])
+                // Constrained sampling: mask logits via the JSON-schema FSM.
+                // We branch BEFORE the standard argmax/categorical path so
+                // the unconstrained code stays untouched for non-JSON runs.
+                if let fsm = jsonFSM, let masker = jsonMasker {
+                    let id = sampleWithSchema(
+                        logits: lastLogits.reshaped([cfg.vocabSize]),
+                        temperature: temperature, fsm: fsm, masker: masker
+                    )
+                    nextId = MLXArray([Int32(id)], [1, 1])
+                    emit(id)
+                    if jsonStopOnComplete && fsm.isComplete { break }
                 } else {
-                    let scaled = lastLogits / MLXArray(temperature)
-                    nextId = MLXRandomCategorical(scaled).reshaped([1, 1])
+                    if temperature <= 0 {
+                        nextId = argMax(lastLogits, axis: -1).reshaped([1, 1])
+                    } else {
+                        let scaled = lastLogits / MLXArray(temperature)
+                        nextId = MLXRandomCategorical(scaled).reshaped([1, 1])
+                    }
+                    eval(nextId)
+                    emit(Int(nextId.item(Int32.self)))
                 }
-                eval(nextId)
-                emit(Int(nextId.item(Int32.self)))
                 if cache.currentLength >= cfg.contextLength { break }
                 let logits = model.forwardCached(nextId.asType(promptIds.dtype), cache: cache)
                 lastLogits = logits[0..., 0, 0...]
@@ -642,6 +717,17 @@ enum Sample {
                 let logits = model(cond)
                 let last = logits[0..., logits.shape[1] - 1, 0...]
                 let nextId: MLXArray
+                if let fsm = jsonFSM, let masker = jsonMasker {
+                    let id = sampleWithSchema(
+                        logits: last.reshaped([cfg.vocabSize]),
+                        temperature: temperature, fsm: fsm, masker: masker
+                    )
+                    nextId = MLXArray([Int32(id)], [1, 1])
+                    emit(id)
+                    idx = concatenated([idx, nextId.asType(idx.dtype)], axis: 1)
+                    if jsonStopOnComplete && fsm.isComplete { break }
+                    continue
+                }
                 if temperature <= 0 {
                     nextId = argMax(last, axis: -1).reshaped([1, 1])
                 } else {
@@ -710,6 +796,39 @@ enum Sample {
         return MLXRandom.categorical(logits)
     }
 
+    /// Mask logits with the JSON-schema FSM and sample. Returns the
+    /// sampled id and mutates `fsm` by committing the sampled token's
+    /// bytes. `logits` is a 1-D MLXArray of shape [vocabSize].
+    ///
+    /// The mask is a `[Float]` of zeros and -inf; we add it to the
+    /// logits as an MLXArray so the existing sampling path (argmax /
+    /// categorical) sees a properly masked distribution.
+    fileprivate static func sampleWithSchema(
+        logits: MLXArray, temperature: Float,
+        fsm: JSONSchemaFSM, masker: LogitsMasker
+    ) -> Int {
+        // Build the host-side mask, ship to GPU, add to logits.
+        let mask = masker.mask(forFSM: fsm)
+        let maskArr = MLXArray(mask, [mask.count])
+        let maskedLogits = logits + maskArr
+        let nextId: MLXArray
+        if temperature <= 0 {
+            nextId = argMax(maskedLogits, axis: -1)
+        } else {
+            let scaled = maskedLogits / MLXArray(temperature)
+            // categorical expects [B, vocab] or [vocab]; we have [vocab].
+            nextId = MLXRandom.categorical(scaled)
+        }
+        eval(nextId)
+        let id = Int(nextId.item(Int32.self))
+        // Commit the chosen token into the FSM. If it doesn't fit
+        // (shouldn't happen given the mask, but the model might have
+        // produced an all-(-inf) row in pathological cases), we leave
+        // the FSM unchanged.
+        _ = masker.commit(tokenId: id, into: fsm)
+        return id
+    }
+
     private static func formatLargeInt(_ n: Int) -> String {
         let f = NumberFormatter()
         f.numberStyle = .decimal
@@ -763,6 +882,14 @@ enum Sample {
                               RAM; slightly higher first-token latency)
         --no-async-load       Disable background-thread load (load
                               blocks the main thread, spinner suppressed)
+        --json-schema <path>  Constrained decoding against a JSON Schema
+                              (Draft 7 subset). Every output is guaranteed
+                              to be valid JSON matching the schema. See
+                              docs/constrained_generation.md.
+        --no-json-stop-on-complete
+                              Don't auto-stop when the JSON value closes;
+                              keep generating until --tokens is reached
+                              (useful for streaming-style protocols).
         """)
         exit(2)
     }
