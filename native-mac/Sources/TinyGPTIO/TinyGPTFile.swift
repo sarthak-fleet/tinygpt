@@ -147,8 +147,26 @@ public enum TinyGPTFileReader {
     /// Read a `.tinygpt` file from disk. Reads the whole file into memory —
     /// fine for the model sizes we ship (max ~100 MB), and avoids the
     /// stream-cursor bookkeeping a chunked reader would need.
+    ///
+    /// For cold-start-sensitive paths (sample, serve), prefer `readMapped`.
     public static func read(_ url: URL) throws -> TinyGPTFile {
         let data = try Data(contentsOf: url)
+        return try decode(data, source: url)
+    }
+
+    /// mmap-backed read. The file is mapped via `Data(contentsOf:,
+    /// options: .alwaysMapped)`; tensor buffers are returned as `Data`
+    /// slices that share the same backing pages. The kernel pages bytes
+    /// in on demand when MLXArray reads from them, so cold-start time
+    /// drops from "read 250MB from disk" to "register VM region + read
+    /// header". RAM use also drops: pages that aren't touched are never
+    /// resident.
+    ///
+    /// Caller must keep the returned `TinyGPTFile` alive while any
+    /// MLXArrays constructed from its tensor `Data` are still in use —
+    /// dropping it unmaps the file.
+    public static func readMapped(_ url: URL) throws -> TinyGPTFile {
+        let data = try Data(contentsOf: url, options: .alwaysMapped)
         return try decode(data, source: url)
     }
 
@@ -209,9 +227,14 @@ public enum TinyGPTFileReader {
                         got: data.count
                     )
                 }
-                let w = data.subdata(in: cursor..<(cursor + need)); cursor += need
-                let m = data.subdata(in: cursor..<(cursor + need)); cursor += need
-                let v = data.subdata(in: cursor..<(cursor + need)); cursor += need
+                // Use range-slice (`data[…]`) instead of `subdata(in:)` so
+                // mmap-backed `Data` keeps its file-mapped storage rather
+                // than copying through the heap. `Data` slices share the
+                // parent's bytes — no copy, no demand-page until MLXArray
+                // actually reads them.
+                let w = data[cursor..<(cursor + need)]; cursor += need
+                let m = data[cursor..<(cursor + need)]; cursor += need
+                let v = data[cursor..<(cursor + need)]; cursor += need
                 tensors.append(TinyGPTTensor(entry: entry, weight: w, adamM: m, adamV: v, dtype: .fp32))
             }
 
@@ -229,20 +252,23 @@ public enum TinyGPTFileReader {
                 )
             }
             let bodyEnd = cursor + totalBytes
-            let body = data.subdata(in: cursor..<bodyEnd)
             for entry in header.manifest {
                 let offsetFloats = entry.floatOffset ?? 0
                 let byteOffset = offsetFloats * 2
                 let byteEnd = byteOffset + entry.byteLengthFP16
-                guard byteEnd <= body.count else {
+                let absStart = cursor + byteOffset
+                let absEnd = cursor + byteEnd
+                guard absEnd <= bodyEnd else {
                     throw TinyGPTFileError.truncatedBody(
                         source,
                         tensor: entry.name,
                         expected: byteEnd,
-                        got: body.count
+                        got: bodyEnd - cursor
                     )
                 }
-                let w = body.subdata(in: byteOffset..<byteEnd)
+                // Range-slice from the parent `data` directly (preserves
+                // mmap backing — see comment in the FP32 branch above).
+                let w = data[absStart..<absEnd]
                 tensors.append(TinyGPTTensor(entry: entry, weight: w, dtype: .fp16))
             }
             cursor = bodyEnd

@@ -32,6 +32,13 @@ enum Sample {
         // and `TrainHeads.swift` for how a `.heads` sidecar is produced.
         var headsPath: String? = nil
         var headType: String = "medusa"
+        // Cold-start optimisations. `--lazy-embedding` defers the embedding
+        // tensor (vocab × d_model) until just before the first forward —
+        // shaves a meaningful chunk off load time + RAM on large models.
+        // `--no-async-load` disables the background-thread load (mostly a
+        // debug hatch; the spinner output is identical either way).
+        var lazyEmbedding = false
+        var asyncLoad = true
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -91,6 +98,10 @@ enum Sample {
             case "--head-type":
                 guard i + 1 < args.count else { exitUsage() }
                 headType = args[i + 1].lowercased(); i += 2
+            case "--lazy-embedding":
+                lazyEmbedding = true; i += 1
+            case "--no-async-load":
+                asyncLoad = false; i += 1
             case "-h", "--help":
                 exitUsage()
             default:
@@ -107,12 +118,41 @@ enum Sample {
         let url = URL(fileURLWithPath: path)
 
         // Unified loader — accepts .tinygpt files or HF model dirs.
-        print("loading \(url.lastPathComponent)…")
+        //
+        // Cold-start path:
+        //   - mmap'd reader (default since the cold-start bundle landed)
+        //     means the 250 MB file read is a VM map, not a literal read.
+        //   - When `asyncLoad` is on (default), the load runs on a
+        //     background thread and the foreground prints a spinner.
+        //   - `--lazy-embedding` defers the (usually largest) token
+        //     embedding tensor until the first forward.
         let load: ModelLoader.LoadResult
-        do { load = try ModelLoader.load(path) }
-        catch { fputs("error loading: \(error)\n", stderr); exit(1) }
+        let tLoad = Date()
+        do {
+            if asyncLoad {
+                load = try ColdStart.loadWithSpinner(
+                    path: path,
+                    deferEmbedding: lazyEmbedding,
+                    label: url.lastPathComponent
+                )
+            } else {
+                print("loading \(url.lastPathComponent)…")
+                if lazyEmbedding {
+                    load = try ModelLoader.loadLazyEmbedding(path)
+                } else {
+                    load = try ModelLoader.load(path)
+                }
+            }
+        } catch { fputs("error loading: \(error)\n", stderr); exit(1) }
         let cfg = load.config
         let model = load.model
+        let loadElapsed = -tLoad.timeIntervalSinceNow
+        if let h = load.lazyEmbedding {
+            print(String(format: "loaded in %.2fs (lazy embedding: %@ pending)",
+                          loadElapsed, formatBytes(h.totalBytes)))
+        } else {
+            print(String(format: "loaded in %.2fs", loadElapsed))
+        }
 
         // Apply one OR MORE LoRA adapters on top. Adapters carry their
         // base architecture in the header so a from-scratch adapter
@@ -191,6 +231,21 @@ enum Sample {
         // Print the prompt first, then stream generated tokens.
         print(prompt, terminator: "")
         fflush(stdout)
+
+        // Materialise any deferred embedding tensor just before the first
+        // forward. The `LazyEmbeddingHandle` is idempotent — calling
+        // materialize() twice is a no-op — so it's safe even on paths
+        // (--heads, --draft) that take alternate routes through the model.
+        if let h = load.lazyEmbedding {
+            let tEmbed = Date()
+            do { try h.materialize() }
+            catch {
+                fputs("\nembedding materialisation failed: \(error)\n", stderr)
+                exit(1)
+            }
+            let dt = -tEmbed.timeIntervalSinceNow
+            fputs(String(format: "[lazy] materialised embedding in %.2fs\n", dt), stderr)
+        }
 
         // Cooperative cancel — Ctrl-C stops generation mid-stream cleanly.
         TrainSupport.installSigintHandler()
@@ -591,6 +646,11 @@ enum Sample {
         --head-type {medusa|eagle}
                               Head architecture used by --heads (default medusa).
                               Must match the sidecar's stored kind.
+        --lazy-embedding      Defer loading the token embedding tensor
+                              until the first forward (lower cold-start
+                              RAM; slightly higher first-token latency)
+        --no-async-load       Disable background-thread load (load
+                              blocks the main thread, spinner suppressed)
         """)
         exit(2)
     }

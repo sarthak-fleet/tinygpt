@@ -10,6 +10,55 @@ import TinyGPTIO
 /// (`blocks.0.attn.q_proj.weight`, `ln_final.bias`, etc.); the MLX-Swift
 /// model uses the same names via `@ModuleInfo(key:)`. No remapping needed.
 public enum TinyGPTWeightLoader {
+    /// Names that the lazy-embedding path defers — `token_embedding.weight`
+    /// is by far the largest single tensor in a tied-embedding model
+    /// (vocab × d_model fp16 = ~200MB on a 1.5B model). The browser
+    /// emits this exact key; HF models use a different name and route
+    /// through `HFModelLoader` instead, so this only affects from-scratch
+    /// `.tinygpt` files.
+    public static let embeddingTensorNames: Set<String> = [
+        "token_embedding.weight",
+        "position_embedding.weight",
+    ]
+
+    /// Handle returned by `loadDeferringEmbedding`. The caller is expected
+    /// to invoke `materialize()` exactly once before the first forward
+    /// pass. Dropping the handle without materialising leaves the model
+    /// with whatever the initialiser put in the embedding (random init);
+    /// that's caught by the model's own forward gating in debug builds.
+    public final class LazyEmbeddingHandle: @unchecked Sendable {
+        private let tensors: [TinyGPTTensor]
+        private weak var model: TinyGPTModel?
+        // Keep a strong reference to the source `TinyGPTFile` so the
+        // mmap region stays alive while the handle exists.
+        @usableFromInline let _file: TinyGPTFile
+        public private(set) var isMaterialized: Bool = false
+        public let totalBytes: Int
+
+        init(file: TinyGPTFile, tensors: [TinyGPTTensor], model: TinyGPTModel) {
+            self._file = file
+            self.tensors = tensors
+            self.model = model
+            self.totalBytes = tensors.reduce(0) { $0 + $1.weight.count }
+        }
+
+        /// Construct the deferred embedding `MLXArray`(s) and patch them
+        /// into the model. Idempotent — calling twice is a no-op.
+        public func materialize() throws {
+            if isMaterialized { return }
+            guard let model = model else { return }
+            var updates: [String: MLXArray] = [:]
+            for tensor in tensors {
+                updates[tensor.entry.name] = arrayFromTensor(
+                    tensor, withShape: tensor.entry.shape
+                )
+            }
+            let nested = rewriteLeaves(model.parameters(), withFlat: updates)
+            try model.update(parameters: nested, verify: [.noUnusedKeys])
+            isMaterialized = true
+        }
+    }
+
     /// Load weights from a `.tinygpt` URL into the given model. The model's
     /// architecture (layers / d_model / heads / etc.) must already match the
     /// file's header `config`. Throws if the config doesn't match — silently
@@ -18,16 +67,42 @@ public enum TinyGPTWeightLoader {
     public static func load(
         _ url: URL, into model: TinyGPTModel
     ) throws {
-        let file = try TinyGPTFileReader.read(url)
+        // Default path uses mmap — see `readMapped` for why.
+        let file = try TinyGPTFileReader.readMapped(url)
         try load(file, into: model)
     }
 
     public static func load(
         _ file: TinyGPTFile, into model: TinyGPTModel
     ) throws {
+        try loadInternal(file, into: model, deferEmbedding: false)
+        _ = ()  // discard
+    }
+
+    /// Variant that returns a `LazyEmbeddingHandle` — the embedding
+    /// tensor(s) are not pushed into the model. Use when cold-start RAM
+    /// matters more than first-token latency (the materialise call
+    /// performs one `MLXArray` construction and one `model.update`).
+    public static func loadDeferringEmbedding(
+        _ url: URL, into model: TinyGPTModel
+    ) throws -> LazyEmbeddingHandle? {
+        let file = try TinyGPTFileReader.readMapped(url)
+        return try loadInternal(file, into: model, deferEmbedding: true)
+    }
+
+    @discardableResult
+    private static func loadInternal(
+        _ file: TinyGPTFile, into model: TinyGPTModel,
+        deferEmbedding: Bool
+    ) throws -> LazyEmbeddingHandle? {
         try checkConfigMatches(file: file, model: model)
         var updates: [String: MLXArray] = [:]
+        var deferred: [TinyGPTTensor] = []
         for tensor in file.tensors {
+            if deferEmbedding && embeddingTensorNames.contains(tensor.entry.name) {
+                deferred.append(tensor)
+                continue
+            }
             // The browser dumps raw WASM bytes. WASM stores Linear weights
             // in `[in, out]` order (so its matmul is `y = x @ W` directly).
             // PyTorch and MLX-Swift use `[out, in]` and compute `y = x @ W.T`.
@@ -49,6 +124,8 @@ public enum TinyGPTWeightLoader {
         // by matching on dotted-key path.
         let nested = rewriteLeaves(model.parameters(), withFlat: updates)
         try model.update(parameters: nested, verify: [.noUnusedKeys])
+        guard deferEmbedding, !deferred.isEmpty else { return nil }
+        return LazyEmbeddingHandle(file: file, tensors: deferred, model: model)
     }
 
     /// Walk an existing ModuleParameters tree and replace each leaf MLXArray
@@ -130,13 +207,22 @@ public enum TinyGPTWeightLoader {
     }
 
     private static func arrayFromTensor(_ tensor: TinyGPTTensor, withShape shape: [Int]) -> MLXArray {
+        // Build MLXArray directly from the (potentially mmap-backed) raw
+        // bytes, skipping the host-side fp32 expansion. MLX reads the
+        // bytes via the buffer pointer inside `MLXArray(_:_:dtype:)` —
+        // when the `Data` is mmap-backed, those reads page in only the
+        // bytes the model actually touches.
+        //
+        // For fp16 weights we hand the bytes to MLX as `.float16`. The
+        // model itself runs in fp32 today, so MLX will up-cast lazily on
+        // the first arithmetic op (this is what `weightFP16AsFloat32()`
+        // used to do eagerly on the host).
         switch tensor.dtype {
         case .fp32:
-            return MLXArray(tensor.weightFloats, shape)
+            return MLXArray(tensor.weight, shape, dtype: .float32)
         case .fp16:
-            // The on-disk fp16 layout: expand to fp32 on the host. MLX
-            // can later cast back to .float16 if the model is fp16-mode.
-            return MLXArray(tensor.weightFP16AsFloat32(), shape)
+            return MLXArray(tensor.weight, shape, dtype: .float16)
+                .asType(.float32)
         }
     }
 

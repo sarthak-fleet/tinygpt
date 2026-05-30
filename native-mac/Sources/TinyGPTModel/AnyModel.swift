@@ -155,9 +155,61 @@ public enum ModelLoader {
         /// Set to the model directory's URL so callers can load the
         /// tokenizer separately. nil for from-scratch byte-level models.
         public let hfTokenizerDir: URL?
+        /// Set when the loader was asked to defer embedding materialisation.
+        /// Caller MUST invoke `.materialize()` on this before any forward
+        /// pass through the model — otherwise the embedding table holds
+        /// random init values from the model's constructor.
+        public let lazyEmbedding: TinyGPTWeightLoader.LazyEmbeddingHandle?
+
+        public init(
+            model: AnyModel, config: ModelConfig,
+            hfTokenizerDir: URL?,
+            lazyEmbedding: TinyGPTWeightLoader.LazyEmbeddingHandle? = nil
+        ) {
+            self.model = model
+            self.config = config
+            self.hfTokenizerDir = hfTokenizerDir
+            self.lazyEmbedding = lazyEmbedding
+        }
     }
 
     public static func load(_ path: String) throws -> LoadResult {
+        return try loadCommon(path, deferEmbedding: false)
+    }
+
+    /// Variant that skips constructing the (huge) embedding tensor at
+    /// load time. Returned `LoadResult.lazyEmbedding` must be
+    /// `materialize()`d before the first forward — callers wire that
+    /// up at the right place in the sample loop. No-op for HF model
+    /// directories (their weight loader doesn't support deferral).
+    public static func loadLazyEmbedding(_ path: String) throws -> LoadResult {
+        return try loadCommon(path, deferEmbedding: true)
+    }
+
+    /// Async wrapper — runs the (synchronous, MLX-heavy) load on a
+    /// background `qos: .userInitiated` thread so the caller's main
+    /// thread stays free for UI / progress reporting. The MLX C++ side
+    /// is thread-safe for read-construction; we serialise into the model
+    /// state via `model.update`, which is a single critical-section
+    /// inside the model object.
+    public static func loadAsync(
+        _ path: String, deferEmbedding: Bool = false
+    ) async throws -> LoadResult {
+        return try await withCheckedThrowingContinuation { cont in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let r = try loadCommon(path, deferEmbedding: deferEmbedding)
+                    cont.resume(returning: r)
+                } catch {
+                    cont.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func loadCommon(
+        _ path: String, deferEmbedding: Bool
+    ) throws -> LoadResult {
         let url = URL(fileURLWithPath: path)
         var isDirectory: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
@@ -170,9 +222,13 @@ public enum ModelLoader {
                               userInfo: [NSLocalizedDescriptionKey:
                                 "directory \(path) has no config.json — not an HF model dir"])
             }
+            // HF loader has its own (already-mmap'd via safetensors)
+            // path; lazy embedding deferral is a from-scratch-only
+            // optimisation for now.
             let hfResult = try HFModelLoader.load(from: url)
             return LoadResult(model: .huggingFace(hfResult.model),
-                              config: hfResult.config, hfTokenizerDir: url)
+                              config: hfResult.config, hfTokenizerDir: url,
+                              lazyEmbedding: nil)
         }
 
         // .tinygpt file path. Pick up vocabSize + tokenizerSource from the
@@ -180,7 +236,7 @@ public enum ModelLoader {
         // MoE fields (nExperts/moeTopK/loadBalanceWeight) are picked up
         // when present so the router + per-expert structure reconstructs
         // exactly; absent → dense MLP (the default).
-        let file = try TinyGPTFileReader.read(url)
+        let file = try TinyGPTFileReader.readMapped(url)
         let h = file.header.config
         let cfg = ModelConfig(
             vocabSize: h.vocabSize ?? 256,
@@ -210,8 +266,15 @@ public enum ModelLoader {
             useEmbeddingRMSNorm: h.useEmbeddingRMSNorm ?? false
         )
         let m = TinyGPTModel(cfg)
-        try TinyGPTWeightLoader.load(file, into: m)
+        let lazy: TinyGPTWeightLoader.LazyEmbeddingHandle?
+        if deferEmbedding {
+            lazy = try TinyGPTWeightLoader.loadDeferringEmbedding(url, into: m)
+        } else {
+            try TinyGPTWeightLoader.load(file, into: m)
+            lazy = nil
+        }
         let tokDir = h.tokenizerSource.map { URL(fileURLWithPath: $0) }
-        return LoadResult(model: .fromScratch(m), config: cfg, hfTokenizerDir: tokDir)
+        return LoadResult(model: .fromScratch(m), config: cfg,
+                          hfTokenizerDir: tokDir, lazyEmbedding: lazy)
     }
 }
