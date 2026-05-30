@@ -22,6 +22,27 @@ import TinyGPTModel
 /// flushed, and the process exits cleanly.
 enum Train {
     static func run(args: [String]) {
+        // CPU QoS bump (item #3 of the CPU-speedup bundle).
+        //
+        // macOS schedules a binary launched from the terminal at
+        // `.default` QoS by default, which the OS is free to migrate to
+        // an E-core under load. The training thread is the host-side
+        // driver for an MLX-Swift workload — every MLXArray construction,
+        // optimiser update, `eval`, and `item()` runs here. Pinning the
+        // thread at `.userInteractive` lands it on a P-core for the
+        // duration of the run; the OS treats it like a foreground
+        // animation thread and won't demote it.
+        //
+        // The call is best-effort. If the platform doesn't support the
+        // call (impossible on macOS 14+ but cheap to guard) we just
+        // continue at default QoS.
+        //
+        // `TINYGPT_DISABLE_QOS=1` skips the bump. Used by the bundle
+        // benchmarks to measure the QoS contribution in isolation —
+        // not a user-facing knob.
+        if ProcessInfo.processInfo.environment["TINYGPT_DISABLE_QOS"] != "1" {
+            TrainSupport.bumpQoSToUserInteractive()
+        }
         var preset = "tiny"
         var steps = 500
         var corpusPath: String? = nil
@@ -114,6 +135,13 @@ enum Train {
         // the matching int width by training the optimiser to route
         // around the quantisation noise.
         var qatBits: Int? = nil
+        // Async batch pipeline (item #4 of the CPU-speedup bundle). When
+        // on, a background thread builds the next batch's MLXArrays
+        // while the current step's forward/backward runs on the GPU.
+        // Off by default — measured wins are 0-5% on tiny presets, up
+        // to ~10% on huge with large micro-batches. See
+        // `docs/cpu_speedup_results.md`.
+        var prefetchBatches: Bool = false
 
         var i = 0
         while i < args.count {
@@ -159,6 +187,15 @@ enum Train {
             case "--lr-layer-decay":     lrLayerDecay = Float(args[i+1]) ?? 1.0; i += 2
             case "--embedding-rmsnorm":  useEmbeddingRMSNorm = true; i += 1
             case "--bpe-dropout":    bpeDropout = Float(args[i+1]) ?? bpeDropout; i += 2
+            case "--prefetch":
+                let v = args[i+1].lowercased()
+                switch v {
+                case "on", "true", "1":  prefetchBatches = true
+                case "off", "false", "0": prefetchBatches = false
+                default:
+                    fputs("--prefetch must be on or off (got \(v))\n", stderr); exit(2)
+                }
+                i += 2
             case "--qat":
                 let v = args[i+1].lowercased()
                 switch v {
@@ -467,20 +504,46 @@ enum Train {
             valSummary = va.map { formatBytes($0.bytes.count) } ?? "—"
         }
 
-        // Trainer. Compile is only safe when LR is constant AND no
-        // gradient accumulation — both would mutate the compiled graph.
-        // Disabled otherwise.
+        // Trainer. The compile path is **the** biggest lever — see
+        // `docs/cpu_speedup_results.md` — so we lean into it whenever
+        // the optimiser kind supports it.
+        //
+        // The CPU-speedup bundle introduced two new compile sub-paths:
+        //   * `useCompiledLR` — bake the LR scalar as part of the
+        //     optimiser's `innerState()` MLXArrays. The cosine/warmup
+        //     scheduler mutates the array in place each step; the
+        //     compiled trace stays valid. Today only `--optimizer adamw`
+        //     ships a compile-friendly LR-mutable optimiser.
+        //   * `accumMicroBatches` — fold the N-step gradient accumulation
+        //     loop INTO the compiled trace. N is fixed-at-compile so the
+        //     trace shape is stable. ~30-50% faster than the legacy
+        //     host-loop fallback on `--accum >= 2`.
+        //
+        // Both light up only when the optimiser is AdamW *and* GaLore
+        // is off (GaLore mutates projector state out-of-graph). The
+        // legacy compile-off-when-scheduled / compile-off-when-accum
+        // behaviour is preserved verbatim for non-AdamW optimisers and
+        // for the GaLore path, both of which fall through to the
+        // existing host-loop code below.
         let useSchedule = (lrSchedule == "cosine" || warmupSteps > 0)
         let initialLR: Float = useSchedule ? TrainSupport.lrAt(
             step: startStep, total: steps, warmup: warmupSteps,
             maxLR: maxLR, minLR: minLR
         ) : maxLR
         let B = batchSize ?? defaultBatch(cfg)
-        // GaLore mutates its projector state out-of-graph, so it forces
-        // the uncompiled path. Same constraint as LR scheduling /
-        // gradient accumulation.
         let galoreActive = (cfg.galoreRank ?? 0) > 0
-        let canCompile = !useSchedule && accumSteps == 1 && !galoreActive
+        // Pure constant-LR + no-accum: original compile path.
+        let legacyCompile = !useSchedule && accumSteps == 1 && !galoreActive
+        // New paths — only AdamW + non-GaLore. (`--qat` is OK; it lives
+        // inside the model's Linear forward, not the optimiser.)
+        let adamwCompileEligible = (optimizerKind == .adamw) && !galoreActive
+        // Benchmark instrumentation env vars (not user-facing) — let the
+        // bundle benchmark runner toggle items #1/#2 off without rebuilding.
+        let disableCompiledLR = ProcessInfo.processInfo.environment["TINYGPT_DISABLE_COMPILED_LR"] == "1"
+        let disableFusedAccum = ProcessInfo.processInfo.environment["TINYGPT_DISABLE_FUSED_ACCUM"] == "1"
+        let wantCompiledLR = adamwCompileEligible && useSchedule && !disableCompiledLR
+        let wantCompiledAccum = adamwCompileEligible && accumSteps > 1 && !disableFusedAccum
+        let canCompile = legacyCompile || wantCompiledLR || wantCompiledAccum
         let effectiveClip: Float? = gradClipNorm > 0 ? gradClipNorm : nil
         // Build the GaLore manager iff requested. Pass `nil` when off
         // — the trainer treats it as a no-op.
@@ -493,7 +556,9 @@ enum Train {
                               gradClipNorm: effectiveClip,
                               optimizer: optimizerKind,
                               galore: galoreManager,
-                              lrLayerDecay: cfg.lrLayerDecay)
+                              lrLayerDecay: cfg.lrLayerDecay,
+                              useCompiledLR: wantCompiledLR,
+                              accumMicroBatches: wantCompiledAccum ? accumSteps : nil)
 
         let effB = B * accumSteps
         print("""
@@ -519,7 +584,8 @@ enum Train {
         embed RMSNorm: \(cfg.useEmbeddingRMSNorm ? "on" : "off")
         qat:           \(cfg.qatBits.map { "int\($0) fake-quant + STE on every Linear" } ?? "off")
         save-every:    \(saveEvery.map { "\($0) steps · atomic" } ?? "end only")
-        compile:       \(canCompile ? "on" : (galoreActive ? "off (GaLore)" : useSchedule ? "off (LR scheduling)" : "off (gradient accumulation)"))
+        compile:       \(compileLabel(canCompile: canCompile, wantCompiledLR: wantCompiledLR, wantCompiledAccum: wantCompiledAccum, galoreActive: galoreActive, useSchedule: useSchedule, accumSteps: accumSteps, optimizerKind: optimizerKind))
+        prefetch:      \(prefetchBatches ? "on (background batch pipeline, capacity=2)" : "off")
         device:        \(Device.defaultDevice())
 
         """)
@@ -541,12 +607,34 @@ enum Train {
         var lastValLoss: Float? = nil
 
         // Closure-based sampling — works for both byte and BPE corpora.
-        // We've dropped the explicit prefetch pipeline because MLXArray
-        // construction blocks anyway; the saved overlap was small.
+        //
+        // Item #4 of the CPU-speedup bundle: when `--prefetch on`, spin
+        // a background thread that builds the next batch's MLXArrays
+        // (random byte/token sampling + Int32 fill + MLXArray buffer
+        // copy) while the training thread is busy launching kernels for
+        // the current step. The pipeline is bounded — capacity 2 means
+        // at most one batch sits ready ahead of the consumer.
+        //
+        // When off, the previous synchronous sampling path runs
+        // unchanged (zero overhead).
+        let pipeline: BatchPipeline? = prefetchBatches
+            ? BatchPipeline(sampler: sampleTrainBatch, batchSize: B,
+                            contextLength: cfg.contextLength, capacity: 2)
+            : nil
+        // Helper closure that calls into the pipeline when active and
+        // falls back to direct sampling otherwise.
+        let nextBatch: () -> (MLXArray, MLXArray) = {
+            if let p = pipeline { return p.next() }
+            return sampleTrainBatch(B, cfg.contextLength)
+        }
         var stoppedEarly = false
         var lastStep = startStep
         for step in startStep..<steps {
-            // LR schedule update — only meaningful when compile is off.
+            // LR schedule update. When `useCompiledLR` is on (AdamW +
+            // schedule), this still works: `optimizer.learningRate =`
+            // routes through `CompiledAdamW.learningRate.set` which
+            // `_updateInternal`s the underlying MLXArray in place — the
+            // compiled trace keeps using the same scalar object.
             if useSchedule {
                 trainer.optimizer.learningRate = TrainSupport.lrAt(
                     step: step, total: steps, warmup: warmupSteps,
@@ -555,7 +643,7 @@ enum Train {
             }
 
             if accumSteps == 1 {
-                let (x, y) = sampleTrainBatch(B, cfg.contextLength)
+                let (x, y) = nextBatch()
                 lastLoss = trainer.step(inputs: x, targets: y)
             } else {
                 // Collect N micro-batches before one optimizer update.
@@ -564,7 +652,7 @@ enum Train {
                 var micros: [(MLXArray, MLXArray)] = []
                 micros.reserveCapacity(accumSteps)
                 for _ in 0..<accumSteps {
-                    micros.append(sampleTrainBatch(B, cfg.contextLength))
+                    micros.append(nextBatch())
                 }
                 lastLoss = trainer.accumulatedStep(microBatches: micros)
             }
@@ -633,6 +721,9 @@ enum Train {
                 break
             }
         }
+        // Tear down the prefetcher's producer thread (if any). Safe to
+        // skip the remaining queued batches — we're done with them.
+        pipeline?.stop()
         let elapsed = -t0.timeIntervalSinceNow
         let stepsDone = lastStep - startStep
         let stepsPerSec = elapsed > 0 ? Double(stepsDone) / elapsed : 0
@@ -815,6 +906,31 @@ enum Train {
         }
     }
 
+    /// Human-readable status line for the `compile:` row of the run
+    /// banner. The matrix is small but real: legacy compile vs. new
+    /// LR-mutable compile vs. compiled accumulation vs. off-for-reason.
+    private static func compileLabel(
+        canCompile: Bool, wantCompiledLR: Bool, wantCompiledAccum: Bool,
+        galoreActive: Bool, useSchedule: Bool, accumSteps: Int,
+        optimizerKind: OptimizerKind
+    ) -> String {
+        if !canCompile {
+            if galoreActive { return "off (GaLore)" }
+            if useSchedule {
+                return "off (LR scheduling, --optimizer \(optimizerKind.rawValue))"
+            }
+            if accumSteps > 1 {
+                return "off (gradient accumulation, --optimizer \(optimizerKind.rawValue))"
+            }
+            return "off"
+        }
+        var bits: [String] = []
+        if wantCompiledLR { bits.append("schedule-safe LR") }
+        if wantCompiledAccum { bits.append("\(accumSteps)-step fused accum") }
+        if bits.isEmpty { return "on" }
+        return "on (\(bits.joined(separator: " + ")))"
+    }
+
     private static func defaultBatch(_ cfg: ModelConfig) -> Int {
         if cfg.dModel >= 1024 { return 2 }
         if cfg.dModel >= 512 { return 4 }
@@ -888,6 +1004,14 @@ enum Train {
                                            exchange for dramatically lower activation
                                            memory — unlocks bigger models / batches at
                                            the cost of speed.
+          --prefetch on|off               Async batch pipeline (item #4 of the CPU
+                                           speedup bundle). When on, a background
+                                           thread builds the next batch's MLXArrays
+                                           while the current step runs. Default off
+                                           — gains were 0-5% on tiny presets in
+                                           measurements; only flip this on for
+                                           large micro-batches where MLXArray
+                                           construction starts to bite.
           --qat int4|int8                 Quantization-Aware Training: each Linear's
                                            weight is fake-quantised on every forward
                                            (round-to-nearest in a per-output-row int

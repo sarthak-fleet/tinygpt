@@ -190,6 +190,29 @@ enum TrainSupport {
         signal(SIGINT, handler)
     }
 
+    // MARK: - CPU QoS
+
+    /// Bump the calling thread to `.userInteractive` QoS so macOS pins
+    /// it on a P-core. Used by `Train.run` and the bench harness so the
+    /// host-side driver of the MLX-Swift workload doesn't get demoted
+    /// to an E-core mid-run.
+    ///
+    /// Verifying the change actually took effect at the OS level:
+    ///   `powermetrics --samplers cpu_power -i 500` for ~10 s during a
+    ///   training run; look for P-cluster utilisation rising relative
+    ///   to the E-cluster compared to a baseline run without this call.
+    ///   See `docs/cpu_speedup_results.md` for the numbers we measured.
+    ///
+    /// Best-effort: a non-zero return from `pthread_set_qos_class_self_np`
+    /// is silently ignored (the run still works, just at default QoS).
+    static func bumpQoSToUserInteractive() {
+        // The Darwin C call signature is
+        //   int pthread_set_qos_class_self_np(qos_class_t qos_class,
+        //                                     int relative_priority);
+        // — `0` for relative priority puts us at the top of the class.
+        _ = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
+    }
+
     // MARK: - Train/val split + val loss eval
 
     /// Split a byte corpus into train + (optional) val partitions. The

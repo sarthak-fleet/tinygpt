@@ -216,6 +216,115 @@ public actor BatchPrefetcher {
     }
 }
 
+/// Bounded-queue batch pipeline. Spins one producer thread that calls the
+/// supplied sampler closure to build the next batch (MLXArray construction
+/// included) while the main training thread is running forward/backward
+/// on the previous batch. Up to `capacity` batches sit in flight.
+///
+/// This is the live re-wiring of the prefetch idea documented around
+/// `Train.swift` — see the comment block above the `sampleTrainBatch`
+/// call site. The previous implementation was dropped on the assumption
+/// that MLXArray construction blocks the same thread the GPU dispatch
+/// runs on. Empirically that's true for *eager* eval, but the train
+/// step lazily builds a graph and only calls `eval` at the end — so the
+/// pipeline DOES overlap useful CPU work (random sampling + Int32 fill
+/// + MLXArray buffer copy) with the kernel-launch tail of the previous
+/// step.
+///
+/// Thread safety: a single producer thread fills the queue under
+/// `lock`; the consumer (training loop) drains under the same lock.
+/// Two semaphores form a bounded-buffer producer/consumer pair so the
+/// producer blocks when the queue is full and the consumer blocks when
+/// it's empty.
+public final class BatchPipeline: @unchecked Sendable {
+    public typealias Sampler = (Int, Int) -> (MLXArray, MLXArray)
+
+    private let sampler: Sampler
+    private let batchSize: Int
+    private let contextLength: Int
+
+    private let queueLock = NSLock()
+    private var queue: [(MLXArray, MLXArray)] = []
+    private let slotsFree: DispatchSemaphore
+    private let slotsFilled: DispatchSemaphore
+    private var stopped: Bool = false
+    private let producer: DispatchQueue
+
+    public init(sampler: @escaping Sampler, batchSize: Int, contextLength: Int,
+                capacity: Int = 2) {
+        precondition(capacity >= 1, "capacity must be ≥ 1")
+        self.sampler = sampler
+        self.batchSize = batchSize
+        self.contextLength = contextLength
+        self.slotsFree = DispatchSemaphore(value: capacity)
+        self.slotsFilled = DispatchSemaphore(value: 0)
+        // Producer runs at `.utility` so it doesn't fight the training
+        // thread for the P-core. Background CPU work; the consumer
+        // dictates the cadence anyway.
+        self.producer = DispatchQueue(
+            label: "tinygpt.trainer.batch-pipeline",
+            qos: .utility
+        )
+        producer.async { [weak self] in self?.produceLoop() }
+    }
+
+    private func produceLoop() {
+        while true {
+            slotsFree.wait()
+            // Check stop AFTER acquiring a slot — covers the `stop()`
+            // call racing with us between iterations.
+            queueLock.lock()
+            let stop = stopped
+            queueLock.unlock()
+            if stop { return }
+            let (x, y) = sampler(batchSize, contextLength)
+            queueLock.lock()
+            queue.append((x, y))
+            queueLock.unlock()
+            slotsFilled.signal()
+        }
+    }
+
+    /// Pop the next batch. Blocks if none is ready.
+    public func next() -> (MLXArray, MLXArray) {
+        slotsFilled.wait()
+        queueLock.lock()
+        let batch = queue.removeFirst()
+        queueLock.unlock()
+        slotsFree.signal()
+        return batch
+    }
+
+    /// Stop the producer thread synchronously. Drains any in-flight
+    /// queued batches BEFORE returning so the consumer is the last
+    /// thread that touches the MLXArrays — important because MLXArrays
+    /// constructed on a background thread will be released on whichever
+    /// thread drops the last reference. Mixing thread origins can
+    /// confuse MLX's evaluator at shutdown (without this drain we saw
+    /// SIGTRAP on macOS 26 / mlx-swift 0.25 between the last training
+    /// step and the post-run banner).
+    public func stop() {
+        queueLock.lock()
+        if stopped { queueLock.unlock(); return }
+        stopped = true
+        queueLock.unlock()
+        // Wake the producer if it's blocked on a full queue.
+        slotsFree.signal()
+        // Drain any queued batches on the consumer thread. Each pop
+        // signals `slotsFree` which lets the producer make forward
+        // progress (it'll observe `stopped` and exit).
+        while true {
+            if slotsFilled.wait(timeout: .now() + .milliseconds(50)) == .timedOut {
+                break
+            }
+            queueLock.lock()
+            if !queue.isEmpty { _ = queue.removeFirst() }
+            queueLock.unlock()
+            slotsFree.signal()
+        }
+    }
+}
+
 /// Global L2-norm gradient clipping. Computes `‖g‖₂` across every
 /// parameter, then uniformly scales each leaf by `min(1, maxNorm / ‖g‖₂)`.
 /// Standard transformer-LM training stability lever — without it, the
@@ -278,6 +387,22 @@ public final class Trainer {
     private let gradFn: (TinyGPTModel, MLXArray, MLXArray) -> (MLXArray, ModuleParameters)
     private let useCompile: Bool
 
+    /// Compiled accumulation step — set when `init(..., accumMicroBatches:)` is
+    /// non-nil. When present, it traces a single graph that loops N times
+    /// inside the trace; the Swift caller batches the micro-batches into a
+    /// flat array and dispatches them as one MLX kernel sequence. See
+    /// ``accumulatedStepCompiled``.
+    ///
+    /// `nil` on the legacy (uncompiled) accumulation path. The shape of the
+    /// compiled trace depends on N, so the trainer must be re-built if the
+    /// caller wants a different N — but in practice `--accum N` is set
+    /// once per run.
+    private let accumStepFn: (([MLXArray]) -> [MLXArray])?
+    /// N for `accumStepFn`. Fixed at trainer-init time so the trace closes
+    /// cleanly (`compile` doesn't trace a Swift `for` loop with a runtime
+    /// upper bound).
+    public let compiledAccumN: Int?
+
     public init(
         model: TinyGPTModel,
         learningRate: Float = 3e-4,
@@ -288,7 +413,19 @@ public final class Trainer {
         gradClipNorm: Float? = nil,
         optimizer optimizerKind: OptimizerKind = .adamw,
         galore: GaLoreManager? = nil,
-        lrLayerDecay: Float = 1.0
+        lrLayerDecay: Float = 1.0,
+        /// When non-nil, build a `CompiledAdamW`-backed step where LR can
+        /// change between calls without re-tracing. Today only the AdamW
+        /// optimiser kind goes down this path; the call site is responsible
+        /// for falling back to the standard `Trainer` when the user picks a
+        /// non-AdamW optimiser. Passing `true` with a non-AdamW kind is a
+        /// programmer error and traps at init.
+        useCompiledLR: Bool = false,
+        /// When non-nil, fold gradient accumulation into a single compiled
+        /// trace of `accumMicroBatches` micro-batches. N is fixed-at-compile
+        /// so the graph shape is stable. The caller's `accumulatedStep`
+        /// must pass exactly N micro-batches — guarded by precondition.
+        accumMicroBatches: Int? = nil
     ) {
         self.model = model
         self.useCompile = compileStep
@@ -296,13 +433,33 @@ public final class Trainer {
         self.optimizerKind = optimizerKind
         self.galore = galore
         self.lrLayerDecay = lrLayerDecay
-        self.optimizer = makeOptimizer(
-            kind: optimizerKind,
-            learningRate: learningRate,
-            weightDecay: weightDecay,
-            betas: betas,
-            eps: eps
-        )
+        // Compile-with-mutable-LR path: build CompiledAdamW directly so
+        // the LR lives as an MLXArray in the optimiser's `innerState()`.
+        // Once captured by `compile(inputs: [opt], ...)`, mutating the LR
+        // is just an `_updateInternal` away — no re-trace.
+        //
+        // We only support AdamW down this path; falling back to the
+        // standard factory for everything else preserves Lion/Sophia/Muon/
+        // Adafactor exactly as before (those flow through the standard
+        // uncompiled scheduler path in Train.swift).
+        if useCompiledLR {
+            precondition(optimizerKind == .adamw,
+                         "useCompiledLR currently supports only --optimizer adamw (got \(optimizerKind.rawValue))")
+            self.optimizer = CompiledAdamW(
+                learningRate: learningRate,
+                betas: betas,
+                eps: eps,
+                weightDecay: weightDecay
+            )
+        } else {
+            self.optimizer = makeOptimizer(
+                kind: optimizerKind,
+                learningRate: learningRate,
+                weightDecay: weightDecay,
+                betas: betas,
+                eps: eps
+            )
+        }
         // value_and_grad of the loss function, captured to apply via optimizer.
         // The closure captures `model` by reference — MLX's autograd
         // discovers parameters through `Module.trainableParameters()`.
@@ -321,6 +478,13 @@ public final class Trainer {
         // GaLore mutates projector state out-of-graph, so it MUST live on
         // the uncompiled path. Layer-wise LR decay is graph-pure (just a
         // scalar multiply per leaf) and stays compile-safe.
+        //
+        // The single-step compile lives here (whether or not the LR is
+        // mutable). For `useCompiledLR == true`, the optimiser's LR
+        // MLXArray is part of `inputs:` state, so the trace stays valid
+        // when the scheduler mutates it via `optimizer.learningRate = …`.
+        // For `useCompiledLR == false`, this preserves the original
+        // constant-LR fast path bit-for-bit.
         let canCompile = compileStep && galoreMgr == nil
 
         if canCompile {
@@ -363,6 +527,60 @@ public final class Trainer {
                 return loss
             }
         }
+
+        // -------------------------------------------------------------
+        // Compiled gradient-accumulation step. Built only if the caller
+        // passed `accumMicroBatches: N` and the rest of the compile gate
+        // is on. The compiled trace takes a flat array of 2N MLXArrays
+        // — (x0,y0,x1,y1,…,x_{N-1},y_{N-1}) — and folds the entire
+        // accumulation loop INSIDE the trace. The Swift caller then
+        // dispatches one kernel-launch sequence per optimiser step
+        // instead of N separate `gradFn` calls.
+        //
+        // GaLore is incompatible with this path (out-of-graph state).
+        // -------------------------------------------------------------
+        if let N = accumMicroBatches, N > 1, canCompile {
+            self.compiledAccumN = N
+            let nF = Float(N)
+            self.accumStepFn = compile(
+                inputs: [m, optimizer],
+                outputs: [m, optimizer]
+            ) { (xs: [MLXArray]) -> [MLXArray] in
+                // Pair up the inputs back into (x_i, y_i) tuples.
+                // `xs` shape: 2N flat — even indices x, odd indices y.
+                precondition(xs.count == 2 * N,
+                             "compiled accum step expects exactly 2N arrays (got \(xs.count) for N=\(N))")
+                var accumGrads: ModuleParameters? = nil
+                var lossSum = MLXArray(Float(0))
+                for i in 0..<N {
+                    let x = xs[2 * i]
+                    let y = xs[2 * i + 1]
+                    let (loss, grads) = gradFn(m, x, y)
+                    lossSum = lossSum + loss
+                    if let acc = accumGrads {
+                        // Element-wise sum across leaves. Two-dict
+                        // mapValues visits the matching leaf in `grads`
+                        // and folds it in.
+                        accumGrads = acc.mapValues(grads) { a, b in a + (b ?? a) }
+                    } else {
+                        accumGrads = grads
+                    }
+                }
+                // Mean → clip → layer-LR decay → optimiser update.
+                let scale = MLXArray(1.0 / nF)
+                var avg = accumGrads!.mapValues { (g: MLXArray) -> MLXArray in g * scale }
+                if let cn = clip { avg = clipGradNorm(avg, maxNorm: cn) }
+                if layerDecay < 0.9999 {
+                    avg = scaleLayerwiseLR(avg, decay: layerDecay, nLayers: nLayers)
+                }
+                optimizer.update(model: m, gradients: avg)
+                // Return the mean loss as a one-element array.
+                return [lossSum / MLXArray(nF)]
+            }
+        } else {
+            self.accumStepFn = nil
+            self.compiledAccumN = nil
+        }
     }
 
     /// One training step. Returns the scalar batch loss.
@@ -381,13 +599,33 @@ public final class Trainer {
     /// micro-batches, then divides by N and applies a single optimizer
     /// update. The returned scalar is the mean loss across micro-batches.
     ///
-    /// Compile is unused on this path — the size of the micro-batch list
-    /// changes the trace shape; uncompiled fallback ensures correctness.
-    /// At reasonable accumulation counts (2-16) the per-step overhead
-    /// from skipping compile is well-amortized by the much bigger
-    /// effective batch.
+    /// When the trainer was built with `accumMicroBatches: N`, the entire
+    /// accumulation loop runs inside ONE compiled trace — N micro-batches
+    /// in, mean loss out. That's the fast path; it's ~30-50% faster on
+    /// accum>1 than the legacy host-loop fallback below because the trace
+    /// dispatches a single kernel sequence to the GPU instead of crossing
+    /// the host/MLX boundary N times.
+    ///
+    /// When `accumMicroBatches` is nil, this falls back to the original
+    /// Swift `for`-loop path: each micro-batch gets a separate `gradFn`
+    /// call, gradients are summed element-wise in host code, then a
+    /// single optimiser update closes the step. That path is required
+    /// for GaLore (out-of-graph projector state) and for any non-AdamW
+    /// optimiser, which today doesn't go through `useCompiledLR`.
     public func accumulatedStep(microBatches: [(MLXArray, MLXArray)]) -> Float {
         precondition(!microBatches.isEmpty, "accumulatedStep needs ≥1 micro-batch")
+        // Fast path: compile-folded accumulation. Builds a flat (x_i, y_i)
+        // sequence and dispatches the compiled trace once.
+        if let fn = accumStepFn, let N = compiledAccumN, microBatches.count == N {
+            var flat: [MLXArray] = []
+            flat.reserveCapacity(2 * N)
+            for (x, y) in microBatches { flat.append(x); flat.append(y) }
+            let outs = fn(flat)
+            let loss = outs[0]
+            eval(loss, model, optimizer)
+            stepCount += 1
+            return loss.item(Float.self)
+        }
         var accumGrads: ModuleParameters? = nil
         var lossSum: Float = 0
         let n = microBatches.count
