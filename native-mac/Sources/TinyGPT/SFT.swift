@@ -41,6 +41,15 @@ enum SFT {
         var peftVariant: PeftVariant = .lora
         var adaLoraTargetRank = 0
         var layerDropProb: Float = 0
+        // pack-mode: explicit selector replacing the legacy --pack flag.
+        //   none     — uniform pick (sampleBatch)
+        //   sequence — multi-example rows (sampleBatchPacked, == --pack)
+        //   sample   — inverse-length weighted (sampleBatchWeighted)
+        //   bucket   — length-bucket uniform (sampleBatchBucketed)
+        // When --pack is passed without --pack-mode, it maps to "sequence"
+        // for backwards compat.
+        var packMode = "none"
+        var lengthBuckets = 0
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -57,6 +66,8 @@ enum SFT {
             case "--grad-clip":     gradClipNorm = Float(args[i+1]) ?? gradClipNorm; i += 2
             case "--lora-plus-ratio": loraPlusRatio = Float(args[i+1]) ?? loraPlusRatio; i += 2
             case "--pack":          packSequences = true; i += 1
+            case "--pack-mode":     packMode = args[i+1]; i += 2
+            case "--length-bucket": lengthBuckets = Int(args[i+1]) ?? lengthBuckets; i += 2
             case "--dora":          useDora = true; i += 1
             case "--vera":          peftVariant = .vera; i += 1
             case "--rs-lora":       peftVariant = .rsLora; i += 1
@@ -153,6 +164,17 @@ enum SFT {
         }
         let corpus = SFTCorpus(examples, vocabSize: cfg.vocabSize)
 
+        // Resolve pack-mode: legacy --pack wins if --pack-mode is left at
+        // default. Sanity-check unknown modes.
+        if packSequences && packMode == "none" { packMode = "sequence" }
+        switch packMode {
+        case "none", "sequence", "sample", "bucket": break
+        default:
+            fputs("unknown --pack-mode '\(packMode)'. Options: none, sequence, sample, bucket\n", stderr)
+            exit(2)
+        }
+        if packMode == "bucket" && lengthBuckets < 1 { lengthBuckets = 4 }
+
         let B = batchSize ?? defaultBatch(cfg)
         let T = effectiveMax
         let templatedTokens = examples.map { $0.tokens.count }.reduce(0, +)
@@ -174,7 +196,7 @@ enum SFT {
         NEFTune:        \(nefTuneAlpha > 0 ? "alpha=\(nefTuneAlpha)" : "off")
         grad clip:      \(gradClipNorm > 0 ? "global L2 ≤ \(gradClipNorm)" : "off")
         LoRA+:          \(loraPlusRatio > 1 ? "B-LR × \(loraPlusRatio)" : "off")
-        packing:        \(packSequences ? "on (multi-example rows)" : "off (one-per-row)")
+        packing:        \(packModeDescription(packMode, buckets: lengthBuckets))
         device:         \(Device.defaultDevice())
 
         """)
@@ -194,9 +216,19 @@ enum SFT {
         var stoppedEarly = false
         var lastStep = 0
         for step in 0..<steps {
-            let (x, y, m) = packSequences
-                ? corpus.sampleBatchPacked(batchSize: B, contextLength: T)
-                : corpus.sampleBatch(batchSize: B, contextLength: T)
+            let (x, y, m): (MLXArray, MLXArray, MLXArray)
+            switch packMode {
+            case "sequence":
+                (x, y, m) = corpus.sampleBatchPacked(batchSize: B, contextLength: T)
+            case "sample":
+                (x, y, m) = corpus.sampleBatchWeighted(batchSize: B, contextLength: T)
+            case "bucket":
+                (x, y, m) = corpus.sampleBatchBucketed(
+                    batchSize: B, contextLength: T, nBuckets: lengthBuckets
+                )
+            default:
+                (x, y, m) = corpus.sampleBatch(batchSize: B, contextLength: T)
+            }
             lastLoss = stepFn(x, y, m)
             lastStep = step + 1
             if step == 0 || (step + 1) % 25 == 0 || step == steps - 1 {
@@ -296,6 +328,15 @@ enum SFT {
         return 16
     }
 
+    private static func packModeDescription(_ mode: String, buckets: Int) -> String {
+        switch mode {
+        case "sequence": return "sequence (multi-example rows, greedy fit)"
+        case "sample":   return "sample (inverse-length weighted; short examples over-represented)"
+        case "bucket":   return "bucket (uniform over \(buckets) length buckets)"
+        default:         return "none (uniform pick, one-per-row)"
+        }
+    }
+
     private static func formatNum(_ n: Int) -> String {
         let f = NumberFormatter(); f.numberStyle = .decimal
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
@@ -319,9 +360,22 @@ enum SFT {
         --grad-clip F            Global L2 grad-norm cap (default 1.0). Pass 0 to disable.
         --lora-plus-ratio F      LoRA+ B-matrix LR multiplier (Hayou et al., 2024).
                                    1.0 (default) = standard LoRA; 16.0 is the recipe.
-        --pack                   Pack multiple short examples per row (greedy fit).
-                                   3-10× effective batch on short SFT data; attention
-                                   is not block-masked (naive packing).
+        --pack                   Alias for --pack-mode sequence (back-compat).
+        --pack-mode MODE         How to construct each batch (default none):
+                                   none     — uniform random pick (one example per row)
+                                   sequence — multi-example rows (greedy fit, ~3-10×
+                                              effective batch on short SFT data;
+                                              attention not block-masked)
+                                   sample   — inverse-length weighted sampling. Short
+                                              examples picked more often so each
+                                              example contributes ~equally per step.
+                                              Counters the natural batch bias toward
+                                              long examples.
+                                   bucket   — length-bucket uniform: bin examples into
+                                              --length-bucket buckets, pick a bucket
+                                              uniformly, then a uniform example from it.
+        --length-bucket N        Number of length buckets for --pack-mode bucket
+                                   (default 4 when --pack-mode bucket is set).
         --dora                   Use DoRA instead of LoRA (Liu et al., 2024).
                                    Adds a learnable per-output magnitude vector to
                                    each wrapped Linear; better quality at same rank.

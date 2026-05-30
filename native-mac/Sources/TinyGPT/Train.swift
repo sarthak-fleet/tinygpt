@@ -98,6 +98,15 @@ enum Train {
         var lrLayerDecay: Float = 1.0
         // Apply RMSNorm right after the token embedding lookup.
         var useEmbeddingRMSNorm: Bool = false
+        // BPE-dropout (Provilkov et al., ACL 2020). Per-merge skip
+        // probability — the same surface text yields a slightly
+        // different token sequence across epochs, giving the model a
+        // light tokenization regulariser. 0 = off (default); 0.1 is the
+        // Provilkov paper's recommendation for "BPE families with 30k+
+        // vocab". Only active when `--tokenizer` is also set (byte-
+        // level BPE). The dropout encoder reads `tokenizer.json`
+        // directly — see BPEDropout.swift for the rationale.
+        var bpeDropout: Float = 0
 
         var i = 0
         while i < args.count {
@@ -142,6 +151,7 @@ enum Train {
             case "--deep-norm":          useDeepNorm = true; i += 1
             case "--lr-layer-decay":     lrLayerDecay = Float(args[i+1]) ?? 1.0; i += 2
             case "--embedding-rmsnorm":  useEmbeddingRMSNorm = true; i += 1
+            case "--bpe-dropout":    bpeDropout = Float(args[i+1]) ?? bpeDropout; i += 2
             case "-h", "--help":  exitUsage()
             default:
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -336,8 +346,12 @@ enum Train {
                                                 vocabSize: cfg.vocabSize)
             let fileSize = ((try? FileManager.default.attributesOfItem(atPath: p))?[.size]
                             as? NSNumber)?.intValue ?? 0
+            // When BPE-dropout is active we'll stream-tokenize anyway, so
+            // skip the up-front encode entirely.
             let tokens: [Int32]
-            if let cu = cacheURL, let cached = TokenCache.read(cu) {
+            if bpeDropout > 0 {
+                tokens = []
+            } else if let cu = cacheURL, let cached = TokenCache.read(cu) {
                 tokens = cached
                 print("loaded \(formatLargeInt(tokens.count)) tokens from cache: \(cu.lastPathComponent)")
             } else {
@@ -359,13 +373,54 @@ enum Train {
                     }
                 }
             }
-            let full = TokenizedCorpus(tokens: tokens, vocabSize: cfg.vocabSize)
-            let (tr, va) = full.split(valSplit: valSplit)
-            sampleTrainBatch = { B, T in tr.sampleBatch(batchSize: B, contextLength: T) }
-            valSampleBatch = va.map { v in { B, T in v.sampleBatch(batchSize: B, contextLength: T) } }
-            corpusSummary = "\(corpusPath ?? "<text>") (\(formatBytes(fileSize)) · \(formatLargeInt(tokens.count)) BPE tokens · vocab=\(cfg.vocabSize))"
-            trainSummary = "\(formatLargeInt(tr.tokens.count)) tokens"
-            valSummary = va.map { "\(formatLargeInt($0.tokens.count)) tokens" } ?? "—"
+            // BPE-dropout (Provilkov et al., 2020): re-tokenise each batch
+            // on the fly with random merge skips. We load merges + vocab
+            // directly from tokenizer.json (path b — see BPEDropout.swift)
+            // because swift-transformers' BPE is module-internal.
+            //
+            // We only switch to streaming when bpeDropout > 0 AND the
+            // tokenizer.json describes a byte-level BPE model — otherwise
+            // we silently keep the cached path (no regularisation, full
+            // speed).
+            var streamCorpus: StreamingTokenizedCorpus? = nil
+            var streamVal: TokenizedCorpus? = nil
+            if bpeDropout > 0 {
+                let tokenizerJSON = tokDir.appendingPathComponent("tokenizer.json")
+                let loadedDropTok: BPEDropoutTokenizer?
+                do { loadedDropTok = try BPEDropoutTokenizer.loadFromTokenizerJSON(tokenizerJSON) }
+                catch { loadedDropTok = nil }
+                if let dropTok = loadedDropTok, dropTok.isByteLevel {
+                    let text: String
+                    do { text = try String(contentsOfFile: p, encoding: .utf8) }
+                    catch { fputs("error reading corpus for streaming: \(error)\n", stderr); exit(1) }
+                    print("BPE-dropout: streaming corpus with p_drop=\(bpeDropout) (re-tokenizing per batch)")
+                    let stream = StreamingTokenizedCorpus(
+                        text: text, tokenizer: dropTok,
+                        vocabSize: cfg.vocabSize, pDrop: bpeDropout
+                    )
+                    let (tr, va) = stream.split(valSplit: valSplit)
+                    streamCorpus = tr
+                    streamVal = va
+                } else {
+                    fputs("warning: --bpe-dropout requested but tokenizer isn't byte-level BPE — skipping.\n", stderr)
+                }
+            }
+            if let tr = streamCorpus {
+                let va = streamVal
+                sampleTrainBatch = { B, T in tr.sampleBatch(batchSize: B, contextLength: T) }
+                valSampleBatch = va.map { v in { B, T in v.sampleBatch(batchSize: B, contextLength: T) } }
+                corpusSummary = "\(corpusPath ?? "<text>") (\(formatBytes(fileSize)) · streaming · BPE-dropout=\(bpeDropout) · vocab=\(cfg.vocabSize))"
+                trainSummary = "\(formatBytes(tr.text.utf8.count)) (streamed)"
+                valSummary = va.map { "\(formatLargeInt($0.tokens.count)) tokens (frozen)" } ?? "—"
+            } else {
+                let full = TokenizedCorpus(tokens: tokens, vocabSize: cfg.vocabSize)
+                let (tr, va) = full.split(valSplit: valSplit)
+                sampleTrainBatch = { B, T in tr.sampleBatch(batchSize: B, contextLength: T) }
+                valSampleBatch = va.map { v in { B, T in v.sampleBatch(batchSize: B, contextLength: T) } }
+                corpusSummary = "\(corpusPath ?? "<text>") (\(formatBytes(fileSize)) · \(formatLargeInt(tokens.count)) BPE tokens · vocab=\(cfg.vocabSize))"
+                trainSummary = "\(formatLargeInt(tr.tokens.count)) tokens"
+                valSummary = va.map { "\(formatLargeInt($0.tokens.count)) tokens" } ?? "—"
+            }
         } else {
             let corpusFull: ByteCorpus
             if let p = corpusPath {
@@ -781,6 +836,14 @@ enum Train {
           --optimizer K                   AdamW (default) | lion | sophia | muon | adafactor.
                                            See docs/optimizers.md for memory + tradeoffs.
                                            Drop-in: same --max-lr / --weight-decay etc.
+          --bpe-dropout F                 BPE-dropout (Provilkov et al., 2020): per-merge
+                                           skip probability. 0 = off (default); 0.1 is
+                                           the recommended value. Only applies when
+                                           --tokenizer points to a byte-level BPE model
+                                           (GPT-2/Llama/Qwen/Gemma/Phi families). The
+                                           corpus is re-tokenised per batch (streaming),
+                                           which is slower but lets the same text yield
+                                           varied token sequences across epochs.
           --grad-checkpoint               Activation (gradient) checkpointing. Wraps each
                                            TransformerBlock's forward in a CustomFunction
                                            whose VJP recomputes the block forward at

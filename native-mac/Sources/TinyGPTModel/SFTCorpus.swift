@@ -16,11 +16,40 @@ import MLX
 public final class SFTCorpus: Sendable {
     public let examples: [SFTExample]
     public let vocabSize: Int
+    /// Inverse-length sampling weights (∝ 1/length). Pre-computed cumulative
+    /// distribution so each `sampleBatchWeighted` pick is O(log N).
+    private let cumulativeWeights: [Double]
 
     public init(_ examples: [SFTExample], vocabSize: Int) {
         precondition(!examples.isEmpty, "SFTCorpus needs at least one example")
         self.examples = examples
         self.vocabSize = vocabSize
+        // Inverse-length weights — short examples get over-represented so
+        // batches see them as often as long ones in expectation. Add a +1
+        // floor to avoid div-by-zero on degenerate (single-token) examples.
+        var running: Double = 0
+        var cum: [Double] = []
+        cum.reserveCapacity(examples.count)
+        for ex in examples {
+            let len = max(1, ex.tokens.count)
+            running += 1.0 / Double(len)
+            cum.append(running)
+        }
+        self.cumulativeWeights = cum
+    }
+
+    /// Sampled index from the inverse-length distribution using binary
+    /// search on the cumulative weights. O(log N) per draw.
+    private func weightedIndex() -> Int {
+        guard let total = cumulativeWeights.last, total > 0 else { return 0 }
+        let target = Double.random(in: 0..<total)
+        var lo = 0
+        var hi = cumulativeWeights.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if cumulativeWeights[mid] < target { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
     }
 
     /// Sample a batch by random replacement from `examples`. Each example
@@ -52,6 +81,110 @@ public final class SFTCorpus: Sendable {
             MLXArray(tgs, [B, T]),
             MLXArray(msk, [B, T])
         )
+    }
+
+    /// Sample-packed sampling: same shape as `sampleBatch` (one example per
+    /// row, padded), but draws each row from an inverse-length-weighted
+    /// distribution. Short examples are over-represented so that, on
+    /// expectation, each example contributes (length × frequency) ≈ const
+    /// — counteracts the natural bias in `sampleBatch` where long examples
+    /// dominate the per-step token budget.
+    ///
+    /// Use this when the corpus has a heavy long-tail of long examples and
+    /// you want the model to see the short ones more often (instruction
+    /// datasets are usually like this).
+    public func sampleBatchWeighted(batchSize B: Int, contextLength T: Int)
+        -> (inputs: MLXArray, targets: MLXArray, mask: MLXArray)
+    {
+        var ins = [Int32](repeating: 0, count: B * T)
+        var tgs = [Int32](repeating: 0, count: B * T)
+        var msk = [Float](repeating: 0, count: B * T)
+        for i in 0..<B {
+            let ex = examples[weightedIndex()]
+            let seq = Array(ex.tokens.prefix(T + 1))
+            let mask = Array(ex.responseMask.prefix(T + 1))
+            let usable = min(seq.count - 1, T)
+            for j in 0..<usable {
+                ins[i * T + j] = seq[j]
+                tgs[i * T + j] = seq[j + 1]
+                msk[i * T + j] = mask[j + 1] ? 1.0 : 0.0
+            }
+        }
+        return (
+            MLXArray(ins, [B, T]),
+            MLXArray(tgs, [B, T]),
+            MLXArray(msk, [B, T])
+        )
+    }
+
+    /// Length-bucketed sampling: bins examples into `nBuckets` buckets by
+    /// token length (equal-width on a linear scale), picks a bucket
+    /// uniformly at random per row, then a uniform example from that bucket.
+    /// Empty buckets are skipped. Effect: each LENGTH REGIME (short / mid /
+    /// long) is seen equally often, regardless of how skewed the
+    /// per-length population is.
+    public func sampleBatchBucketed(batchSize B: Int, contextLength T: Int,
+                                     nBuckets: Int)
+        -> (inputs: MLXArray, targets: MLXArray, mask: MLXArray)
+    {
+        precondition(nBuckets >= 1, "nBuckets must be ≥1")
+        // Build buckets lazily on first call would force mutation; cheaper to
+        // just rebuild each batch — N examples + binning is sub-millisecond
+        // for any reasonable corpus.
+        let lens = examples.map { $0.tokens.count }
+        let minLen = lens.min() ?? 1
+        let maxLen = lens.max() ?? 1
+        var buckets: [[Int]] = Array(repeating: [], count: nBuckets)
+        if minLen == maxLen {
+            buckets[0] = Array(0..<examples.count)
+        } else {
+            let span = Double(maxLen - minLen)
+            for (i, l) in lens.enumerated() {
+                let frac = Double(l - minLen) / span
+                var b = Int(frac * Double(nBuckets))
+                if b >= nBuckets { b = nBuckets - 1 }
+                buckets[b].append(i)
+            }
+        }
+        let nonEmpty = buckets.filter { !$0.isEmpty }
+        precondition(!nonEmpty.isEmpty, "no non-empty buckets")
+        var ins = [Int32](repeating: 0, count: B * T)
+        var tgs = [Int32](repeating: 0, count: B * T)
+        var msk = [Float](repeating: 0, count: B * T)
+        for i in 0..<B {
+            let bucket = nonEmpty[Int.random(in: 0..<nonEmpty.count)]
+            let idx = bucket[Int.random(in: 0..<bucket.count)]
+            let ex = examples[idx]
+            let seq = Array(ex.tokens.prefix(T + 1))
+            let mask = Array(ex.responseMask.prefix(T + 1))
+            let usable = min(seq.count - 1, T)
+            for j in 0..<usable {
+                ins[i * T + j] = seq[j]
+                tgs[i * T + j] = seq[j + 1]
+                msk[i * T + j] = mask[j + 1] ? 1.0 : 0.0
+            }
+        }
+        return (
+            MLXArray(ins, [B, T]),
+            MLXArray(tgs, [B, T]),
+            MLXArray(msk, [B, T])
+        )
+    }
+
+    /// For diagnostics: return the inverse-length weight for each example
+    /// (normalized so they sum to 1).
+    public var inverseLengthWeights: [Double] {
+        guard let total = cumulativeWeights.last, total > 0 else {
+            return Array(repeating: 0, count: examples.count)
+        }
+        var out: [Double] = []
+        out.reserveCapacity(cumulativeWeights.count)
+        var prev: Double = 0
+        for c in cumulativeWeights {
+            out.append((c - prev) / total)
+            prev = c
+        }
+        return out
     }
 
     /// Sequence-packed sampling: greedy-fill each row by concatenating

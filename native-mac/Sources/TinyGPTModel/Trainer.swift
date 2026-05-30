@@ -94,6 +94,110 @@ public final class TokenizedCorpus: Sendable {
     }
 }
 
+/// Streaming-tokenization corpus for BPE-dropout training. Stores the
+/// source text plus a `BPEDropoutTokenizer`, and re-tokenises a random
+/// text window for each batch. Output shape matches `TokenizedCorpus.
+/// sampleBatch`, so callers swap in transparently.
+///
+/// Why "streaming"? With BPE-dropout enabled (`pDrop > 0`), the same
+/// character window yields a slightly different token sequence on each
+/// re-encode. Caching tokens up-front and slicing — the path the static
+/// `TokenizedCorpus` takes — would defeat the regulariser. The cost is
+/// ~5-15× slower batch construction; for from-scratch transformer
+/// training the GPU step still dominates, but on huge batches you'll
+/// notice it.
+///
+/// When pDrop == 0 this still re-tokenises each batch and is therefore
+/// strictly slower than the cached path — use it only when dropout is on.
+public final class StreamingTokenizedCorpus: @unchecked Sendable {
+    public let text: String
+    public let pDrop: Float
+    public let vocabSize: Int
+    public let tokenizer: BPEDropoutTokenizer
+    /// Cumulative-byte index over the text, scanned via UTF-8 to a String
+    /// for safe substring indexing. Stored as UTF-8 view so random window
+    /// starts don't crash on multi-byte boundaries.
+    private let utf8Bytes: [UInt8]
+
+    public init(text: String, tokenizer: BPEDropoutTokenizer,
+                 vocabSize: Int, pDrop: Float)
+    {
+        self.text = text
+        self.tokenizer = tokenizer
+        self.vocabSize = vocabSize
+        self.pDrop = pDrop
+        self.utf8Bytes = [UInt8](text.utf8)
+    }
+
+    /// Pull a random text window, tokenise it with dropout, take the
+    /// first T+1 tokens. If a window happens to produce fewer than T+1
+    /// tokens (rare; pathological strings of long-merge runs), re-sample.
+    /// Retries are capped to avoid pathological loops on tiny corpora.
+    public func sampleBatch(batchSize B: Int, contextLength T: Int) -> (MLXArray, MLXArray) {
+        let (inputs, targets) = sampleBatchRaw(batchSize: B, contextLength: T)
+        return (MLXArray(inputs, [B, T]), MLXArray(targets, [B, T]))
+    }
+
+    public func sampleBatchRaw(batchSize B: Int, contextLength T: Int) -> ([Int32], [Int32]) {
+        var inputs = [Int32](repeating: 0, count: B * T)
+        var targets = [Int32](repeating: 0, count: B * T)
+        // Heuristic: assume ~3 bytes per token on average for English BPE
+        // — over-shoot by 2× so retries are rare. T+1 tokens need ~3(T+1)
+        // bytes; we'll grab 8(T+1) to be safe.
+        let windowBytes = max(64, 8 * (T + 1))
+        let totalBytes = utf8Bytes.count
+        precondition(totalBytes > windowBytes, "corpus too small for streaming dropout (need \(windowBytes) bytes, have \(totalBytes))")
+        for i in 0..<B {
+            var attempt = 0
+            while attempt < 4 {
+                let start = Int.random(in: 0..<(totalBytes - windowBytes))
+                // Snap to a valid UTF-8 boundary by stepping forward until
+                // we find a non-continuation byte (top two bits != 0b10).
+                var s = start
+                while s < totalBytes && (utf8Bytes[s] & 0xC0) == 0x80 { s += 1 }
+                let e = min(s + windowBytes, totalBytes)
+                let slice = utf8Bytes[s..<e]
+                guard let chunk = String(bytes: slice, encoding: .utf8) else {
+                    attempt += 1; continue
+                }
+                let ids = tokenizer.encodeWithDropout(chunk, pDrop: pDrop)
+                if ids.count < T + 1 { attempt += 1; continue }
+                for j in 0..<T {
+                    inputs[i * T + j] = Int32(ids[j])
+                    targets[i * T + j] = Int32(ids[j + 1])
+                }
+                break
+            }
+            // If we never got a full window, leave the row zeroed — loss
+            // contribution is unavoidable but cheap and rare.
+        }
+        return (inputs, targets)
+    }
+
+    /// Hold out the last `valSplit` fraction as a validation set —
+    /// matches `TokenizedCorpus.split`. The validation corpus is wrapped
+    /// in a `TokenizedCorpus` (no dropout) for deterministic val loss.
+    public func split(valSplit: Double) -> (train: StreamingTokenizedCorpus, val: TokenizedCorpus?) {
+        guard valSplit > 0, valSplit < 0.5 else { return (self, nil) }
+        let total = utf8Bytes.count
+        let valCount = max(1, Int(Double(total) * valSplit))
+        let trainEnd = total - valCount
+        // Snap split point to UTF-8 boundary.
+        var split = trainEnd
+        while split < total && (utf8Bytes[split] & 0xC0) == 0x80 { split += 1 }
+        let trainText = String(bytes: utf8Bytes[0..<split], encoding: .utf8) ?? text
+        let valText = String(bytes: utf8Bytes[split..<total], encoding: .utf8) ?? ""
+        let train = StreamingTokenizedCorpus(text: trainText, tokenizer: tokenizer,
+                                              vocabSize: vocabSize, pDrop: pDrop)
+        // Val tokens encoded once, no dropout, then frozen.
+        let valIds = tokenizer.encodeWithDropout(valText, pDrop: 0).map { Int32($0) }
+        let val = valIds.count > 2
+            ? TokenizedCorpus(tokens: valIds, vocabSize: vocabSize)
+            : nil
+        return (train, val)
+    }
+}
+
 /// Async batch prefetcher — pipelines CPU-side batch construction with the
 /// previous step's GPU compute. Maintains one pre-built batch ahead.
 public actor BatchPrefetcher {
