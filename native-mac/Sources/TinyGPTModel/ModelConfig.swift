@@ -127,6 +127,19 @@ public struct ModelConfig: Sendable, Equatable {
     /// same memory profile, but inference/sample paths never read it.
     public var useGradCheckpoint: Bool
 
+    /// Default KIVI precision for sample-time KV cache. `nil` = sample
+    /// uses fp32/fp16/bf16 KV cache (the historical default). Set to 4
+    /// or 8 to recommend KIVI quantisation in the checkpoint manifest;
+    /// `tinygpt sample --kv-quantize ...` overrides. Inference-time
+    /// hint only — has no effect on training.
+    public var kviBits: Int?
+
+    /// Default StreamingLLM sink + window for sample-time KV cache.
+    /// `nil` = unbounded growth (historical default). Inference-time
+    /// hint only; `tinygpt sample` flags override.
+    public var streamingSink: Int?
+    public var streamingWindow: Int?
+
     public var headDim: Int { dModel / nHeads }
 
     public var mlxDType: DType {
@@ -164,8 +177,14 @@ public struct ModelConfig: Sendable, Equatable {
         useMoD: Bool = false,
         useDifferentialAttention: Bool = false,
         useYOCO: Bool = false,
-        useGradCheckpoint: Bool = false
+        useGradCheckpoint: Bool = false,
+        kviBits: Int? = nil,
+        streamingSink: Int? = nil,
+        streamingWindow: Int? = nil
     ) {
+        self.kviBits = kviBits
+        self.streamingSink = streamingSink
+        self.streamingWindow = streamingWindow
         self.tokenizerSource = tokenizerSource
         self.nExperts = max(1, nExperts)
         self.moeTopK = max(1, min(moeTopK, max(1, nExperts)))

@@ -206,7 +206,10 @@ enum Sample {
         // counts (see KVCacheHF.swift).
         // Spec-decode disables KV caching for now (mismatched forward shape).
         let useActualCache = useKVCache && draftModel == nil
-        // Map CLI flag to MLX DType for KV-quantised storage.
+        // Map CLI flag to either MLX DType (fp16/bf16) for cheap downcast
+        // storage, or to KIVI config (int8/int4) for the affine-quantised
+        // per-channel-K / per-token-V path. Mutually exclusive — KIVI
+        // takes over the storage byte layout.
         let kvDType: DType? = {
             switch kvQuantize {
             case "fp16", "float16", "half": return .float16
@@ -214,6 +217,17 @@ enum Sample {
             default:                          return nil
             }
         }()
+        let kvKIVI: KVCache.KIVIConfig? = {
+            switch kvQuantize {
+            case "int8", "8bit", "8":  return .init(bits: 8)
+            case "int4", "4bit", "4":  return .init(bits: 4)
+            default:                    return nil
+            }
+        }()
+        if kvKIVI != nil && kvDType != nil {
+            fputs("--kv-quantize: cannot mix dtype downcast and KIVI int-quantisation\n", stderr)
+            exit(2)
+        }
         // Build OR load the cache:
         //   --cache-prompt <path>: if the file exists, load it (skip prefill);
         //   otherwise build an empty cache, prefill, and write it on exit.
@@ -233,13 +247,23 @@ enum Sample {
             }
             if cache == nil {
                 cache = KVCache(nLayers: cfg.nLayers, kvDtype: kvDType,
+                                 kivi: kvKIVI,
                                  sink: streamingSink, window: streamingWindow)
             }
             if kvDType != nil {
                 print("KV cache stored at \(kvQuantize!) (≈½ memory vs fp32)")
             }
+            if let cfg = kvKIVI {
+                // int8 storage is the literal byte size; for int4 the
+                // precision is int4 (16 levels) but storage stays at int8
+                // — we report both, and the doc explains the tradeoff.
+                let savingsTag = cfg.bits == 4
+                    ? "(~½ vs fp32 storage, int4 precision)"
+                    : "(~¼ vs fp32 storage)"
+                print("KIVI: per-channel K + per-token V, \(cfg.bits)-bit \(savingsTag)")
+            }
             if streamingSink != nil || streamingWindow != nil {
-                print("StreamingLLM: sink=\(streamingSink ?? 0) window=\(streamingWindow ?? 0)")
+                print("StreamingLLM: sink=\(streamingSink ?? 0) window=\(streamingWindow ?? 0) (drop middle on overflow)")
             }
         }
 
@@ -378,21 +402,23 @@ enum Sample {
         // KV cache size report — useful for verifying YOCO's halving
         // claim and KV-quantize savings. Counts only populated layers
         // (under YOCO the second-half layers leave their slot empty).
+        // Routes through `KVCache.totalBytes` so KIVI's quantised storage
+        // (int8 K + V plus per-channel/per-token scales) is counted
+        // correctly, not via the 0-shape residual.
         if useActualCache, let c = cache {
-            var totalBytes = 0
-            var populatedLayers = 0
-            for (i, e) in c.entries.enumerated() {
-                // Trust the stored dtype's byte width; defaults to 4 if
-                // we somehow loaded an unknown type.
-                let kBytes = e.keys.shape.reduce(1, *) * dtypeByteWidth(e.keys.dtype)
-                let vBytes = e.values.shape.reduce(1, *) * dtypeByteWidth(e.values.dtype)
-                totalBytes += kBytes + vBytes
-                if e.keys.shape[2] > 0 { populatedLayers += 1 }
-                _ = i
-            }
+            let (totalBytes, populatedLayers) = c.totalBytes(byteWidth: dtypeByteWidth)
             let yocoTag = cfg.useYOCO ? "  · YOCO (\(populatedLayers)/\(cfg.nLayers) layers populated)" : ""
-            print(String(format: "KV cache:  %d tokens · %@%@",
-                          c.currentLength, formatBytes(totalBytes), yocoTag))
+            // Stored-token count: under StreamingLLM the cache stays
+            // bounded at `sink + window`; `currentLength` is the
+            // monotonic generation counter and may exceed it. Probe the
+            // first non-empty layer for the actual stored count.
+            let storedTokens = c.entries.first(where: { ($0.keysQ?.shape[2] ?? $0.keys.shape[2]) > 0 })
+                .map { $0.keysQ?.shape[2] ?? $0.keys.shape[2] } ?? 0
+            let streamTag = (streamingSink != nil || streamingWindow != nil)
+                && storedTokens != c.currentLength
+                ? "  · stored \(storedTokens) (StreamingLLM cap)" : ""
+            print(String(format: "KV cache:  %d tokens · %@%@%@",
+                          c.currentLength, formatBytes(totalBytes), yocoTag, streamTag))
         }
     }
 
@@ -436,8 +462,12 @@ enum Sample {
         --draft <path>        Greedy speculative decoding with this draft model
         --speculative-k N     Tokens per speculative burst (default 4)
         --no-cache            Disable the KV cache (one forward per token)
-        --kv-quantize fp16|bf16
-                              Store KV cache in half precision (≈½ memory)
+        --kv-quantize fp16|bf16|int8|int4
+                              fp16/bf16: half-precision dtype cast (≈½ memory).
+                              int8/int4: KIVI quantisation (per-channel K,
+                              per-token V) — int8 ≈ ¼ memory, int4 ≈ ⅛
+                              precision-wise (storage stays at int8 due to
+                              MLX's lack of nibble-packing).
         --cache-prompt <path> Save prompt KV cache to <path> on first run;
                               load it on subsequent runs (skip prompt prefill)
         --streaming-llm-sink N

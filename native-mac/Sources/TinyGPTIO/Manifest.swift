@@ -63,6 +63,20 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
         /// inference paths ignore it.
         public var useGradCheckpoint: Bool?
 
+        /// KIVI (Liu et al., 2023) recommended precision for sample-time
+        /// KV cache. 4 or 8 = `--kv-quantize int4|int8` is the
+        /// recommended default for this checkpoint; absent = no
+        /// recommendation. Sample-time CLI flags override. Travels in
+        /// the manifest so a deployed gallery checkpoint can ship its
+        /// chosen memory profile inline.
+        public var kviBits: Int?
+
+        /// StreamingLLM (Xiao et al., 2023) recommended sink + window
+        /// sizes for sample-time KV cache. Same semantics as `kviBits`
+        /// — inference hint, CLI overrides.
+        public var streamingSink: Int?
+        public var streamingWindow: Int?
+
         public init(
             layers: Int? = nil,
             dModel: Int? = nil,
@@ -80,8 +94,14 @@ public struct TinyGPTHeader: Codable, Sendable, Equatable {
             useMoD: Bool? = nil,
             useDifferentialAttention: Bool? = nil,
             useYOCO: Bool? = nil,
-            useGradCheckpoint: Bool? = nil
+            useGradCheckpoint: Bool? = nil,
+            kviBits: Int? = nil,
+            streamingSink: Int? = nil,
+            streamingWindow: Int? = nil
         ) {
+            self.kviBits = kviBits
+            self.streamingSink = streamingSink
+            self.streamingWindow = streamingWindow
             self.layers = layers
             self.dModel = dModel
             self.ctx = ctx
