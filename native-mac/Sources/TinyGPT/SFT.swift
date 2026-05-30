@@ -37,6 +37,10 @@ enum SFT {
         var useDora: Bool = false
         var packSequences = false
         var optimizerKind: OptimizerKind = .adamw
+        // PEFT variants — see Finetune.swift / docs/peft_variants.md.
+        var peftVariant: PeftVariant = .lora
+        var adaLoraTargetRank = 0
+        var layerDropProb: Float = 0
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -54,6 +58,15 @@ enum SFT {
             case "--lora-plus-ratio": loraPlusRatio = Float(args[i+1]) ?? loraPlusRatio; i += 2
             case "--pack":          packSequences = true; i += 1
             case "--dora":          useDora = true; i += 1
+            case "--vera":          peftVariant = .vera; i += 1
+            case "--rs-lora":       peftVariant = .rsLora; i += 1
+            case "--lora-fa":       peftVariant = .loraFA; i += 1
+            case "--pissa-init":    peftVariant = .pissa; i += 1
+            case "--loftq":         peftVariant = .loftq; i += 1
+            case "--adalora-target-rank":
+                peftVariant = .adaLora
+                adaLoraTargetRank = Int(args[i+1]) ?? adaLoraTargetRank; i += 2
+            case "--layer-drop":    layerDropProb = Float(args[i+1]) ?? layerDropProb; i += 2
             case "--optimizer":
                 guard let k = parseOptimizerKind(args[i+1]) else {
                     fputs("unknown --optimizer '\(args[i+1])'. Pick adamw|lion|sophia|muon|adafactor.\n", stderr); exit(2)
@@ -91,12 +104,16 @@ enum SFT {
         do { tokenizer = try HFTokenizer.loadBlocking(from: tokDir) }
         catch { fputs("tokenizer load failed: \(error)\n", stderr); exit(1) }
 
-        // Inject LoRA (or DoRA) — same defaults as `finetune`.
+        // Inject LoRA (or DoRA / one of the PEFT variants).
         let loraCfg = LoraConfig(
             rank: rank, alpha: alpha,
             targetSuffixes: ["q_proj", "v_proj"],
-            useDora: useDora
+            useDora: useDora,
+            variant: peftVariant,
+            adaLoraTargetRank: adaLoraTargetRank
         )
+        LayerDropState.probability = layerDropProb
+        defer { LayerDropState.disable() }
         let nTrainable = load.model.injectLora(config: loraCfg)
         let nTotal = load.model.numParameters()
 
@@ -148,7 +165,9 @@ enum SFT {
         template:       \(template.rawValue)
         data:           \(dataPath) · \(records.count) records · \(formatNum(templatedTokens)) tokens · \(formatNum(maskedTokens)) scored (mask=1)
         config:         \(cfg.nLayers)L · d=\(cfg.dModel) · ctx=\(cfg.contextLength) · max-seq=\(T)
+        variant:        \(Finetune.describeVariant(useDora ? .dora : peftVariant, target: adaLoraTargetRank))
         \(useDora ? "DoRA" : "LoRA"):           rank=\(rank) alpha=\(alpha) targets=q_proj,v_proj
+        LayerDrop:      \(layerDropProb > 0 ? "p=\(layerDropProb)" : "off")
         trainable:      \(formatNum(nTrainable))  /  total \(formatNum(nTotal))  (\(String(format: "%.2f%%", 100 * Float(nTrainable) / Float(nTotal))))
         steps:          \(steps)
         batch / lr:     \(B) / \(lr)
@@ -307,8 +326,15 @@ enum SFT {
                                    Adds a learnable per-output magnitude vector to
                                    each wrapped Linear; better quality at same rank.
                                    In-session only — DoRA adapters aren't yet on disk.
-        --optimizer K            adamw (default) | lion | sophia | muon | adafactor.
-                                   See docs/optimizers.md.
+
+        PEFT variants (mutually exclusive; pick at most one — see docs/peft_variants.md):
+        --vera                   VeRA — frozen random A/B, train per-rank scalars (~10× fewer params).
+        --rs-lora                Rank-stabilized LoRA — scale = α/√r.
+        --lora-fa                LoRA-FA — freeze A, train only B (½ trainable params).
+        --pissa-init             PISSA — init A,B from top-r SVD of base.
+        --loftq                  LoftQ — init compensates a simulated int4 quantization error.
+        --adalora-target-rank R  AdaLoRA — train per-rank importance, target avg rank R.
+        --layer-drop F           LayerDrop fraction (0.0-0.5) — stochastically skip whole blocks.
         """)
         exit(2)
     }

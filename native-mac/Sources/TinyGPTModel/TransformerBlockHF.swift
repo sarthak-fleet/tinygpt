@@ -83,6 +83,13 @@ public final class TransformerBlockHF: Module {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
+        // LayerDrop — see TransformerBlock.callAsFunction for the
+        // rationale. Toggled globally via `LayerDropState.probability`
+        // so we don't have to thread a per-block field through every
+        // existing call site.
+        if LayerDropState.shouldDrop() {
+            return x
+        }
         if useGradCheckpoint {
             return GradCheckpoint.wrap(block: self, x: x) { b, xt in
                 b.rawForward(xt)

@@ -356,6 +356,15 @@ public final class TransformerBlock: Module {
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
+        // LayerDrop (Fan et al., 2019) — stochastic depth at the BLOCK
+        // level. On any forward, with probability `p` we skip this
+        // block entirely (identity passthrough). At PEFT time, that
+        // skip propagates through the backward as zero contribution
+        // for this block's adapters — exactly the "drop" semantics
+        // intended. Off by default; see `LayerDropState.probability`.
+        if LayerDropState.shouldDrop() {
+            return x
+        }
         if useGradCheckpoint {
             // Wrap the raw block forward in a CustomFunction whose VJP
             // re-runs the same forward at backward time. Block params

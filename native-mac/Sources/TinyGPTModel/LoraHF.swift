@@ -17,36 +17,31 @@ public enum LoraInjectionHF {
         for block in model.blocks {
             var attnEntries: [String: NestedItem<String, Module>] = [:]
             var mlpEntries: [String: NestedItem<String, Module>] = [:]
+            // Build the adapter via the shared factory so DoRA / VeRA /
+            // PISSA / LoftQ / etc. all flow through one path.
             if suffixes.contains("q_proj") {
-                attnEntries["q_proj"] = .value(LoraLinear(wrapping: block.attn.qProj,
-                                                            rank: config.rank, alpha: config.alpha))
+                attnEntries["q_proj"] = .value(makeAdapterLinear(wrapping: block.attn.qProj, config: config))
             }
             if suffixes.contains("k_proj") {
-                attnEntries["k_proj"] = .value(LoraLinear(wrapping: block.attn.kProj,
-                                                            rank: config.rank, alpha: config.alpha))
+                attnEntries["k_proj"] = .value(makeAdapterLinear(wrapping: block.attn.kProj, config: config))
             }
             if suffixes.contains("v_proj") {
-                attnEntries["v_proj"] = .value(LoraLinear(wrapping: block.attn.vProj,
-                                                            rank: config.rank, alpha: config.alpha))
+                attnEntries["v_proj"] = .value(makeAdapterLinear(wrapping: block.attn.vProj, config: config))
             }
             if suffixes.contains("o_proj") {
-                attnEntries["o_proj"] = .value(LoraLinear(wrapping: block.attn.oProj,
-                                                            rank: config.rank, alpha: config.alpha))
+                attnEntries["o_proj"] = .value(makeAdapterLinear(wrapping: block.attn.oProj, config: config))
             }
             // HF MLP is SwiGLU — the targetable Linears are gate_proj /
             // up_proj / down_proj. Suffixes referencing fc_in / fc_out
             // (from-scratch naming) silently no-op for HF models.
             if suffixes.contains("gate_proj") {
-                mlpEntries["gate_proj"] = .value(LoraLinear(wrapping: block.mlp.fcGate,
-                                                              rank: config.rank, alpha: config.alpha))
+                mlpEntries["gate_proj"] = .value(makeAdapterLinear(wrapping: block.mlp.fcGate, config: config))
             }
             if suffixes.contains("up_proj") {
-                mlpEntries["up_proj"] = .value(LoraLinear(wrapping: block.mlp.fcUp,
-                                                            rank: config.rank, alpha: config.alpha))
+                mlpEntries["up_proj"] = .value(makeAdapterLinear(wrapping: block.mlp.fcUp, config: config))
             }
             if suffixes.contains("down_proj") {
-                mlpEntries["down_proj"] = .value(LoraLinear(wrapping: block.mlp.fcDown,
-                                                              rank: config.rank, alpha: config.alpha))
+                mlpEntries["down_proj"] = .value(makeAdapterLinear(wrapping: block.mlp.fcDown, config: config))
             }
 
             var blockChildren: [String: NestedItem<String, Module>] = [:]
@@ -63,14 +58,15 @@ public enum LoraInjectionHF {
     public static func trainableParamCount(in model: TinyGPTModelHF) -> Int {
         var n = 0
         for block in model.blocks {
-            for layer in [block.attn.qProj, block.attn.kProj, block.attn.vProj, block.attn.oProj] {
+            let leaves: [Linear] = [block.attn.qProj, block.attn.kProj,
+                                    block.attn.vProj, block.attn.oProj,
+                                    block.mlp.fcGate, block.mlp.fcUp, block.mlp.fcDown]
+            for layer in leaves {
                 if let lora = layer as? LoraLinear {
-                    n += lora.loraA.shape.reduce(1, *) + lora.loraB.shape.reduce(1, *)
-                }
-            }
-            for layer in [block.mlp.fcGate, block.mlp.fcUp, block.mlp.fcDown] {
-                if let lora = layer as? LoraLinear {
-                    n += lora.loraA.shape.reduce(1, *) + lora.loraB.shape.reduce(1, *)
+                    n += trainableElementCount(of: lora)
+                } else if let dora = layer as? DoraLinear {
+                    n += dora.loraA.shape.reduce(1, *) + dora.loraB.shape.reduce(1, *)
+                        + dora.m.shape.reduce(1, *)
                 }
             }
         }
@@ -80,11 +76,14 @@ public enum LoraInjectionHF {
     public static func freezeBase(_ model: TinyGPTModelHF) {
         model.freeze(recursive: true)
         for block in model.blocks {
-            for layer in [block.attn.qProj, block.attn.kProj,
-                          block.attn.vProj, block.attn.oProj,
-                          block.mlp.fcGate, block.mlp.fcUp, block.mlp.fcDown] {
+            let leaves: [Linear] = [block.attn.qProj, block.attn.kProj,
+                                    block.attn.vProj, block.attn.oProj,
+                                    block.mlp.fcGate, block.mlp.fcUp, block.mlp.fcDown]
+            for layer in leaves {
                 if let lora = layer as? LoraLinear {
-                    lora.unfreeze(recursive: false, keys: ["loraA", "loraB"])
+                    unfreezeLoraLinear(lora)
+                } else if let dora = layer as? DoraLinear {
+                    dora.unfreeze(recursive: false, keys: ["loraA", "loraB", "m"])
                 }
             }
         }

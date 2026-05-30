@@ -24,6 +24,12 @@ enum Finetune {
         var targetSuffixesArg = "q_proj,v_proj"
         var batchSize: Int? = nil
         var sampleEvery = 100
+        // PEFT variants (see docs/peft_variants.md). At most one of these
+        // should be set; the parser picks the LAST seen if multiple flags
+        // collide (no error — keeps debug runs ergonomic).
+        var peftVariant: PeftVariant = .lora
+        var adaLoraTargetRank = 0
+        var layerDropProb: Float = 0
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -36,6 +42,16 @@ enum Finetune {
             case "--targets": targetSuffixesArg = args[i+1]; i += 2
             case "--batch":   batchSize = Int(args[i+1]); i += 2
             case "--sample-every": sampleEvery = Int(args[i+1]) ?? sampleEvery; i += 2
+            // PEFT variant flags.
+            case "--vera":         peftVariant = .vera; i += 1
+            case "--rs-lora":      peftVariant = .rsLora; i += 1
+            case "--lora-fa":      peftVariant = .loraFA; i += 1
+            case "--pissa-init":   peftVariant = .pissa; i += 1
+            case "--loftq":        peftVariant = .loftq; i += 1
+            case "--adalora-target-rank":
+                peftVariant = .adaLora
+                adaLoraTargetRank = Int(args[i+1]) ?? adaLoraTargetRank; i += 2
+            case "--layer-drop":   layerDropProb = Float(args[i+1]) ?? layerDropProb; i += 2
             case "-h", "--help": exitUsage()
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
@@ -57,7 +73,13 @@ enum Finetune {
             // the LoRA paper's recommendation. Keep the default.
         }
         let targetSuffixes = targetSuffixesArg.split(separator: ",").map(String.init)
-        let loraCfg = LoraConfig(rank: rank, alpha: alpha, targetSuffixes: targetSuffixes)
+        let loraCfg = LoraConfig(rank: rank, alpha: alpha, targetSuffixes: targetSuffixes,
+                                  variant: peftVariant, adaLoraTargetRank: adaLoraTargetRank)
+        // LayerDrop is a process-wide knob — flip it on right before
+        // training starts; reset to 0 on the way out so unit tests /
+        // subsequent commands aren't affected.
+        LayerDropState.probability = layerDropProb
+        defer { LayerDropState.disable() }
 
         // Load model (auto-detects .tinygpt file vs HF directory)
         print("loading base from \(basePath)…")
@@ -121,7 +143,9 @@ enum Finetune {
         base:           \(basePath)
         corpus:         \(corpusDescription)
         config:         \(cfg.nLayers)L · d=\(cfg.dModel) · ctx=\(cfg.contextLength)
+        variant:        \(describeVariant(peftVariant, target: adaLoraTargetRank))
         LoRA:           rank=\(rank) alpha=\(alpha) targets=\(targetSuffixes.joined(separator: ","))
+        LayerDrop:      \(layerDropProb > 0 ? "p=\(layerDropProb)" : "off")
         trainable:      \(formatNum(nTrainable))  /  total \(formatNum(nTotal))  (\(String(format: "%.2f%%", 100 * Float(nTrainable) / Float(nTotal))))
         steps:          \(steps)
         batch / lr:     \(B) / \(lr)
@@ -213,6 +237,22 @@ enum Finetune {
         if n >= 1_000 { return String(format: "%.0f KB", Double(n) / 1_000) }
         return "\(n) B"
     }
+    /// Short label for the active PEFT variant. Mirrors the table in
+    /// docs/peft_variants.md so the run-summary header stays grep-able.
+    static func describeVariant(_ v: PeftVariant, target: Int) -> String {
+        switch v {
+        case .lora:    return "LoRA (baseline)"
+        case .dora:    return "DoRA (Liu et al., 2024)"
+        case .vera:    return "VeRA (Kopiczko et al., 2023)"
+        case .rsLora:  return "RsLoRA — scale=α/√r (Kalajdzievski, 2023)"
+        case .loraFA:  return "LoRA-FA — frozen A (Zhang et al., 2023)"
+        case .pissa:   return "PISSA init (Meng et al., 2024)"
+        case .loftq:   return "LoftQ init — quant-aware (Li et al., 2023)"
+        case .adaLora:
+            let t = target > 0 ? " target-rank=\(target)" : ""
+            return "AdaLoRA\(t) (Zhang et al., 2023)"
+        }
+    }
     private static func exitUsage() -> Never {
         print("""
         usage: tinygpt finetune <base.tinygpt> [options]
@@ -226,6 +266,15 @@ enum Finetune {
         --targets q,v[,k,o,...]  Which Linear modules to wrap (default: q_proj,v_proj)
         --batch N                Batch size (default by preset)
         --sample-every N         Print sample every N steps (default 100)
+
+        PEFT variants (mutually exclusive; pick at most one):
+        --vera                   VeRA — frozen random A/B, train per-rank scalars (~10× fewer params).
+        --rs-lora                Rank-stabilized LoRA — scale = α/√r (lets large rank actually help).
+        --lora-fa                LoRA-FA — freeze A, train only B (½ trainable params, same quality).
+        --pissa-init             PISSA — init A,B from top-r SVD of base (faster convergence).
+        --loftq                  LoftQ — init compensates a simulated int4 quantization of the base.
+        --adalora-target-rank R  AdaLoRA — train per-rank importance scores, target avg rank R.
+        --layer-drop F           LayerDrop fraction (0.0-0.5) — stochastically skip whole blocks.
         """)
         exit(2)
     }

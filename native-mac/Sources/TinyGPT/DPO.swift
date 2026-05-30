@@ -56,6 +56,10 @@ enum DPO {
         var simpoGamma: Float = 1.0
         // ORPO's preference-term weight λ (paper recommends 0.1).
         var orpoLambda: Float = 0.1
+        // PEFT variants — see Finetune.swift / docs/peft_variants.md.
+        var peftVariant: PeftVariant = .lora
+        var adaLoraTargetRank = 0
+        var layerDropProb: Float = 0
         var optimizerKind: OptimizerKind = .adamw
         var i = 0
         while i < args.count {
@@ -74,6 +78,20 @@ enum DPO {
             case "--grad-clip":     gradClipNorm = Float(args[i+1]) ?? gradClipNorm; i += 2
             case "--lora-plus-ratio": loraPlusRatio = Float(args[i+1]) ?? loraPlusRatio; i += 2
             case "--dora":            useDora = true; i += 1
+            case "--vera":          peftVariant = .vera; i += 1
+            case "--rs-lora":       peftVariant = .rsLora; i += 1
+            case "--lora-fa":       peftVariant = .loraFA; i += 1
+            case "--pissa-init":    peftVariant = .pissa; i += 1
+            case "--loftq":         peftVariant = .loftq; i += 1
+            case "--adalora-target-rank":
+                peftVariant = .adaLora
+                adaLoraTargetRank = Int(args[i+1]) ?? adaLoraTargetRank; i += 2
+            case "--layer-drop":    layerDropProb = Float(args[i+1]) ?? layerDropProb; i += 2
+            case "--optimizer":
+                guard let k = parseOptimizerKind(args[i+1]) else {
+                    fputs("unknown --optimizer '\(args[i+1])'. Pick adamw|lion|sophia|muon|adafactor.\n", stderr); exit(2)
+                }
+                optimizerKind = k; i += 2
             case "--loss-type":
                 guard let lt = LossType(rawValue: args[i+1].lowercased()) else {
                     fputs("unknown --loss-type '\(args[i+1])'. Pick dpo|simpo|orpo|kto.\n", stderr); exit(2)
@@ -81,11 +99,6 @@ enum DPO {
                 lossType = lt; i += 2
             case "--gamma":         simpoGamma = Float(args[i+1]) ?? simpoGamma; i += 2
             case "--orpo-lambda":   orpoLambda = Float(args[i+1]) ?? orpoLambda; i += 2
-            case "--optimizer":
-                guard let k = parseOptimizerKind(args[i+1]) else {
-                    fputs("unknown --optimizer '\(args[i+1])'. Pick adamw|lion|sophia|muon|adafactor.\n", stderr); exit(2)
-                }
-                optimizerKind = k; i += 2
             case "-h", "--help":    exitUsage()
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
@@ -126,10 +139,15 @@ enum DPO {
         do { tokenizer = try HFTokenizer.loadBlocking(from: tokDir) }
         catch { fputs("tokenizer load failed: \(error)\n", stderr); exit(1) }
 
-        // Inject LoRA (or DoRA) on the policy ONLY. Reference stays untouched.
+        // Inject the chosen PEFT variant on the policy ONLY. Reference
+        // stays untouched (it must score the same as before training).
         let loraCfg = LoraConfig(rank: rank, alpha: alpha,
                                   targetSuffixes: ["q_proj", "v_proj"],
-                                  useDora: useDora)
+                                  useDora: useDora,
+                                  variant: peftVariant,
+                                  adaLoraTargetRank: adaLoraTargetRank)
+        LayerDropState.probability = layerDropProb
+        defer { LayerDropState.disable() }
         let nTrainable = policyLoad.model.injectLora(config: loraCfg)
         let nTotal = policyLoad.model.numParameters()
 
@@ -178,8 +196,10 @@ enum DPO {
         template:       \(template.rawValue)
         data:           \(dataPath) · \(records.count) preference triplets
         config:         \(cfg.nLayers)L · d=\(cfg.dModel) · ctx=\(cfg.contextLength) · max-seq=\(T)
+        variant:        \(Finetune.describeVariant(useDora ? .dora : peftVariant, target: adaLoraTargetRank))
         \(useDora ? "DoRA" : "LoRA"):           rank=\(rank) alpha=\(alpha) targets=q_proj,v_proj  (policy only)
         loss:           \(describeLoss(lossType, beta: beta, gamma: simpoGamma, lambda: orpoLambda))
+        LayerDrop:      \(layerDropProb > 0 ? "p=\(layerDropProb)" : "off")
         reference:      \(needsRef ? "loaded (memory ~2× base)" : "skipped (reference-free loss)")
         trainable:      \(formatNum(nTrainable))  /  total \(formatNum(nTotal))  (\(String(format: "%.2f%%", 100 * Float(nTrainable) / Float(nTotal))))
         steps:          \(steps)
@@ -464,12 +484,19 @@ enum DPO {
                                    SimPO and ORPO are reference-free (½ memory).
         --gamma F                SimPO reward-margin γ (default 1.0).
         --orpo-lambda F          ORPO preference-term weight λ (default 0.1).
-        --optimizer K            adamw (default) | lion | sophia | muon | adafactor.
-                                   See docs/optimizers.md.
 
         Memory: DPO/KTO hold the base TWICE (policy + ref). SimPO/ORPO need
         only one copy. Use --dtype bfloat16
         on the original `train` if memory is tight; the adapter itself is fp32.
+
+        PEFT variants (mutually exclusive — see docs/peft_variants.md):
+        --vera                   VeRA — frozen random A/B, train per-rank scalars.
+        --rs-lora                Rank-stabilized LoRA — scale = α/√r.
+        --lora-fa                LoRA-FA — freeze A, train only B.
+        --pissa-init             PISSA — init A,B from top-r SVD of base.
+        --loftq                  LoftQ — init compensates a simulated int4 quantization error.
+        --adalora-target-rank R  AdaLoRA — train per-rank importance, target avg rank R.
+        --layer-drop F           LayerDrop fraction (0.0-0.5) — stochastically skip whole blocks.
         """)
         exit(2)
     }
