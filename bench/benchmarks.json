@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "note": "Source-of-truth benchmark descriptors for the Mac-side `tinygpt score-bench` command. Each entry tells the scorer how to evaluate a model and where to write the result back into the gallery manifest. Mirrors `browser/src/benchmarks/*` for the three browser-side benches but adds BPE-aware entries that the byte-level WASM path cannot run.",
+  "benchmarks": [
+    {
+      "id": "tinystories-ppl",
+      "name": "TinyStories PPL",
+      "kind": "perplexity",
+      "lowerIsBetter": true,
+      "vocabType": "any",
+      "holdoutCorpus": "browser/public/benchmarks/tinystories-eval.json",
+      "holdoutFormat": "stories-json",
+      "batches": 32,
+      "batchSize": 8,
+      "description": "Held-out perplexity on a 50-story TinyStories slice. The score-bench command joins stories on \\n\\n, encodes via the model's tokenizer (BPE) or as raw bytes (vocab=256), and computes exp(mean per-token cross-entropy)."
+    },
+    {
+      "id": "sort-6",
+      "name": "Sort-6",
+      "kind": "task-exact-match",
+      "lowerIsBetter": false,
+      "vocabType": "byte-only",
+      "task": "sort-6",
+      "trials": 200,
+      "seed": 1303,
+      "description": "Karpathy minGPT sort task. Byte-level only — BPE tokenizers break the digit-by-space prompt format the trial generator emits."
+    },
+    {
+      "id": "reverse-16",
+      "name": "Reverse-16",
+      "kind": "task-exact-match",
+      "lowerIsBetter": false,
+      "vocabType": "byte-only",
+      "task": "reverse-16",
+      "trials": 200,
+      "seed": 16101,
+      "description": "Reverse a 4-16 char lowercase string. Byte-level only."
+    },
+    {
+      "id": "fineweb-ppl-bpe",
+      "name": "FineWeb PPL (BPE)",
+      "kind": "perplexity",
+      "lowerIsBetter": true,
+      "vocabType": "bpe-only",
+      "holdoutCorpus": "/tmp/eval-holdout-tail.txt",
+      "holdoutFormat": "raw-text",
+      "batches": 64,
+      "batchSize": 4,
+      "description": "BPE-only perplexity benchmark on a 5MB FineWeb-style holdout. Scores native-trained BPE checkpoints (e.g. flagship-huge) that the byte-level browser scorer cannot run."
+    }
+  ]
+}

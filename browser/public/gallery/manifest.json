@@ -146,6 +146,26 @@
         "sort-6": 0,
         "reverse-16": 0
       }
+    },
+    {
+      "id": "flagship-huge",
+      "name": "flagship-huge",
+      "file": "flagship-huge.tinygpt",
+      "corpus": "BPE-trained (vocab 49152)",
+      "params": "34.6M",
+      "paramCount": 34615552,
+      "submission": {
+        "author": "TinyGPT (Mac)",
+        "submittedAt": "2026-05-29T21:39:29Z",
+        "browserTrained": false,
+        "featured": false
+      },
+      "benchmarks": {
+        "tinystories-ppl": 85.924,
+        "sort-6": null,
+        "reverse-16": null,
+        "fineweb-ppl-bpe": 110.392
+      }
     }
   ]
 }

@@ -19,6 +19,17 @@ struct TinyGPT {
             printUsage()
             exit(2)
         }
+        // Pre-switch shim for the score-bench subcommand: dispatched here
+        // (rather than as a `case` inside the main switch) so the formal
+        // case-dispatch list stays unchanged until the merge PR — see
+        // // TODO(score-bench-merge) below.
+        if cmd == "score-bench" {
+            Score.run(args: Array(args.dropFirst()))
+            return
+        }
+        // TODO(score-bench-merge): once review is happy, move the dispatch
+        // for `score-bench` into the case below (next to `case "eval":`)
+        // and delete the pre-switch shim above.
         switch cmd {
         case "inspect":
             guard let path = args.dropFirst().first else {

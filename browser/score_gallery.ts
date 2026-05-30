@@ -1,19 +1,41 @@
-// score_gallery.ts — run each canonical .tinygpt model in data/gallery/
-// through the TinyStories-PPL benchmark and write the scores back into
-// the gallery manifest.
+// score_gallery.ts — DEPRECATED IN FAVOR OF MAC-SIDE SCORING.
 //
-// How it works:
-//   1. Load browser/public/tinygpt.js (the WASM module the browser uses)
-//   2. For each canonical .tinygpt file:
-//        a. Parse magic + JSON header + state buffer
-//        b. Create a matching WASM model
-//        c. Import the state (tg_import_state — restores w, m, v, step)
-//        d. Set the TinyStories holdout as the corpus, val=100%
-//        e. Call tg_eval many times → mean loss → perplexity
-//   3. Update browser/public/gallery/manifest.json with benchmarks scores
+// History: this script used to load the WASM module, parse each
+// `.tinygpt` in `data/gallery/`, recreate a vocab=256 byte-level model
+// via `tg_model_create`, import the saved state, and run `tg_eval` to
+// produce a TinyStories perplexity score. That worked fine for the five
+// browser-trained gallery cards (all byte-level, ~9.6M params), but
+// silently broke the moment we wanted to score a BPE-trained
+// checkpoint: the script hardcoded `vocab=256` while the BPE model's
+// embedding table had vocab=49152, so `tg_import_state` would either
+// crash or produce garbage outputs and meaningless perplexity numbers.
 //
-// Run:  node browser/score_gallery.ts        (Node 24+ native TS support)
-// Outputs: browser/public/gallery/manifest.json (updated in-place)
+// Replacement: `tinygpt score-bench` (Mac-side). The native binary
+// loads the model through `ModelLoader` (which already auto-detects
+// BPE-vs-byte from the header), runs the benchmark via the same
+// `model.loss` path used by `tinygpt eval`, and writes the result back
+// into `browser/public/gallery/manifest.json` — exactly the same shape
+// the leaderboard reads. See docs/bpe_browser_scoring.md.
+//
+// Why no in-browser tokenizer dependency: HuggingFace tokenizers are
+// big (~6 MB compressed for a SmolLM-class BPE), need a wasm runtime
+// of their own, and would tie the leaderboard build to a tokenizer-fs
+// asset pipeline. The browser playground already had to make this
+// tradeoff for the BPE-loaded path; the leaderboard scorer skips it
+// entirely by pre-scoring on the Mac.
+//
+// This file is kept as a thin shim that re-runs the legacy byte-level
+// path for the original five gallery models so existing CI invocations
+// (`node browser/score_gallery.ts`) still produce identical scores for
+// those entries. Any NEW model goes through the Mac path.
+//
+// Usage:
+//   tinygpt score-bench <model.tinygpt> --benchmarks bench/benchmarks.json
+//   node browser/score_gallery.ts   # legacy byte-only refresh
+//
+// The legacy refresh below ignores any `.tinygpt` files that don't
+// declare `weightDtype: "fp32"` and `vocab` ≤ 256 — anything BPE just
+// gets a warning, not a corrupted score.
 
 import { promises as fs } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -21,14 +43,8 @@ import { fileURLToPath } from "node:url";
 
 import type { GalleryManifest, GalleryModel } from "./src/gallery-schema.ts";
 
-/// Emscripten WASM handle — opaque pointer to a tg_model_create result.
-/// 0 is the failure value; non-zero is a valid handle.
 type WasmHandle = number;
 
-/// Minimal shape of the Emscripten module — only the surface we use.
-/// The .js file produced by emcc exposes many more, but we don't reach
-/// for them. Typed as `any` for the cwrap returns because their generics
-/// don't add safety in practice.
 interface TinyGPTModule {
   cwrap: (name: string, ret: string | null, args: (string | null)[]) => (...a: number[]) => number;
   _malloc: (n: number) => number;
@@ -43,6 +59,23 @@ const GALLERY_DIR = resolve(ROOT, "data/gallery");
 const MANIFEST_PATH = resolve(ROOT, "browser/public/gallery/manifest.json");
 const HOLDOUT_PATH = resolve(ROOT, "browser/public/benchmarks/tinystories-eval.json");
 
+console.log("[score] DEPRECATED — see docs/bpe_browser_scoring.md.");
+console.log("[score] running legacy byte-only refresh for the original gallery cards…");
+
+// We only try to load the WASM module if there's actually a byte-level
+// model directory to score — the BPE path doesn't need it at all.
+let candidates: string[] = [];
+try {
+  candidates = (await fs.readdir(GALLERY_DIR)).filter((f) => f.endsWith(".tinygpt"));
+} catch (e) {
+  console.log(`[score] no gallery dir (${GALLERY_DIR}); nothing to refresh.`);
+  process.exit(0);
+}
+if (candidates.length === 0) {
+  console.log("[score] no .tinygpt files in gallery; nothing to refresh.");
+  process.exit(0);
+}
+
 console.log("[score] loading WASM module…");
 const { default: createTinyGPT } = await import(WASM_JS);
 const M: TinyGPTModule = await createTinyGPT();
@@ -55,40 +88,29 @@ const tgEval = M.cwrap("tg_eval", N, [N, N, N, N]);
 const tgModelFree = M.cwrap("tg_model_free", null, [N]);
 const tgImportState = M.cwrap("tg_import_state", null, [N, N]);
 
-// Read the holdout text — we score all stories joined into one corpus.
-console.log("[score] reading TinyStories holdout…");
 interface HoldoutFile {
   source: string;
   count: number;
   totalBytes: number;
   stories: string[];
 }
+console.log("[score] reading TinyStories holdout…");
 const holdout: HoldoutFile = JSON.parse(await fs.readFile(HOLDOUT_PATH, "utf8"));
-const holdoutText = holdout.stories.join("\n\n");
-const holdoutBytes = new TextEncoder().encode(holdoutText);
+const holdoutBytes = new TextEncoder().encode(holdout.stories.join("\n\n"));
 console.log(`[score] holdout: ${holdout.stories.length} stories, ${holdoutBytes.length} bytes`);
 
-// Read existing manifest. We'll merge scores in.
 const manifest: GalleryManifest = JSON.parse(await fs.readFile(MANIFEST_PATH, "utf8"));
-
-// Inputs we want to score, by gallery id. Each maps to a canonical
-// .tinygpt at the file path below.
-const candidates = await fs.readdir(GALLERY_DIR);
-const tinygptFiles = candidates.filter((f) => f.endsWith(".tinygpt"));
-console.log(`[score] found ${tinygptFiles.length} canonical .tinygpt files:`,
-            tinygptFiles.join(", "));
 
 const MAGIC = "TGPT";
 
-/// .tinygpt header subset we actually consult here. The full schema is
-/// the source-of-truth one in `native-mac/Sources/TinyGPTIO/Manifest.swift` —
-/// we only need the geometry + dtype check.
 interface TinygptHeaderConfig {
   layers?: number;
   dModel?: number;
   ctx?: number;
   heads?: number;
   dMlp?: number;
+  vocabSize?: number;       // present in BPE headers; absent ⇒ byte-level (256)
+  tokenizerSource?: string; // present in BPE headers
 }
 interface TinygptHeader {
   config: TinygptHeaderConfig;
@@ -97,9 +119,9 @@ interface TinygptHeader {
 interface ParsedTinygpt {
   config: TinygptHeaderConfig;
   stateBytes: Uint8Array;
+  isBpe: boolean;
 }
 
-/// Parse a .tinygpt file: returns { config, stateBytes }.
 function parseTinygpt(buf: ArrayBuffer): ParsedTinygpt {
   if (buf.byteLength < 12) throw new Error("file too small");
   const magic = new TextDecoder().decode(new Uint8Array(buf, 0, 4));
@@ -113,35 +135,24 @@ function parseTinygpt(buf: ArrayBuffer): ParsedTinygpt {
   if (12 + headerLen > buf.byteLength) throw new Error("malformed header");
   const headerJson = new TextDecoder().decode(new Uint8Array(buf, 12, headerLen));
   const header: TinygptHeader = JSON.parse(headerJson);
-  // The state buffer starts right after the header. Canonical files use
-  // [int32 step + per-tensor [w_fp32, m_fp32, v_fp32]] which is exactly
-  // what tg_import_state expects.
   const stateBytes = new Uint8Array(buf.slice(12 + headerLen));
   if (header.weightDtype && header.weightDtype !== "fp32") {
     throw new Error(
-      `score_gallery.ts only handles canonical fp32 .tinygpt files; ` +
-      `this one has weightDtype=${header.weightDtype}. Use the file from ` +
-      `data/gallery/, not browser/public/gallery/.`,
+      `score_gallery legacy path only handles fp32 .tinygpt files; ` +
+      `this one has weightDtype=${header.weightDtype}.`,
     );
   }
-  return { config: header.config, stateBytes };
+  const isBpe = (header.config.vocabSize !== undefined && header.config.vocabSize > 256)
+             || (header.config.tokenizerSource !== undefined);
+  return { config: header.config, stateBytes, isBpe };
 }
 
-/// Eval the model on the held-out corpus and return perplexity.
 function evalPerplexity(handle: WasmHandle, batchSize: number, nBatches: number) {
-  // tg_set_data installs the holdout as the corpus. train_frac = 0.0
-  // pushes 100% of the corpus into the val split, so tg_eval(..., split=1)
-  // samples from the entire held-out set.
   const dataPtr = M._malloc(holdoutBytes.length);
   M.HEAPU8.set(holdoutBytes, dataPtr);
   tgSetData(handle, dataPtr, holdoutBytes.length, 0.0);
   M._free(dataPtr);
-
-  // n_batches batches of batchSize sequences. Random sampling with
-  // replacement — increase n_batches to tighten variance.
   const meanLoss = tgEval(handle, 1, batchSize, nBatches);
-  // tg_eval returns mean per-token cross-entropy (in nats), same definition
-  // as the browser playground's val_loss UI.
   return { loss: meanLoss, perplexity: Math.exp(meanLoss) };
 }
 
@@ -149,23 +160,31 @@ const benchId = "tinystories-ppl";
 interface ScoreUpdate {
   id: string;
   score: number | null;
-  details: { error?: string; loss?: number; vocab?: number; batches?: number; tokens?: number };
+  details: { error?: string; skipped?: string; loss?: number; vocab?: number; batches?: number; tokens?: number };
 }
 const updated: ScoreUpdate[] = [];
 
-for (const filename of tinygptFiles.sort()) {
+for (const filename of candidates.sort()) {
   const id = filename.replace(/\.tinygpt$/, "");
   const path = resolve(GALLERY_DIR, filename);
   console.log(`\n[score] === ${id} ===`);
   try {
     const buf = (await fs.readFile(path)).buffer as ArrayBuffer;
-    const { config, stateBytes } = parseTinygpt(buf);
+    const parsed = parseTinygpt(buf);
+    if (parsed.isBpe) {
+      console.log(`[score] skipping ${id}: BPE model (vocab=${parsed.config.vocabSize}). ` +
+                  `Run \`tinygpt score-bench ${path} --benchmarks bench/benchmarks.json\` ` +
+                  `from the worktree root to score it natively.`);
+      updated.push({
+        id, score: null,
+        details: { skipped: "BPE model — use Mac-side `tinygpt score-bench`" },
+      });
+      continue;
+    }
+    const { config, stateBytes } = parsed;
     console.log(`        config: ${config.layers}L · d=${config.dModel} · ctx=${config.ctx} · ${stateBytes.length} state bytes`);
-
-    // Create model with matching geometry. The 7-arg signature is:
-    //   tg_model_create(vocab, ctx, layers, heads, d_model, d_mlp, seed)
     const handle: WasmHandle = tgModelCreate(
-      256, // vocab — gallery models are byte-level
+      256,
       config.ctx ?? 256,
       config.layers ?? 12,
       config.heads ?? 8,
@@ -174,27 +193,17 @@ for (const filename of tinygptFiles.sort()) {
       42,
     );
     if (handle === 0) throw new Error("tg_model_create returned 0");
-
     const nParams = tgModelNumParams(handle);
     console.log(`        params: ${nParams.toLocaleString()}`);
-
-    // Import the saved state. The state buffer is exactly what
-    // tg_export_state would have written.
     const statePtr = M._malloc(stateBytes.length);
     M.HEAPU8.set(stateBytes, statePtr);
     tgImportState(handle, statePtr);
     M._free(statePtr);
-
-    // Eval. 32 batches × 8 sequences × ctx tokens per batch =
-    // ~32 × 8 × 256 = ~65K tokens scored — enough to drop sampling
-    // variance below ~3% in our experiments.
     const t0 = Date.now();
     const { loss, perplexity } = evalPerplexity(handle, 8, 32);
     const dt = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`        eval: loss=${loss.toFixed(3)}  perplexity=${perplexity.toFixed(2)}  (${dt}s)`);
-
     tgModelFree(handle);
-
     updated.push({
       id, score: perplexity,
       details: { loss, vocab: 256, batches: 32, tokens: 32 * 8 * (config.ctx ?? 256) },
@@ -206,17 +215,16 @@ for (const filename of tinygptFiles.sort()) {
   }
 }
 
-// Merge into manifest. Each manifest entry whose id matches gets its
-// benchmarks.<benchId> set; unknown ids in `updated` are appended as
-// new rows (so newly-trained models that haven't been published to
-// the gallery yet still appear on the leaderboard).
-console.log("\n[score] merging scores into manifest…");
+// Merge byte-only scores into the manifest. We do NOT touch BPE entries
+// here (those come through `tinygpt score-bench`); if `id` already has
+// a score from the Mac path we leave it alone unless we have a new
+// number to write.
+console.log("\n[score] merging legacy byte-only scores into manifest…");
 const byId = new Map<string, GalleryModel>((manifest.models || []).map((m) => [m.id, m]));
 for (const { id, score } of updated) {
+  if (score == null) continue;          // skipped or failed → no write
   let entry = byId.get(id);
   if (!entry) {
-    // Bootstrap a minimal stub. The next finalize_gallery run will
-    // overwrite with full metadata.
     entry = {
       id, name: id, file: `${id}.bin`,
       benchmarks: {},
@@ -237,7 +245,8 @@ console.log("   id                   score (ppl)   loss");
 console.log("   ───────────────────  ───────────   ─────");
 for (const { id, score, details } of updated) {
   if (score == null) {
-    console.log(`   ${id.padEnd(20)} ERROR  ${details.error ?? ""}`);
+    const reason = details.skipped ?? details.error ?? "—";
+    console.log(`   ${id.padEnd(20)} —             ${reason}`);
   } else {
     console.log(`   ${id.padEnd(20)} ${score.toFixed(2).padStart(10)}    ${details.loss?.toFixed(3) ?? "—"}`);
   }

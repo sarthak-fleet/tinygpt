@@ -115,6 +115,7 @@ table.board td.params { font-family: monospace; color: var(--muted); }
       <button class="tab active" data-bench="tinystories-ppl">TinyStories PPL</button>
       <button class="tab" data-bench="sort-6">Sort-6</button>
       <button class="tab" data-bench="reverse-16">Reverse-16</button>
+      <button class="tab" data-bench="fineweb-ppl-bpe">FineWeb PPL (BPE)</button>
     </div>
 
     <div id="benchInfo" class="benchInfo">
@@ -199,6 +200,12 @@ table.board td.params { font-family: monospace; color: var(--muted); }
         lowerIsBetter: false,
         explainer:
           "<strong>Reverse-16.</strong> Reverse a lowercase string of up to 16 characters. Slightly harder than sort-6 because the last input character must become the first of the output (longer dependency tail across the equals sign). Same Karpathy task family. Exact-match over 200 deterministic trials, higher is better.",
+      },
+      "fineweb-ppl-bpe": {
+        name: "FineWeb PPL (BPE)",
+        lowerIsBetter: true,
+        explainer:
+          "<strong>FineWeb PPL (BPE).</strong> Held-out perplexity over a 5MB FineWeb-style text slice, scored token-level using the model's BPE tokenizer. Lower is better. Byte-level browser-trained models score `null` (incompatible vocab); BPE models scored natively via `tinygpt score-bench` (see docs/bpe_browser_scoring.md).",
       },
     };
 
