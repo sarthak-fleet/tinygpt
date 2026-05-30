@@ -1,8 +1,18 @@
-# Audit 2026 — what we tried, what worked, what we're cutting
+# Audit 2026 — what we tried, what worked, what we flagged
 
 After ~70 techniques shipped across the project, this doc is the honest
 reckoning. Each entry: **what it claimed**, **what we measured**, and
-**verdict** (🟢 KEEP / 🟡 EXPERIMENTAL / 🔴 DELETE).
+**verdict** (🟢 KEEP / 🟡 FLAG / 🔴 DELETE).
+
+**Conviction bar for DELETE**: only items I'm genuinely convinced are
+useless to the project under ANY scenario. Items where the test was
+narrow (e.g., tested at 22M but might work at 1.5B base) or the
+implementation was incomplete (e.g., GaLore's optimizer state) or that
+need future infrastructure (e.g., int8 matmul kernels) get **FLAGGED**,
+not deleted. The flag records: "tested at config X, didn't see win,
+not in default recipe, here's when it'd help."
+
+**The convict-with-deletion list is short. Most items become FLAG.**
 
 The audit is informed by the project's north star: **on-device agent
 models on Apple Silicon + Chrome**. Techniques are evaluated against
@@ -16,13 +26,18 @@ recipe per capability.
 
 ---
 
-## TL;DR — the cuts
+## TL;DR — revised under the conviction bar
 
 | Status | Count | Rationale |
 |---|---|---|
-| 🟢 **KEEP** (recipe-positive) | ~28 | Demonstrated value at our scale or required for HF interop |
-| 🟡 **EXPERIMENTAL** (move) | ~10 | Interesting demos / research curiosity / niche use case |
-| 🔴 **DELETE** (post-mortem then `git rm`) | ~22 | Couldn't prove value at our scale or made the wrong tradeoff |
+| 🟢 **KEEP** (default recipe) | ~28 | Demonstrated value at our scale or required for HF interop |
+| 🟡 **FLAG** (kept in code, not in default) | ~30 | Tested narrowly, not convinced useless. Conditions for usefulness documented. |
+| 🔴 **DELETE** (convinced useless) | 0-2 | Almost nothing meets this bar. The audit's job is HONESTY, not aggression. |
+
+Most items get FLAGGED with: (a) what we tested, (b) what we saw,
+(c) when this would actually help. The code stays in the repo with a
+clear note in the source. Users opting into specialist training can
+revisit any item.
 
 ---
 
@@ -138,80 +153,98 @@ codebase under `--experimental-*` flags or `experimental/` subdirs.
 
 ---
 
-## 🔴 DELETE — post-mortem then `git rm`
+## 🟡 FLAG — kept in code, not in default recipe
 
-Each gets a ~50-line entry in `docs/post_mortem/<technique>.md` covering:
-what it claimed, what we measured, why it didn't help at our scale,
-when it WOULD help, and the maintenance cost paid.
+Each FLAGGED item stays in the repo with an `// AUDIT FLAG: tested at
+X, didn't see win, useful when Y` comment at the entry point. The CLI
+flag remains available under `--experimental-*` or stays untouched if
+removing it would break compatibility. The point: no work thrown away,
+honest record of what was tested and what wasn't.
 
-### Optimizer alternatives (4 deletes)
+### Optimizer alternatives — FLAG all 4
 
-| Item | Post-mortem in one line |
-|---|---|
-| **Lion** | Sign-based update needs >1k steps; lagged AdamW at 200 steps |
-| **Sophia** | EMA-of-squared-gradient variant slower per step; marginal lift |
-| **Muon** | Newton-Schulz overhead dominated at small scale (5.2 vs 16.3 step/s) |
-| **Adafactor** | ⅓ optimizer memory not needed at 22M-100M scale; 2× slower per step |
+| Item | What we tested | What we saw | When it'd help |
+|---|---|---|---|
+| **Lion** | 200 steps, tiny preset | Lagged AdamW (3.18 vs 2.62 loss) | Lion's whole point is convergence at >1k steps. Untested at scale. |
+| **Sophia** | 200 steps, Sophia-light variant | Slightly behind AdamW per step | We shipped the EMA variant, not full Gauss-Newton. Real Sophia might help. |
+| **Muon** | 200 steps, tiny preset | 5.2 vs 16.3 step/s | Newton-Schulz overhead dominates at small scale; might pay off at 1.5B+ |
+| **Adafactor** | 50 steps, huge preset | 2× slower per step; ⅓ optimizer state mem | Memory savings matter for training BIG models on a Mac, not at 22M-100M |
 
-### Architecture variants (5 deletes)
+### Architecture variants — FLAG all 5
 
-| Item | Post-mortem in one line |
-|---|---|
-| **DiffAttention** | Doubled Q/K projections for no measured benefit at 22M |
-| **MoD (soft routing)** | No compute savings without hard top-K + scatter_add |
-| **MTP (Multi-Token Prediction)** | Multi-horizon CE; marginal regularization at small scale |
-| **ALiBi** | RoPE is standard; ALiBi shines for long-context extrapolation we don't reach |
-| **Differential attention sibling pattern** | Conceptually elegant but unused — see DiffAttention above |
+| Item | What we tested | What we saw | When it'd help |
+|---|---|---|---|
+| **DiffAttention** | Smoke train at 22M | No measured benefit | Paper claims gains at >100M; long-context reasoning specifically |
+| **MoD (soft routing)** | Soft variant only | No compute savings | Requires hard top-K + `scatter_add` (MLX-Swift doesn't have it yet) |
+| **MTP** | Smoke train | Marginal regularization | DeepSeek-V3 uses it at scale (37B active); could matter at >7B base |
+| **ALiBi** | Not used at long context | Untested for extrapolation | Useful for extrapolating beyond train context; agent histories could trigger this |
+| **Sliding window attention** | Untested at ctx >4k | n/a | Useful when agent context exceeds train ctx — directly relevant to agents |
+| **YOCO** | Verified -51% KV cache | -12% decode at short ctx | Wins materialize at long ctx (>8k); agent histories will hit this |
 
-### Stability tricks (3 deletes)
+### Stability tricks — FLAG all 3
 
-| Item | Post-mortem in one line |
-|---|---|
-| **DeepNorm** | Only helps at depth ≥100; useless at 12 layers |
-| **Layer-wise LR decay** | Fine-tuning lever, not pretraining; never wired to a real run |
-| **Embedding RMSNorm** | Net effect unclear; causes step-1 spike |
+| Item | What we tested | What we saw | When it'd help |
+|---|---|---|---|
+| **DeepNorm** | Untested in flagship runs | n/a | Paper-stated: needed at depth ≥100; useless at 12 layers but cheap to keep |
+| **Layer-wise LR decay** | Never wired to a real run | n/a | **Standard in fine-tuning** — keep for specialist agent training |
+| **Embedding RMSNorm** | v4 / v5 training (with) | Step-1 spike + small lift | Modern Llama uses it; net positive unclear from our brief runs |
 
-### Training-time exotic (2 deletes)
+### Training-time exotic — FLAG both
 
-| Item | Post-mortem in one line |
-|---|---|
-| **GaLore (gradient low-rank projection)** | Adam state still full-rank → claimed memory savings unrealized |
-| **BPE-dropout** | Per-merge skip probability; marginal regularization, requires custom encoder |
+| Item | What we tested | What we saw | When it'd help |
+|---|---|---|---|
+| **GaLore** | 100-step run | Loss descends; theoretical memory unrealized | Adam state still full-rank in our impl. Real memory win needs optimizer-state surgery (queued). |
+| **BPE-dropout** | 100 steps | +0.2 nats loss (regularization cost) | Robustness at scale; needs careful eval to validate |
 
-### PEFT variants — minor (5 deletes)
+### PEFT variants — FLAG all 6 (was DELETE)
 
-| Item | Post-mortem in one line |
-|---|---|
-| **VeRA** | 512× smaller adapter but trains far slower; niche |
-| **LoftQ** | Compensates for int4 base quantization error — only useful with int4 base (we don't have a trained one) |
-| **AdaLoRA** | Per-rank importance scoring; never wired to actual rank reallocation |
-| **RsLoRA** | α/√r scale fix; marginal at r=4-16 |
-| **PISSA init** | Top-r SVD init; converges faster but final quality matches LoRA |
-| **LayerDrop** | Degrades fine-tuning quality (we mostly fine-tune, not pretrain depth-1B) |
+| Item | What we tested | What we saw | When it'd help |
+|---|---|---|---|
+| **VeRA** | 30 steps | 512× fewer trainable params | **Killer for agent factory** — swap many specialists fast at near-zero adapter cost. Revisit. |
+| **LoftQ** | 30 steps simulated int4 | Init computes correctly | Real win needs int4 BASE model (we don't have one yet) |
+| **AdaLoRA** | 30 steps | Importance scoring trains | Never wired to actual rank reallocation — incomplete impl |
+| **RsLoRA** | 30 steps | α/√r scale applied | Marginal at r=4-16; helps at r >64 |
+| **PISSA init** | 30 steps | Faster early convergence | Useful default for SFT runs — could absorb into KEEP later |
+| **LayerDrop** | 30 steps | Degrades fine-tune quality | Pretraining-time regularizer at depth >24; useless at shallow fine-tuning |
 
-### Quantization (3 deletes)
+### Quantization — FLAG all 4
 
-| Item | Post-mortem in one line |
-|---|---|
-| **SmoothQuant** | Algorithmic infrastructure shipped; zero runtime payoff without int8 matmul kernel |
-| **HQQ storage-only** | Same — needs packed-int4 matmul to realize the win |
-| **GPTQ from-scratch** | 30-second per-Linear Hessian compute; AWQ reader covers HF interop case |
-| **QAT** | Demonstrates fake-quant + STE; no int4 inference path to deploy to |
+| Item | What we tested | What we saw | When it'd help |
+|---|---|---|---|
+| **SmoothQuant** | Calibration pass works | Float-identity at zero matmul gain | Becomes critical when int8 matmul kernel lands |
+| **HQQ storage-only** | Quantize/dequantize roundtrip | File size shrinks, runtime not | Needs packed-int4 matmul kernel |
+| **GPTQ from-scratch** | Quantized flagship | 0.1064 rel error; loads + samples | AWQ reader covers HF case; GPTQ from-scratch is for OWN model export |
+| **QAT (int4/int8)** | 30 steps | Loss descends, qat-err bounded | Mandatory for deploying int4 specialists with reasonable quality |
 
-### Pruning (2 deletes)
+### Pruning — FLAG unstructured + structured-head, KEEP layer pruning
 
-| Item | Post-mortem in one line |
-|---|---|
-| **Unstructured pruning** | Metal has no sparse matmul; only gain is post-gzip download size |
-| **Structured head pruning (zero-out variant)** | No physical removal; no actual memory/wallclock saving |
-| **Structured layer pruning** | Could be KEPT — actually changes topology — but moves to experimental if not used |
+| Item | What we tested | What we saw | When it'd help |
+|---|---|---|---|
+| **Unstructured pruning** (FLAG) | 50% sparsity | Gzip -38% | No wallclock win without Metal sparse matmul; download size only |
+| **Structured head pruning (zero-out)** (FLAG) | Drop 4/8 heads | Quality degrades; shape preserved | Real value needs physical removal (queued as 200-LOC follow-up) |
+| **Structured layer pruning** (now KEEP) | Drop 2/12 layers | 9.6M → 8.0M, coherent samples | **Actually changes topology, real wallclock win** — moves to KEEP |
 
-### Speculative decoding heads (2 deletes)
+### Speculative decoding heads — FLAG both
 
-| Item | Post-mortem in one line |
-|---|---|
-| **Medusa heads** | 21-23% acceptance at 50 train steps; would need 10k+ steps; vanilla draft-model spec decode covers the case |
-| **EAGLE-2** | Same — 26.5% acceptance, requires sustained training to be useful |
+| Item | What we tested | What we saw | When it'd help |
+|---|---|---|---|
+| **Medusa heads** | 50 head-train steps | 21-23% acceptance | Real production needs 10k+ training steps; correct code |
+| **EAGLE-2** | 50 head-train steps | 26.5% acceptance | Same as Medusa — sustained training to hit ~60-85% accept |
+
+## 🔴 DELETE — convinced useless (with this bar: maybe nothing)
+
+Under the strict conviction bar, **I'm not confident anything in the
+audit is convict-with-deletion useless**. Every technique has a scenario.
+
+The honest move: **DELETE list = empty** for now. The codebase stays
+roughly its current size. The audit's contribution is the FLAGS —
+clear notes per technique about what we tested, what we saw, when it
+would help.
+
+If you want a smaller binary or cleaner CLI, the right move is **CLI
+curation** (hide flags under `--experimental-*`), not source-code
+deletion. Source-code is cheap to keep; the maintenance cost is in
+keeping it tested + documented, which the FLAG annotations address.
 
 ---
 
@@ -256,16 +289,20 @@ tinygpt quantize <model>        # AWQ → int4 — recipe default
 
 ---
 
-## Execution plan
+## Revised execution plan (conviction-bar version)
 
-1. **Draft this doc** — done (you're reading it)
-2. **Per-deleted-technique post-mortem** (~22 docs, 50 lines each) — `docs/post_mortem/<name>.md`
-3. **Move EXPERIMENTAL items** to `native-mac/Sources/TinyGPTModelExperimental/` (new target in Package.swift)
-4. **`git rm` the DELETE items** + their tests + their docs
-5. **Default-CLI rewrite** — `tinygpt train` etc. = the curated recipe with no flags needed
-6. **README + landing page rewrite** for the new shape
-7. **Single big commit**: `feat: the great winnowing — curate to recipe, delete to ship`
+1. **Draft this doc** — done
+2. **Per-FLAGGED-technique inline annotation** — add `// AUDIT FLAG:` block at each entry point in source, with what-we-tested / what-we-saw / when-it'd-help. ~1-2 days mechanical.
+3. **Default-CLI curation** — `tinygpt train` etc. = curated recipe with no flags needed; FLAGGED features move to `--experimental-*`. ~2 days.
+4. **Help text + landing page rewrite** — preach the ONE curated recipe; "Advanced/experimental" gates the rest. ~2 days.
+5. **No source-code deletion this round** — keep everything; the FLAG annotations are the documentation.
 
-Estimated effort: **3-5 days** focused. Most of it is writing post-mortems honestly.
+Estimated effort: **3-5 days** focused. Bias toward honest documentation
+over aggressive deletion. Source-code is cheap; the cost of accidentally
+deleting something useful is high.
 
-After this, the codebase is ready for the **on-device agent model** focus described separately. The curated tools above are exactly what's needed for that work.
+After this curation, the codebase is ready for the **on-device agent
+model factory** focus. The curated tools above are the recipe for the
+debugger / code-reviewer / SQL-writer / etc. specialists. FLAGGED tools
+remain available when a specialist's training shows they help (e.g.,
+VeRA for many-specialist factory, MoD when scatter_add lands).
