@@ -20,6 +20,12 @@ let package = Package(
         .library(name: "TinyGPTModel", targets: ["TinyGPTModel"]),
         .library(name: "TinyGPTBench", targets: ["TinyGPTBench"]),
         .library(name: "TinyGPTServe", targets: ["TinyGPTServe"]),
+        // TinyGPTData — HuggingFace Datasets Hub client + format
+        // converters. Pure Foundation; deliberately depends on nothing
+        // else so the CLI `download-dataset` subcommand boots fast and
+        // we can unit-test the registry / format detector without
+        // pulling MLX. See docs/hf_datasets_integration.md.
+        .library(name: "TinyGPTData", targets: ["TinyGPTData"]),
         .executable(name: "tinygpt", targets: ["TinyGPT"]),
         .executable(name: "TinyGPTApp", targets: ["TinyGPTApp"]),
     ],
@@ -36,6 +42,13 @@ let package = Package(
     targets: [
         .target(
             name: "TinyGPTIO"
+        ),
+        // Pure-Foundation HF Datasets Hub client. Lives outside
+        // TinyGPTModel so it does not drag MLX into CLI subcommands
+        // that only need to fetch + convert text (download-dataset,
+        // list-datasets).
+        .target(
+            name: "TinyGPTData"
         ),
         .target(
             name: "TinyGPTModel",
@@ -84,6 +97,7 @@ let package = Package(
                 "TinyGPTModel",
                 "TinyGPTBench",
                 "TinyGPTServe",
+                "TinyGPTData",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),

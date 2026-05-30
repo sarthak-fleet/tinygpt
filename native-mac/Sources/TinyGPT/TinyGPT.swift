@@ -58,6 +58,25 @@ struct TinyGPT {
             PruneStructured.run(args: Array(args.dropFirst()))
             return
         }
+        // Pre-switch shim for the HF Datasets Hub integration
+        // (`download-dataset` / `list-datasets`). Same shim pattern as
+        // score-bench/pruning: other agents are concurrently touching
+        // this switch, so we keep the dispatch on the safe side of the
+        // case list until merge. See TODO(hf-datasets-merge) below and
+        // docs/hf_datasets_integration.md.
+        if cmd == "download-dataset" {
+            DownloadDataset.run(args: Array(args.dropFirst()))
+            return
+        }
+        if cmd == "list-datasets" {
+            ListDatasets.run(args: Array(args.dropFirst()))
+            return
+        }
+        // TODO(hf-datasets-merge): once the HF data pipeline is stable,
+        // move dispatch for `download-dataset` and `list-datasets` into
+        // the case block below (next to `case "hf-load":`) and remove
+        // the shim above. Until then the shim keeps the switch surface
+        // unchanged for the agents working on the rest of the CLI.
         // TODO(pruning-merge): move dispatch for `prune-unstructured` and
         // `prune-structured` into the case below (next to `case "hqq":`)
         // and delete the pre-switch shim above. The CLI lives behind a
