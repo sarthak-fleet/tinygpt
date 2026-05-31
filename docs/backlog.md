@@ -90,6 +90,20 @@ mixture-of-specialists
 **Depends on**: A4
 **Source**: `docs/tool_call_extractor.md` (router scaffold, b5bbdd9)
 
+### B2b. Bake-off: classifier-head router vs pure-GPT-with-FSM
+**Impact**: settles whether the architectural deviation in B2 is worth
+it. Pure-GPT variant uses the regular LM head + JSON-mode FSM constraint
+to emit a single tool-name token — zero architectural deviation, same
+model format, same training pipeline. If within 2× latency of the
+classifier-head version, ship pure-GPT for purity + simpler maintenance;
+if dramatically slower, the classifier deviation is justified.
+**Cost**: ~half day (train a small pure-GPT router on same BFCL data,
+constrain decode to tool-token set, benchmark vs B2)
+**Depends on**: A4
+**Source**: conversation 2026-05-31 — "is router a type of GPT?"
+The classifier-head router IS a GPT trunk with a different head; both
+variants are GPT-family. Measure to decide.
+
 ### B3. FSM constraint-injection from router prediction
 **Impact**: when router fires, the LM CANNOT emit non-matching tool —
 locks down hallucinated tool names
