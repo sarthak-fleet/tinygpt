@@ -1222,7 +1222,7 @@ function refreshSampleNote(): void {
     `For genuinely grammatical English you need at least val loss ~1.5 — roughly ` +
     `Medium/Large preset on a real dataset (TinyStories, Tiny Shakespeare). ` +
     `For coherent prose: 10M+ params on MB of text via ` +
-    `<a href="https://github.com/sarthakagrawal927/tinygpt/blob/main/python_ref/train.py" target="_blank" rel="noopener">the Python reference</a>.` +
+    `<a href="https://github.com/sarthak-fleet/tinygpt/blob/main/python_ref/train.py" target="_blank" rel="noopener">the Python reference</a>.` +
     `</span>`;
 }
 
@@ -1521,7 +1521,7 @@ function encodeModelFile(config: RunConfig, state: ArrayBuffer): Blob {
     finalLoss: final ? { step: final.step, train: final.trainLoss, val: final.valLoss ?? null } : null,
     sample: lastSampleText.slice(0, 320),
     bestVal: Number.isFinite(bestVal) ? { loss: bestVal, step: bestValStep } : null,
-    project: "https://github.com/sarthakagrawal927/tinygpt",
+    project: "https://github.com/sarthak-fleet/tinygpt",
   };
   const headerJson = JSON.stringify(headerObj);
   const headerBytes = new TextEncoder().encode(headerJson);
@@ -1785,7 +1785,7 @@ function encodeSafetensorsFile(config: RunConfig, state: ArrayBuffer): Blob {
   // Build safetensors JSON header.
   const headerObj: Record<string, unknown> = {
     __metadata__: {
-      project: "https://github.com/sarthakagrawal927/tinygpt",
+      project: "https://github.com/sarthak-fleet/tinygpt",
       tinygpt_version: "1",
       config: JSON.stringify(config),
     },

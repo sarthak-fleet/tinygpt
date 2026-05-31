@@ -64,7 +64,7 @@ If you want every `git push` to auto-deploy, connect Git provider in the
 Cloudflare dashboard:
 
 1. **Workers & Pages → tinygpt → Settings → Builds & deployments → Connect to Git**
-2. Select `sarthakagrawal927/tinygpt`.
+2. Select `sarthak-fleet/tinygpt`.
 3. **Build configuration:**
    - Production branch: `main`
    - Framework preset: *None* (Astro auto-detected; Vite isn't in the preset list)
@@ -132,7 +132,7 @@ The deployed assets total around 600 KB (WASM + JS chunks).
 ## After deploy — update the case study
 
 The TinyGPT case study on the portfolio
-(`sarthakagrawal927/portfolio: src/content/work/tinygpt.mdx`) has `repo:` set
+(`sarthak-fleet/portfolio: src/content/work/tinygpt.mdx`) has `repo:` set
 but `demo:` deliberately omitted until the URL is live. Add:
 
 ```yaml
