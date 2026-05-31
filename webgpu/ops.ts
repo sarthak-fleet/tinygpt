@@ -29,7 +29,10 @@ const ENTRIES = [
 ] as const;
 /** Entry points that live in train_sg.wgsl and require the WebGPU
  *  `subgroups` feature on the adapter. */
-const SG_ENTRIES = ["layernorm_forward_sg", "cross_entropy_sg", "bias_grad_sg"] as const;
+const SG_ENTRIES = [
+  "layernorm_forward_sg", "cross_entropy_sg", "bias_grad_sg",
+  "matmul_sg", "matmul_abt_sg",
+] as const;
 /** Entry points that live in train_vec4.wgsl — same g0-g5+p binding layout
  * from the host side, but g0/g1 are declared as array<vec4<f32>> on the
  * WGSL side for 128-bit aligned global loads. Requires K and N to be
@@ -85,6 +88,13 @@ export class GpuOps {
      *  startup numerics gate. Defaults false; flipped by verifyF16Storage()
      *  during create(). When false, callers fall back to the f32 vec4 path. */
     public f16StorageActive: boolean,
+    /** True iff matmul_sg / matmul_abt_sg passed the startup numerics gate.
+     *  When false, the matmul path falls back to matmul_blocked_vec4 /
+     *  matmul_abt_blocked even if the device advertised subgroups. The gate
+     *  protects against Apple Metal subgroup driver bugs (ref ml-explore/mlx#2205)
+     *  and any future implementation where subgroupAdd diverges past the
+     *  float-reassociation tolerance. */
+    public matmulSgActive: boolean,
   ) {}
 
   /** Destroy every GPU buffer this GpuOps owns — pool, dummies, per-batch
@@ -130,6 +140,11 @@ export class GpuOps {
    *  Settable via the static factory; callers await this before relying on
    *  f16StorageActive being its final value. */
   public f16Ready: Promise<boolean> = Promise.resolve(false);
+
+  /** Promise resolving when the subgroup-matmul gate has finished. Default
+   *  resolved-false for devices without subgroups support (so awaiters
+   *  unblock immediately on those paths). */
+  public matmulSgReady: Promise<boolean> = Promise.resolve(false);
 
   static create(ctx: GpuContext): GpuOps {
     const device = ctx.device;
@@ -210,6 +225,7 @@ export class GpuOps {
     const ops = new GpuOps(
       device, layout, pipelines, dummies, new BufferPool(device),
       ctx.subgroups, /* f16StorageActive */ false,
+      /* matmulSgActive */ false,
     );
 
     // Kick off the numerics gate in the background. Until it settles, all
@@ -219,6 +235,17 @@ export class GpuOps {
       console.warn("[ops] f16-storage numerics gate threw:", err);
       return false;
     });
+
+    // Subgroup matmul gate. Only runs if the device advertised subgroups AND
+    // the pipelines compiled. Result flips matmulSgActive — until then the
+    // matmul path stays on f32 vec4 (so a slow first matmul doesn't race the
+    // gate). The check is cheap (~16ms): one small forward + one small abt.
+    if (ctx.subgroups && pipelines["matmul_sg"] && pipelines["matmul_abt_sg"]) {
+      ops.matmulSgReady = ops.verifyMatmulSg().catch((err) => {
+        console.warn("[ops] matmul-sg numerics gate threw:", err);
+        return false;
+      });
+    }
 
     return ops;
   }
@@ -349,6 +376,123 @@ export class GpuOps {
     return passed;
   }
 
+  /** Numerics gate for the subgroup matmul path.
+   *
+   *  Two fast f32-vs-f32 parity checks (forward + matmulAbt) using small
+   *  representative shapes. Tolerance is much tighter than the f16 gate
+   *  because both paths are pure-f32 — only the reduction tree differs.
+   *  Any divergence beyond float-reassociation noise (≪ 0.1%) is a real
+   *  bug — most likely an Apple Metal subgroup driver issue (ref
+   *  ml-explore/mlx#2205) — and the gate falls the kernel back to the
+   *  battle-tested blocked path.
+   *
+   *  Shapes mirror what attention projections / MLP fc layers actually
+   *  hit on the Huge preset (K = 256, the most common dimension). */
+  private async verifyMatmulSg(): Promise<boolean> {
+    if (!this.pipelines["matmul_sg"] || !this.pipelines["matmul_abt_sg"]) {
+      return false;
+    }
+
+    const M = 128, K = 256, N = 128;
+    const aData = new Float32Array(M * K);
+    const bData = new Float32Array(K * N);
+    let seed = 7777;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return (seed / 0x7fffffff) * 0.4 - 0.2;
+    };
+    for (let i = 0; i < aData.length; i++) aData[i] = rand();
+    for (let i = 0; i < bData.length; i++) bData[i] = rand();
+
+    const a = new GpuTensor(this.device, M * K);
+    a.upload(aData);
+    const b = new GpuTensor(this.device, K * N);
+    b.upload(bData);
+
+    // Forward reference: existing f32 vec4 path.
+    const cRefT = this.newTensor(M * N, "sg.gate.fwd.ref");
+    this.dispatch("matmul_blocked_vec4", [a, b, cRefT], { a: M, b: K, c: N },
+      Math.ceil(M / 64), Math.ceil(N / 64));
+    const refFwd = await cRefT.download();
+
+    // Forward subgroup.
+    const cSgT = this.newTensor(M * N, "sg.gate.fwd.sg");
+    this.dispatch("matmul_sg", [a, b, cSgT], { a: M, b: K, c: N },
+      Math.ceil(M / 4), Math.ceil(N / 16));
+    const sgFwd = await cSgT.download();
+
+    const fwdResult = this.compareMatmulSgOutput(refFwd, sgFwd, "fwd");
+
+    // matmulAbt reference: B as [N, K]; output [M, N], inner K.
+    const bAbtData = new Float32Array(N * K);
+    for (let i = 0; i < bAbtData.length; i++) bAbtData[i] = rand();
+    const bAbt = new GpuTensor(this.device, N * K);
+    bAbt.upload(bAbtData);
+
+    const cAbtRefT = this.newTensor(M * N, "sg.gate.abt.ref");
+    this.dispatch("matmul_abt_blocked", [a, bAbt, cAbtRefT], { a: M, b: K, c: N },
+      Math.ceil(M / 64), Math.ceil(N / 64));
+    const refAbt = await cAbtRefT.download();
+
+    const cAbtSgT = this.newTensor(M * N, "sg.gate.abt.sg");
+    this.dispatch("matmul_abt_sg", [a, bAbt, cAbtSgT], { a: M, b: K, c: N },
+      Math.ceil(M / 4), Math.ceil(N / 16));
+    const sgAbt = await cAbtSgT.download();
+
+    const abtResult = this.compareMatmulSgOutput(refAbt, sgAbt, "abt");
+
+    const passed = fwdResult.passed && abtResult.passed;
+    console.info(`[ops] matmul-sg gate (fwd): ${fwdResult.summary}`);
+    console.info(`[ops] matmul-sg gate (abt): ${abtResult.summary}`);
+    console.info(
+      `[ops] matmul-sg gate verdict: ${passed ? "PASS — subgroup matmul active" : "FAIL — staying on f32 vec4"}`,
+    );
+
+    this.matmulSgActive = passed;
+    a.destroy();
+    b.destroy();
+    bAbt.destroy();
+    cRefT.recycle();
+    cSgT.recycle();
+    cAbtRefT.recycle();
+    cAbtSgT.recycle();
+    return passed;
+  }
+
+  /** Tight f32-vs-f32 comparison for the subgroup matmul gate. Both paths
+   *  are pure-f32 so only float-reassociation noise is expected. Threshold:
+   *  mean_rel < 0.1%, max_abs < 0.1% of mean|ref|. This is an order of
+   *  magnitude tighter than the f16 gate. */
+  private compareMatmulSgOutput(
+    refOut: Float32Array, sgOut: Float32Array, label: string,
+  ): { passed: boolean; summary: string } {
+    let sumAbsRef = 0;
+    for (let i = 0; i < refOut.length; i++) sumAbsRef += Math.abs(refOut[i]);
+    const meanAbsRef = sumAbsRef / refOut.length;
+    const denomFloor = Math.max(meanAbsRef * 0.01, 1e-6);
+    let maxAbs = 0, maxRel = 0, sumRel = 0;
+    for (let i = 0; i < refOut.length; i++) {
+      const r = refOut[i];
+      const f = sgOut[i];
+      const absErr = Math.abs(f - r);
+      const denom = Math.max(Math.abs(r), denomFloor);
+      const rel = absErr / denom;
+      if (rel > maxRel) maxRel = rel;
+      if (absErr > maxAbs) maxAbs = absErr;
+      sumRel += rel;
+    }
+    const meanRel = sumRel / refOut.length;
+    const maxAbsThreshold = meanAbsRef * 1e-3;
+    const passed = maxAbs < maxAbsThreshold && meanRel < 1e-3;
+    const summary =
+      `mean|ref|=${meanAbsRef.toExponential(2)}, ` +
+      `max_abs=${maxAbs.toExponential(2)} (limit ${maxAbsThreshold.toExponential(2)}), ` +
+      `mean_rel=${(meanRel * 100).toFixed(4)}% (limit 0.100%), ` +
+      `max_rel=${(maxRel * 100).toFixed(4)}% — ` +
+      `${passed ? "PASS" : "FAIL"} [${label}]`;
+    return { passed, summary };
+  }
+
   /** Shared comparison helper for the f16 gate. Magnitude-aware tolerance,
    *  same thresholds for both forward and backward. */
   private compareF16Output(
@@ -451,6 +595,17 @@ export class GpuOps {
    * is kept in train.wgsl as a reference / fallback. */
   matmul(a: GpuTensor, b: GpuTensor, M: number, K: number, N: number): GpuTensor {
     const c = this.newTensor(M * N, "matmul.C");
+    // Subgroup-cooperative path: faster on devices that pass the numerics
+    // gate (Apple Metal subgroups, recent Chromium-on-Vulkan). The kernel
+    // is gated on matmulSgActive — flipped only after verifyMatmulSg's
+    // f32-vs-f32 parity check on representative shapes passes. Devices
+    // without subgroups (older Chrome, Firefox, Safari pre-26) or with
+    // buggy subgroup drivers fall back to matmul_blocked_vec4 unchanged.
+    if (this.matmulSgActive) {
+      this.dispatch("matmul_sg", [a, b, c], { a: M, b: K, c: N },
+        Math.ceil(M / 4), Math.ceil(N / 16));
+      return c;
+    }
     // Prefer vec4-loaded variant when K and N are 4-aligned (always true
     // for preset shapes). Measured 1.37× faster than scalar blocked4 at
     // 2048³ standalone. (First integration attempt hit a WGSL access-mode
@@ -469,6 +624,11 @@ export class GpuOps {
    * pattern as matmul, adapted to B's [N,K] layout. */
   matmulAbt(a: GpuTensor, b: GpuTensor, M: number, K: number, N: number): GpuTensor {
     const c = this.newTensor(M * N, "matmul.abt");
+    if (this.matmulSgActive) {
+      this.dispatch("matmul_abt_sg", [a, b, c], { a: M, b: K, c: N },
+        Math.ceil(M / 4), Math.ceil(N / 16));
+      return c;
+    }
     this.dispatch("matmul_abt_blocked", [a, b, c], { a: M, b: K, c: N },
       Math.ceil(M / 64), Math.ceil(N / 64));
     return c;
