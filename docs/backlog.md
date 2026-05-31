@@ -24,7 +24,41 @@ codebase. Sorted by ROI (impact ÷ cost), not by wave number.
 
 These are the items that, when done, unlock the most downstream value.
 
-### A1. Train the first specialist end-to-end (debugger)
+### A0. Fix the LoRA-save bug (BLOCKS all PEFT-based specialists)
+**Impact**: every SFT / DPO / finetune adapter saves to disk with
+`entries:[]` — only the header is written, never the A/B matrices.
+Reproduces on **both** the from-scratch and HF Llama paths
+(`tinygpt sft /tmp/bpe-tiny.tinygpt ...` → 211 B file; same on
+SmolLM2 → 217 B file). Training works (loss decreases, trainable
+param count is correct), but the on-disk adapter is empty.
+
+**Root cause hypothesis**: `Module.update(modules: NestedDictionary)`
+doesn't propagate to the @ModuleInfo array property
+(`@ModuleInfo(key: "layers") public var blocks: [...]`) after update.
+Both `LoraInjection` and `LoraInjectionHF` build a `NestedItem` tree
+with `.array(layersList)` at the `layers` key and call update. The
+optimizer + freeze paths somehow find the LoraLinears (trainable
+count is right), but the writer's `model.blocks[i].attn.qProj as?
+LoraLinear` returns nil — suggesting the property accessor returns
+a stale value after update.
+
+**Direct property assignment is blocked** by MLX-Swift with
+`Fatal error: please use Model.update(modules:)`, so the fix needs
+to either (a) understand why `update(modules:)` isn't propagating
+to the array-of-blocks property, or (b) walk `model.modules()` (the
+framework's flat enumeration) to find LoraLinears for saving rather
+than the typed `block.attn.qProj` access.
+
+**Cost**: probably 2-4 hours of MLX-Swift framework debugging +
+adding a save+reload XCTest case so it doesn't regress.
+**Source**: discovered 2026-05-31 while training the first
+specialist. Blocks Tier A1 (debugger specialist) for the LoRA-based
+specialist path.
+
+**Workaround for now**: train from-scratch with `tinygpt train`
+(full-weight save, no LoRA round-trip).
+
+### A1. Train the first specialist end-to-end (tool-caller)
 **Impact**: validates the north-star thesis. Until this happens, every
 optimization is theoretical.
 **Cost**: 3–5 days execution + GPU hours for training
