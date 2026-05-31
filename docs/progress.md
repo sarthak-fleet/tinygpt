@@ -153,6 +153,12 @@ end-to-end on M5 Pro. Datasets / quantization / fine-tuning / all
 other features confirmed working. See
 [feature_audit_2026_05_31.md](feature_audit_2026_05_31.md).
 
+**Modality coverage**: text + code + structured + screen-text. See
+[capability_matrix.md](capability_matrix.md) for the full matrix.
+
+**Living backlog** (ROI-ordered): [backlog.md](backlog.md). Top items
+get worked first; sort updates when we learn.
+
 ## Capabilities shipped — Web track
 
 ```
