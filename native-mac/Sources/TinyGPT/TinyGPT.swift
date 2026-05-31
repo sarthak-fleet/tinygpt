@@ -28,7 +28,7 @@ struct TinyGPT {
             return
         }
         // Same pre-switch shim pattern for `train-heads` — see the merge
-        // TODO note next to `tuned-lens` in the switch below. Other agents
+        // To-do note next to `tuned-lens` in the switch below. Other agents
         // are concurrently touching this switch; we ship the shim to keep
         // the surface area testable until the speculative-heads PR lands.
         if cmd == "train-heads" {

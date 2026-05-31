@@ -151,7 +151,7 @@ public final class JSONSchemaFSM {
 
     // MARK: - State
 
-    fileprivate var stack: [Frame]
+    private var stack: [Frame]
     /// Set by the string frame just before it pops, used by the object
     /// parent to read the key text.
     private var lastPoppedKey: String? = nil

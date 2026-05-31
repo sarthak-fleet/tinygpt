@@ -94,7 +94,7 @@ enum DownloadDataset {
         if let lm = info.lastModified    { print("  modified:  \(lm)") }
         if let dl = info.downloads       { print("  downloads: \(dl)") }
         if info.gated                    { print("  gated:     YES (HF_TOKEN required if download fails)") }
-        if info.`private`                { print("  private:   YES") }
+        if info.private                { print("  private:   YES") }
         print("  files:     \(info.siblings.count)  (\(formatBytes(info.totalBytes)) reported)")
 
         // Filter to the data-bearing siblings — skip README, .gitattributes,
