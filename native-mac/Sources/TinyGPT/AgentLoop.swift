@@ -3,6 +3,7 @@ import MLX
 import MLXNN
 import MLXRandom
 import TinyGPTModel
+import TinyGPTServe
 
 /// The agent conversation loop. Owns:
 ///   - the loaded model
@@ -59,6 +60,14 @@ public final class AgentLoop {
     private let jsonOut: Bool
     private let maxAgentSteps: Int
 
+    // Cloud-escalation: when set, an "escalate" tool is added to the
+    // schema and dispatched against the configured remote provider.
+    // The cloud's response comes back into the conversation as a
+    // tool_result, so the agent can decide what to do with it (often
+    // just relay it as the final answer).
+    private let cloudEscalateProvider: CloudEscalate.Provider?
+    private let cloudEscalateModel: String?
+
     /// Token boundary the agent expects between turns. We use a ChatML-ish
     /// scheme so models trained with that template have a fighting chance
     /// of producing the right shape. For byte-level models this is just
@@ -74,12 +83,20 @@ public final class AgentLoop {
                 temperature: Float = 0.0, maxTokensPerTurn: Int = 256,
                 toolTimeoutSec: Double = 30.0,
                 transcriptURL: URL? = nil, jsonOut: Bool = false,
-                maxAgentSteps: Int = 8)
+                maxAgentSteps: Int = 8,
+                cloudEscalateProvider: CloudEscalate.Provider? = nil,
+                cloudEscalateModel: String? = nil)
     {
         self.model = model
         self.cfg = cfg
         self.tokenizer = tokenizer
-        self.schema = schema
+        // When escalation is on, add a synthetic "escalate" tool. The
+        // model only sees it via the systemPromptDescription; the
+        // executor route is intercepted in `runToolCall` so the tool
+        // never goes through subprocess.
+        self.schema = cloudEscalateProvider != nil
+            ? AgentLoop.augmentWithEscalateTool(base: schema)
+            : schema
         self.cache = cache
         self.temperature = temperature
         self.maxTokensPerTurn = maxTokensPerTurn
@@ -87,6 +104,44 @@ public final class AgentLoop {
         self.transcriptURL = transcriptURL
         self.jsonOut = jsonOut
         self.maxAgentSteps = maxAgentSteps
+        self.cloudEscalateProvider = cloudEscalateProvider
+        self.cloudEscalateModel = cloudEscalateModel
+    }
+
+    /// Build a synthetic `escalate` tool definition and append it to the
+    /// user's schema. The tool has no `_exec` — it's dispatched in
+    /// `runToolCall` directly into `CloudEscalate.complete(...)`.
+    private static func augmentWithEscalateTool(base: ToolSchema) -> ToolSchema {
+        // Skip if the user already declared one — don't shadow their
+        // version (they might have a custom escalation policy).
+        if base.tools.contains(where: { $0.name == "escalate" }) { return base }
+        let escalate = ToolSchema.Tool(
+            name: "escalate",
+            description: "Call this when you don't know the answer or the question requires a stronger general-purpose model. Pass the user's question verbatim as `question`. The response is the cloud model's full answer — relay it back to the user.",
+            parameters: ToolSchema.ParameterSpec(
+                type: "object",
+                properties: [
+                    "question": ToolSchema.PropertySpec(
+                        type: "string",
+                        description: "The question to forward to the cloud model.")
+                ],
+                required: ["question"],
+                raw: [
+                    "type": "object",
+                    "properties": [
+                        "question": [
+                            "type": "string",
+                            "description": "The question to forward to the cloud model."
+                        ] as [String: Any]
+                    ] as [String: Any],
+                    "required": ["question"]
+                ] as [String: Any]
+            ),
+            exec: nil,
+            execArgs: nil,
+            handler: "cloud_escalate"
+        )
+        return ToolSchema(tools: base.tools + [escalate])
     }
 
     // MARK: - Prefill
@@ -233,6 +288,39 @@ public final class AgentLoop {
     }
 
     private func runToolCall(name: String, arguments: [String: Any]) -> ToolExecutor.Result {
+        // Cloud-escalation hook — intercept BEFORE we hand off to the
+        // subprocess executor. The "escalate" tool name is reserved when
+        // `--cloud-escalate` is on. We resolve the named provider and
+        // call CloudEscalate.complete with the model-provided question.
+        if let provider = cloudEscalateProvider, name == "escalate" {
+            let t0 = Date()
+            let question = (arguments["question"] as? String) ?? ""
+            if question.isEmpty {
+                return ToolExecutor.Result(
+                    stdout: "",
+                    stderr: "escalate: missing 'question' argument",
+                    exitCode: 2,
+                    durationSec: -t0.timeIntervalSinceNow)
+            }
+            do {
+                let text = try CloudEscalate.complete(
+                    provider: provider,
+                    model: cloudEscalateModel,
+                    messages: [CloudEscalate.Message(role: "user", content: question)],
+                    maxTokens: 1024)
+                return ToolExecutor.Result(
+                    stdout: text, stderr: "",
+                    exitCode: 0,
+                    durationSec: -t0.timeIntervalSinceNow)
+            } catch {
+                return ToolExecutor.Result(
+                    stdout: "",
+                    stderr: "escalate (\(provider.rawValue)) failed: \(error)",
+                    exitCode: 1,
+                    durationSec: -t0.timeIntervalSinceNow)
+            }
+        }
+
         do {
             return try ToolExecutor.execute(toolName: name, arguments: arguments,
                                               schema: schema,

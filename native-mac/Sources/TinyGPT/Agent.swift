@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXNN
 import TinyGPTModel
+import TinyGPTServe
 
 /// `tinygpt agent <model> --tools tools.json [...]` — the agent runtime CLI.
 ///
@@ -33,6 +34,8 @@ enum Agent {
         var lazyEmbedding = false
         var asyncLoad = true
         var preAllocate = true
+        var cloudEscalate: String? = nil    // "anthropic" or "openai"
+        var cloudEscalateModel: String? = nil
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -71,6 +74,12 @@ enum Agent {
                 asyncLoad = false; i += 1
             case "--no-kv-preallocate":
                 preAllocate = false; i += 1
+            case "--cloud-escalate":
+                guard i + 1 < args.count else { exitUsage() }
+                cloudEscalate = args[i + 1]; i += 2
+            case "--cloud-escalate-model":
+                guard i + 1 < args.count else { exitUsage() }
+                cloudEscalateModel = args[i + 1]; i += 2
             case "-h", "--help":
                 exitUsage()
             default:
@@ -182,13 +191,27 @@ enum Agent {
             try? "".write(to: url, atomically: true, encoding: .utf8)
         }
 
+        // Resolve the cloud-escalate provider, if requested.
+        var cloudProvider: CloudEscalate.Provider? = nil
+        if let cloud = cloudEscalate {
+            guard let resolved = CloudEscalate.Provider(rawValue: cloud.lowercased()) else {
+                fputs("agent: --cloud-escalate must be one of: anthropic|openai (got \"\(cloud)\")\n", stderr)
+                exit(2)
+            }
+            cloudProvider = resolved
+            fputs("agent: cloud escalation enabled — provider=\(resolved.rawValue)" +
+                   (cloudEscalateModel.map { ", model=\($0)" } ?? "") + "\n", stderr)
+        }
+
         let loop = AgentLoop(
             model: model, cfg: cfg, tokenizer: tokenizer,
             schema: schema, cache: cache!,
             temperature: temperature, maxTokensPerTurn: maxTokensPerTurn,
             toolTimeoutSec: toolTimeout,
             transcriptURL: transcriptURL, jsonOut: jsonOut,
-            maxAgentSteps: maxSteps
+            maxAgentSteps: maxSteps,
+            cloudEscalateProvider: cloudProvider,
+            cloudEscalateModel: cloudEscalateModel
         )
 
         // Prefill (no-op if loaded from disk).
@@ -278,10 +301,19 @@ enum Agent {
         --no-async-load          Disable background-thread model load
         --no-kv-preallocate      Disable KV pre-allocation at max context
 
+        Cloud escalation (north-star: small on-device specialist + cloud fallback):
+        --cloud-escalate <p>     Add a synthetic `escalate` tool dispatched
+                                 against the named cloud provider when the
+                                 on-device model defers. Provider: anthropic|openai.
+                                 Requires ANTHROPIC_API_KEY / OPENAI_API_KEY in env.
+        --cloud-escalate-model M Override the cloud model name. Defaults:
+                                 anthropic→claude-sonnet-4-5, openai→gpt-4o-mini.
+
         examples:
           tinygpt agent specialist.tinygpt --tools tools.json
           tinygpt agent specialist.tinygpt --tools tools.json --single "Debug this error"
           tinygpt agent specialist.tinygpt --tools tools.json --json-out
+          tinygpt agent specialist.tinygpt --tools tools.json --cloud-escalate anthropic
         """)
         exit(2)
     }
