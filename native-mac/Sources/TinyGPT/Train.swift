@@ -644,6 +644,17 @@ enum Train {
         }
         var stoppedEarly = false
         var lastStep = startStep
+        // Pausable-training config — cooperative pause on thermal pressure
+        // or battery discharge (despite AC). Polled every 50 steps to
+        // avoid IOKit churn. When triggered: same path as SIGINT —
+        // atomically save the final checkpoint + exit 0 so the user (or
+        // a wrapper script) can `--resume` when conditions clear.
+        var pauseCfg = PowerMonitor.PauseConfig()
+        // Pause checks are enabled by default. Set TINYGPT_NO_POWER_PAUSE=1
+        // to disable (useful for benchmarks where we don't want the run
+        // to bail on thermal noise).
+        let powerPauseEnabled = ProcessInfo.processInfo.environment["TINYGPT_NO_POWER_PAUSE"] != "1"
+        _ = pauseCfg  // suppresses warning until cfg flags wire up
         for step in startStep..<steps {
             // LR schedule update. When `useCompiledLR` is on (AdamW +
             // schedule), this still works: `optimizer.learningRate =`
@@ -655,6 +666,20 @@ enum Train {
                     step: step, total: steps, warmup: warmupSteps,
                     maxLR: maxLR, minLR: minLR
                 )
+            }
+
+            // Cooperative power/thermal pause check. Every 50 steps to
+            // avoid IOKit overhead. Same exit path as SIGINT.
+            if powerPauseEnabled && step > startStep && (step - startStep) % 50 == 0 {
+                let snapshot = PowerMonitor.sample()
+                let (shouldPause, reason) = PowerMonitor.shouldPause(
+                    snapshot: snapshot, cfg: pauseCfg
+                )
+                if shouldPause {
+                    fputs("\n[power-pause] \(reason ?? "?") — flushing checkpoint and exiting cleanly\n", stderr)
+                    fputs("[power-pause] resume with: tinygpt train --resume \(outPath ?? "?.tinygpt") --steps \(steps)\n", stderr)
+                    TrainSupport.stopRequested.set()
+                }
             }
 
             if accumSteps == 1 {
