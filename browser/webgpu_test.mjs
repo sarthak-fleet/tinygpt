@@ -13,9 +13,15 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage();
 const errors = [];
+const gateLines = [];
 page.on("pageerror", (e) => errors.push(e.message));
 page.on("console", (m) => {
-  if (m.type() === "error") errors.push(m.text());
+  const t = m.text();
+  if (m.type() === "error") errors.push(t);
+  // Capture numerics-gate verdicts so the headless run reports the
+  // detailed mean|ref| / max_abs / mean_rel summaries from verifyMatmulSg
+  // and verifyF16Storage (which only emit via console.info inside the page).
+  if (/\[ops\]\s+(matmul-sg|f16-storage) gate/.test(t)) gateLines.push(t);
 });
 
 await page.goto(`${BASE}/webgpu-test.html`, { waitUntil: "load" });
@@ -27,6 +33,10 @@ await page.waitForFunction(
 
 const text = (await page.textContent("#results")) || "";
 console.log(text);
+if (gateLines.length) {
+  console.log("\n--- numerics-gate verdicts ---");
+  for (const line of gateLines) console.log(line);
+}
 if (errors.length) console.log("page errors: " + errors.join(" | "));
 await browser.close();
 

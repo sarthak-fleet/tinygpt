@@ -90,6 +90,26 @@ async function main(): Promise<void> {
   const dev = ctx.device;
   const tol = 2e-3;
 
+  // --- subgroup matmul gate (d4a9de6 follow-up) --------------------------
+  // verifyMatmulSg() fires automatically in GpuOps.create(); we just await
+  // its verdict and surface PASS/FAIL into the test output. Devices without
+  // subgroups support short-circuit to SKIP rather than FAIL — the kernel
+  // can never silently regress training because matmulSgActive defaults to
+  // false (so matmul() falls back to matmul_blocked_vec4 unchanged).
+  {
+    if (!ctx.subgroups) {
+      lines.push("skip matmul-sg gate              device has no subgroups feature");
+      out.textContent = lines.join("\n");
+    } else {
+      const passed = await ops.matmulSgReady;
+      check(
+        "matmul-sg numerics gate",
+        passed,
+        passed ? "PASS — matmul_sg + matmul_abt_sg active" : "FAIL — falling back to matmul_blocked_vec4",
+      );
+    }
+  }
+
   // --- matmul (stage 1) ---------------------------------------------------
   {
     const M = 24, K = 40, N = 18;

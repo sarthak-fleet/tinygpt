@@ -16,7 +16,7 @@ work ships.
 
 | | **Mac** (MLX-Swift) | **Web** (WebGPU) |
 |---|---|---|
-| **Training (Huge preset)** | 42 ms/step | 720 ms/step (baseline) |
+| **Training (Huge preset)** | 42 ms/step | 720 ms/step (subgroup matmul gate failed; fallback active) |
 | **Speedup vs browser** | 17.2× faster | (baseline) |
 | **Inference TTFT** | 4.8–5.8 ms p99 | n/a (no inference path) |
 | **Inference ITL p99** | 2.75–4.94 ms | n/a |
@@ -133,8 +133,11 @@ WebGPU kernels (in webgpu/train.wgsl + train_sg.wgsl)
         ✅ Cross-entropy subgroup variant
         ✅ Bias-grad subgroup variant
         ✅ FA2 forward in WGSL (browser-side flash attention)
-        ⚠️  Subgroup matmul (matmul_sg / matmul_abt_sg) — code in train_sg.wgsl,
-            numerics gate + benchmark not yet run (d4a9de6)
+        ❌ Subgroup matmul (matmul_sg / matmul_abt_sg) — kernel ships in
+            train_sg.wgsl but the numerics gate FAILS on M5 Pro + Chromium
+            (mean_rel 1415%, max_rel 132316% at K=256). Decision 19 fallback
+            engaged — training stays on matmul_blocked_vec4, no regression.
+            See "Browser training: lever stack" row below for verdict.
 
 Browser learning artifacts
         ✅ docs/decision_log.md — every decision logged
@@ -158,13 +161,26 @@ Scalar baseline (no SIMD, single thread)  ~24,000 ms        1.0×
 + Multi-thread CPU                         ~4,500 ms        5.3×
 + WebGPU naive matmul                      ~1,200 ms       20.0×
 + Blocked 4×4 matmul (current)               720 ms        33.3×
-+ Subgroup matmul (estimated, WIP)       ~480–720 ms      33–50×
++ Subgroup matmul (gate FAILED 2026-05-31)    720 ms        33.3× (fallback)
 + Mac MLX-Swift (target parity)              42 ms       571.4×
 ```
 
 The Mac is currently **~17× the browser** at Huge preset training.
-Subgroup matmul (Wave 2.5/E, code-complete d4a9de6, gate not yet
-run) would close some of that for browser users.
+
+**Subgroup matmul verdict (2026-05-31)**: code-complete in d4a9de6,
+gate now run on M5 Pro + Chromium WebGPU. **The kernel fails parity
+catastrophically** — mean_rel 1415% (limit 0.100%), max_abs 3.47
+where mean|ref|=0.17 — at the representative Huge shape M=128 K=256
+N=128. Decision 19's auto-disable engaged: `matmulSgActive=false`,
+`matmul()` falls back to `matmul_blocked_vec4` unchanged. No
+regression risk to user-facing training. Likely causes (per d4a9de6
+caveats): per-output `subgroupAdd` inside the (i,j) loop hitting
+non-uniform-control-flow Apple Metal pathology, or an
+`mm_sg_partial` initialization assumption (`sgSize≥32`). The
+follow-up variant proposed in commit message caveat 3 (replace
+shared-mem gather with `subgroupShuffle` B-broadcast) would
+side-step the failing path entirely; deferred until browser focus
+returns.
 
 ## Decisions logged (research-driven)
 
@@ -174,7 +190,7 @@ run) would close some of that for browser users.
 | Int4 matmul Metal kernel | wave_2_5_kernel_audit.md §3 | DROP — MLX already hand-tuned |
 | Int8 W8A8 (cider) | mac_decode_baseline_m5pro.md | DEFER — no win at current model sizes |
 | ANE+GPU routing | wave_2_5_kernel_audit.md §4 | DEFER — gated on Apple Stateful Models API |
-| WebGPU subgroup matmul | wave_2_5_kernel_audit.md §5 | BUILD (in flight, d4a9de6) |
+| WebGPU subgroup matmul | wave_2_5_kernel_audit.md §5 | BUILT, GATE FAILED — kernel disabled, falls back to vec4 blocked (2026-05-31) |
 | desi-max as Hindi base | wave_4_landscape.md §4 | WRONG — replaced with Sarvam-Edge / Airavata |
 | TML "Interaction Models" framing | wave_4_landscape.md §1 | ADOPT vocabulary (foreground/background) |
 | Apple FM positioning | wave_4_landscape.md §2 | tinygpt = open/hackable/multi-specialist counter-position |
@@ -191,7 +207,8 @@ Pinned in `docs/roadmap/north_star_refined.md` §"What I'd ship next":
 5. Train first specialist (debugger) — Wave 3
 
 Backgrounded:
-- WebGPU subgroup matmul numerics gate + benchmark (when browser focus returns)
+- WebGPU subgroup matmul — kernel fix (current attempt's parity gate
+  fails; needs subgroupShuffle-based redesign or a uniformity audit)
 - cider W8A8 (when a 3B+ specialist needs it)
 
 ## How this page updates
