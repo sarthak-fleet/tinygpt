@@ -1,0 +1,290 @@
+{
+  "engine" : {
+    "commit" : "d4a9de6",
+    "name" : "tinygpt"
+  },
+  "git_commit" : "d4a9de6",
+  "git_dirty" : true,
+  "harness_version" : "0.1.0",
+  "metrics" : {
+    "ane_residency_pct" : {
+      "median" : null,
+      "n" : 0,
+      "p95" : null,
+      "p99" : null
+    },
+    "cpu_mean_watts" : {
+      "median" : null,
+      "n" : 0,
+      "p95" : null,
+      "p99" : null
+    },
+    "decode_tps" : {
+      "median" : 293.19780723970405,
+      "n" : 10,
+      "p95" : 298.32930222475869,
+      "p99" : 298.32930222475869
+    },
+    "energy_per_token_j" : {
+      "median" : null,
+      "n" : 0,
+      "p95" : null,
+      "p99" : null
+    },
+    "gpu_mean_watts" : {
+      "median" : null,
+      "n" : 0,
+      "p95" : null,
+      "p99" : null
+    },
+    "itl_ms" : {
+      "median" : 3.2389163970947266,
+      "n" : 620,
+      "p95" : 4.6510696411132812,
+      "p99" : 4.9350261688232422
+    },
+    "peak_rss_mb" : {
+      "median" : 686.96574399999997,
+      "n" : 10,
+      "p95" : 687.24427200000002,
+      "p99" : 687.24427200000002
+    },
+    "prefill_tps" : {
+      "median" : 14359.444527655933,
+      "n" : 10,
+      "p95" : 15048.517546810181,
+      "p99" : 15048.517546810181
+    },
+    "ttft_ms" : {
+      "median" : 4.7550201416015625,
+      "n" : 10,
+      "p95" : 5.7499408721923828,
+      "p99" : 5.7499408721923828
+    }
+  },
+  "model" : {
+    "params" : 101086208,
+    "path" : "\/tmp\/mega-pilot.tinygpt"
+  },
+  "runs" : [
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 233.29007625579834,
+      "decode_tokens" : 63,
+      "decode_tps" : 270.05006389951041,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2579898834228516,
+      "peak_rss_mb" : 685.88440000000003,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 14359.444527655933,
+      "run_index" : 0,
+      "ttft_ms" : 4.4569969177246094,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 221.78506851196289,
+      "decode_tokens" : 63,
+      "decode_tps" : 284.05879810886296,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2380819320678711,
+      "peak_rss_mb" : 685.88440000000003,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 15033.768642715129,
+      "run_index" : 1,
+      "ttft_ms" : 4.2570829391479492,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 227.94997692108154,
+      "decode_tokens" : 63,
+      "decode_tps" : 276.37642631484539,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2590627670288086,
+      "peak_rss_mb" : 685.93355199999996,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 14760.149341544553,
+      "run_index" : 2,
+      "ttft_ms" : 4.3359994888305664,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 228.3329963684082,
+      "decode_tokens" : 63,
+      "decode_tps" : 275.91281593988919,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2830238342285156,
+      "peak_rss_mb" : 685.96632,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 11987.20414405966,
+      "run_index" : 3,
+      "ttft_ms" : 5.3390264511108398,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 214.87200260162354,
+      "decode_tokens" : 63,
+      "decode_tps" : 293.19780723970405,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2160282135009766,
+      "peak_rss_mb" : 686.93297600000005,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 11130.549239125929,
+      "run_index" : 4,
+      "ttft_ms" : 5.7499408721923828,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 214.25402164459229,
+      "decode_tokens" : 63,
+      "decode_tps" : 294.04348873555955,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2600164413452148,
+      "peak_rss_mb" : 686.96574399999997,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 14998.907973403364,
+      "run_index" : 5,
+      "ttft_ms" : 4.2669773101806641,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 215.13998508453369,
+      "decode_tokens" : 63,
+      "decode_tps" : 292.83259443959605,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2280683517456055,
+      "peak_rss_mb" : 686.96574399999997,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 12185.825453389927,
+      "run_index" : 6,
+      "ttft_ms" : 5.2520036697387695,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 211.17603778839111,
+      "decode_tokens" : 63,
+      "decode_tps" : 298.32930222475869,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.229975700378418,
+      "peak_rss_mb" : 687.21150399999999,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 15048.517546810181,
+      "run_index" : 7,
+      "ttft_ms" : 4.2529106140136719,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 212.00597286224365,
+      "decode_tokens" : 63,
+      "decode_tps" : 297.16143913047148,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2269954681396484,
+      "peak_rss_mb" : 687.24427200000002,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 13459.459286000802,
+      "run_index" : 8,
+      "ttft_ms" : 4.7550201416015625,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 212.58902549743652,
+      "decode_tokens" : 63,
+      "decode_tps" : 296.34643581711924,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 63,
+      "itl_ms_median" : 3.2290220260620117,
+      "peak_rss_mb" : 687.24427200000002,
+      "prefill_tokens" : 64,
+      "prefill_tps" : 13336.088431825521,
+      "run_index" : 9,
+      "ttft_ms" : 4.7990083694458008,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    }
+  ],
+  "system" : {
+    "hardware_model" : "Mac17,8",
+    "macos_build" : "25F71",
+    "physical_ram_gb" : 48,
+    "thermal_state" : "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded"
+  },
+  "warnings" : [
+    "n=10 is small; p95\/p99 are unstable. Use --n-runs 20+ for paper-quality numbers.",
+    "git tree is dirty — uncommitted changes; results not reproducible. Commit before publishing."
+  ],
+  "workload" : {
+    "batch_size" : 1,
+    "energy_metrics_enabled" : false,
+    "gen_tokens" : 64,
+    "mode" : "single",
+    "n_runs" : 10,
+    "prompt_tokens" : 64,
+    "warm_runs" : 2
+  }
+}

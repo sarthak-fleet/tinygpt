@@ -1,0 +1,489 @@
+{
+  "engine" : {
+    "commit" : "d4a9de6",
+    "name" : "tinygpt"
+  },
+  "git_commit" : "d4a9de6",
+  "git_dirty" : true,
+  "harness_version" : "0.1.0",
+  "metrics" : {
+    "ane_residency_pct" : {
+      "median" : null,
+      "n" : 0,
+      "p95" : null,
+      "p99" : null
+    },
+    "cpu_mean_watts" : {
+      "median" : null,
+      "n" : 0,
+      "p95" : null,
+      "p99" : null
+    },
+    "decode_tps" : {
+      "median" : 696.99444159487496,
+      "n" : 20,
+      "p95" : 707.32788816106586,
+      "p99" : 717.31972695675825
+    },
+    "energy_per_token_j" : {
+      "median" : null,
+      "n" : 0,
+      "p95" : null,
+      "p99" : null
+    },
+    "gpu_mean_watts" : {
+      "median" : null,
+      "n" : 0,
+      "p95" : null,
+      "p99" : null
+    },
+    "itl_ms" : {
+      "median" : 1.3049840927124023,
+      "n" : 2520,
+      "p95" : 2.3119449615478516,
+      "p99" : 2.7459859848022461
+    },
+    "peak_rss_mb" : {
+      "median" : 323.69952799999999,
+      "n" : 20,
+      "p95" : 323.69952799999999,
+      "p99" : 323.69952799999999
+    },
+    "prefill_tps" : {
+      "median" : 56814.742790623844,
+      "n" : 20,
+      "p95" : 58527.298811730077,
+      "p99" : 58687.244425010933
+    },
+    "ttft_ms" : {
+      "median" : 2.2540092468261719,
+      "n" : 20,
+      "p95" : 3.4730434417724609,
+      "p99" : 3.6499500274658203
+    }
+  },
+  "model" : {
+    "params" : 22126336,
+    "path" : "\/tmp\/flagship-huge-v5.tinygpt"
+  },
+  "runs" : [
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 197.16298580169678,
+      "decode_tokens" : 127,
+      "decode_tps" : 644.13713093052093,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3049840927124023,
+      "peak_rss_mb" : 323.601224,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 57477.748728654784,
+      "run_index" : 0,
+      "ttft_ms" : 2.2269487380981445,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 189.16797637939453,
+      "decode_tokens" : 127,
+      "decode_tps" : 671.36099053726366,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3089179992675781,
+      "peak_rss_mb" : 323.61760800000002,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 58687.244425010933,
+      "run_index" : 1,
+      "ttft_ms" : 2.1810531616210938,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 195.30093669891357,
+      "decode_tokens" : 127,
+      "decode_tps" : 650.27849915430784,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3099908828735352,
+      "peak_rss_mb" : 323.63399199999998,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 35068.973283689331,
+      "run_index" : 2,
+      "ttft_ms" : 3.6499500274658203,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 181.96594715118408,
+      "decode_tokens" : 127,
+      "decode_tps" : 697.93278351406968,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3110637664794922,
+      "peak_rss_mb" : 323.63399199999998,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 56787.699598053732,
+      "run_index" : 3,
+      "ttft_ms" : 2.2540092468261719,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 179.54897880554199,
+      "decode_tokens" : 127,
+      "decode_tps" : 707.32788816106586,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3070106506347656,
+      "peak_rss_mb" : 323.65037599999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 36855.2833115947,
+      "run_index" : 4,
+      "ttft_ms" : 3.4730434417724609,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 182.55293369293213,
+      "decode_tokens" : 127,
+      "decode_tps" : 695.68862811935753,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3320446014404297,
+      "peak_rss_mb" : 323.65037599999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 55625.644925659224,
+      "run_index" : 5,
+      "ttft_ms" : 2.3010969161987305,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 182.21092224121094,
+      "decode_tokens" : 127,
+      "decode_tps" : 696.99444159487496,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3140439987182617,
+      "peak_rss_mb" : 323.66676000000001,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 56814.742790623844,
+      "run_index" : 6,
+      "ttft_ms" : 2.2529363632202148,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 185.51898002624512,
+      "decode_tokens" : 127,
+      "decode_tps" : 684.5660750292692,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.320958137512207,
+      "peak_rss_mb" : 323.66676000000001,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 44551.754035102276,
+      "run_index" : 7,
+      "ttft_ms" : 2.8730630874633789,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 182.22200870513916,
+      "decode_tokens" : 127,
+      "decode_tps" : 696.95203615883668,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3120174407958984,
+      "peak_rss_mb" : 323.68314400000003,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 57632.001717567495,
+      "run_index" : 8,
+      "ttft_ms" : 2.2209882736206055,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 185.19699573516846,
+      "decode_tokens" : 127,
+      "decode_tps" : 685.75626454335088,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3099908828735352,
+      "peak_rss_mb" : 323.68314400000003,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 56637.92720751134,
+      "run_index" : 9,
+      "ttft_ms" : 2.2599697113037109,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 183.00998210906982,
+      "decode_tokens" : 127,
+      "decode_tps" : 693.95121805055896,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3089179992675781,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 44321.878312556757,
+      "run_index" : 10,
+      "ttft_ms" : 2.8879642486572266,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 182.95896053314209,
+      "decode_tokens" : 127,
+      "decode_tps" : 694.14473950836964,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.320958137512207,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 48247.21743428443,
+      "run_index" : 11,
+      "ttft_ms" : 2.6530027389526367,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 183.98702144622803,
+      "decode_tokens" : 127,
+      "decode_tps" : 690.26607964908533,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3070106506347656,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 58393.616706547749,
+      "run_index" : 12,
+      "ttft_ms" : 2.1920204162597656,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 180.99498748779297,
+      "decode_tokens" : 127,
+      "decode_tps" : 701.67689040872131,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.2949705123901367,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 58527.298811730077,
+      "run_index" : 13,
+      "ttft_ms" : 2.1870136260986328,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 179.84592914581299,
+      "decode_tokens" : 127,
+      "decode_tps" : 706.15999262920593,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.3020038604736328,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 58527.298811730077,
+      "run_index" : 14,
+      "ttft_ms" : 2.1870136260986328,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 177.0479679107666,
+      "decode_tokens" : 127,
+      "decode_tps" : 717.31972695675825,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.2919902801513672,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 57996.209571135354,
+      "run_index" : 15,
+      "ttft_ms" : 2.2070407867431641,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 181.55395984649658,
+      "decode_tokens" : 127,
+      "decode_tps" : 699.51655203432733,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.2930631637573242,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 39288.028686425176,
+      "run_index" : 16,
+      "ttft_ms" : 3.2579898834228516,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 180.24492263793945,
+      "decode_tokens" : 127,
+      "decode_tps" : 704.59682381792641,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.2990236282348633,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 58393.616706547749,
+      "run_index" : 17,
+      "ttft_ms" : 2.1920204162597656,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 181.13303184509277,
+      "decode_tokens" : 127,
+      "decode_tps" : 701.14213131822351,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.2910366058349609,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 39120.553211644263,
+      "run_index" : 18,
+      "ttft_ms" : 3.271937370300293,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    },
+    {
+      "ane_residency_pct" : null,
+      "cpu_mean_watts" : null,
+      "decode_ms" : 179.67593669891357,
+      "decode_tokens" : 127,
+      "decode_tps" : 706.82809469815845,
+      "energy_per_token_j" : null,
+      "gpu_mean_watts" : null,
+      "itl_ms_count" : 127,
+      "itl_ms_median" : 1.2849569320678711,
+      "peak_rss_mb" : 323.69952799999999,
+      "prefill_tokens" : 128,
+      "prefill_tps" : 57762.215503792562,
+      "run_index" : 19,
+      "ttft_ms" : 2.2159814834594727,
+      "warm" : false,
+      "warnings" : [
+
+      ]
+    }
+  ],
+  "system" : {
+    "hardware_model" : "Mac17,8",
+    "macos_build" : "25F71",
+    "physical_ram_gb" : 48,
+    "thermal_state" : "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded"
+  },
+  "warnings" : [
+    "git tree is dirty — uncommitted changes; results not reproducible. Commit before publishing."
+  ],
+  "workload" : {
+    "batch_size" : 1,
+    "energy_metrics_enabled" : false,
+    "gen_tokens" : 128,
+    "mode" : "single",
+    "n_runs" : 20,
+    "prompt_tokens" : 128,
+    "warm_runs" : 3
+  }
+}
