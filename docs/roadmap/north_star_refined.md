@@ -11,6 +11,14 @@ vision. The project is now:
 
 That's a product. Every piece below is grounded in user-stated vision.
 
+**Vocabulary borrowed from TML's "Interaction Models" (May 2026)**:
+foreground interaction model (200ms micro-turns for direct UX) +
+background async model (reasoning, tool calls, long-horizon work).
+TML's implementation is cloud-only; tinygpt's on-device version on
+Apple Silicon is a real differentiator. See
+[wave_4_landscape.md](../research/wave_4_landscape.md) for the full
+landscape analysis.
+
 ## Architecture
 
 ```
@@ -69,6 +77,20 @@ That's a product. Every piece below is grounded in user-stated vision.
 - N small specialists at 1-3B each, only one loaded at a time
 - Mixture-of-Specialists with router → smaller resident footprint
 - Each specialist tuned for its task → outperforms generalist on that task
+
+**vs Apple Foundation Models** (same architecture, walled):
+- Apple's ~3B on-device + Private Cloud Compute is literally the same
+  shape we're building. They win on integration, lose on openness.
+- Apple is closed: closed model, closed router, LoRA-adapters-only
+  customization, adapters re-trained per OS update, no public API to
+  swap in your own model or route to non-PCC cloud.
+- tinygpt's positioning: **open, hackable, multi-specialist, route-
+  anywhere**. Swap base models (Llama/Qwen/Sarvam), do full SFT/DPO not
+  just adapters, route to any cloud (Claude/GPT/local), target
+  devs/researchers Apple won't serve.
+- Steal Apple's ideas: KV-cache sharing (5:3 block-depth), 2-bit QAT,
+  `Tool` protocol shape. Don't try to plug into App Intents — no public
+  hook exists. Stay parallel.
 
 ## Concrete capabilities the agent needs
 
@@ -144,9 +166,24 @@ In order of probable demo value:
 
 5. **Indian-context assistant** (multilingual)
    - Hindi + English specialist
-   - Training data: desi-max base + curated Hindi instruction sets
+   - Base: **Sarvam-Edge** (forthcoming, Apache-2.0, MoE, 22 Indian
+     languages, custom Indic-aware tokenizer) OR **AI4Bharat Airavata**
+     (Hindi instruction-tuned, OpenHathi base, IndicTrans2-translated
+     instruction sets, available now). Earlier draft referenced
+     `yenupam/desi-max` — that's a text-to-image LoRA, not a language
+     model. Corrected.
+   - Training data: Sarvam's pretrain corpus, Airavata's IndicInstruct,
+     bootstrap more via IndicTrans2 of English instruction sets
    - Tools: same as general assistant
-   - Eval: Hindi-language LLM benchmarks (where they exist)
+   - Eval: **MILU** (AI4Bharat, 11 Indic languages, India-centric) +
+     **IndicGenBench** (29 Indic languages). Both paper-backed and
+     reproducible — wire into the eval harness BEFORE claiming Hindi
+     support. Run base Qwen3 / smollm2 through MILU first to get a
+     baseline; that number tells you whether tokenizer-swap to Sarvam's
+     vocab is worth the engineering cost.
+   - See [wave_4_landscape.md](../research/wave_4_landscape.md) §4 for
+     full landscape (Sarvam vs Krutrim vs AI4Bharat, tokenizer choices,
+     eval coverage).
 
 ## Realtime / interaction model (NEW — user-stated)
 
@@ -189,10 +226,13 @@ turn-based + transcript). Pairs naturally with screen reading
 Wave 1 (DONE):          agent runtime + JSON mode + HF data
 Wave 2 (DONE/partial):  GitHub data + eval harness (eval deferred —
                         subprocess refactor needed)
-Wave 2.5 (in progress): CPU + GPU + ANE + browser optimizations
+Wave 2.5 (RESOLVED 2026-05-31, see research/wave_2_5_kernel_audit.md):
                         - LOW risk: CF R2 + Pausable training + GPU lock (DONE)
-                        - HIGH risk: Metal kernels, ANE routing
-                          (agent pool degraded — re-attempt later)
+                        - Flash Attention Metal kernel:    DROP — MLXFast already fused
+                        - Int4 packed matmul Metal kernel: DROP — MLX quantized_matmul is hand-tuned
+                        - ANE+GPU heterogeneous routing:   DEFER — research-grade, gated on Apple Stateful Models API
+                        - Int8 W8A8 matmul (adopt cider):  BUILD on M5+ — 1.2-1.9× prefill (user is M5 Pro, viable)
+                        - WebGPU subgroup matmul:          BUILD when browser focus returns (background agent in flight)
 Wave 2.6 (NEW):         screen reading + cloud escalation + router
                         infrastructure
                         - ScreenCaptureKit + AX integration
@@ -231,11 +271,15 @@ roughly:
 
 ## Honest reality checks
 
-1. **Wave 2.5 Metal kernels are harder than agent prompts can solve.**
-   We just had 4 parallel agent spawns stall at the "I'll start by..."
-   stage. Custom Metal kernel work probably needs more focused +
-   step-by-step prompting, possibly done over multiple short sessions
-   with explicit handoff between them.
+1. **Wave 2.5 Metal kernels turned out to be mostly unneeded.** Research
+   audit (`docs/research/wave_2_5_kernel_audit.md`, 2026-05-31)
+   collapsed 5 items to 1 buildable: WebGPU subgroup matmul (deferred
+   to background agent), with cider W8A8 viable on M5+ (1-2 day adopt,
+   not 2-3 week build). FA Metal + int4 matmul are already solved by
+   MLX-Swift's `MLXFast.scaledDotProductAttention` + `quantized_matmul`.
+   ANE routing is research-grade and gated on Apple's Stateful Models
+   API. The original "Metal kernels need more focused prompting"
+   concern was wrong — the work itself was wrong.
 
 2. **The screen reader is the biggest scope risk.** ScreenCaptureKit
    is well-documented; ViT integration is well-trodden; but training
@@ -266,13 +310,27 @@ roughly:
 
 ## What I'd ship next if doing this solo
 
-1. Land remaining Wave 2.5 Metal kernels (or get honest negative
-   results) — re-spawn agents in shorter sessions
-2. Wave 2.6 ScreenCaptureKit + Cloud API client (both ~3-5 days each,
-   manual implementation; agent pool not reliable enough)
-3. Train first specialist end-to-end (debugger) — Wave 3
-4. Wire it into a Mac app demo
-5. Public release + writeup
+(Updated 2026-05-31 after Wave 2.5 + 4 research audits.)
 
-Everything above is buildable. The hard part is sequencing patience
-+ honesty about which agent jobs will actually land cleanly.
+1. **Mac fast-path**: adopt cider W8A8 on M5 Pro (1-2 days, 1.2-1.9×
+   prefill). Pair with decode jitter benchmark to baseline realtime
+   targets (1 day).
+2. **Continue.dev / Ollama provider adapter** for tinygpt (~2-3 days).
+   Drops tinygpt into Continue/Cline/Aider configs — lowest-effort path
+   to real users. Pairs with the SSE streaming already shipped.
+3. **Fix Indic plan** + wire MILU + IndicGenBench evals (1-2 days)
+   before any Hindi specialist training.
+4. **Tool-call extractor (mini-router)** (1 week) — tiny BERT-class
+   encoder + softmax over tool catalog. Adopts Apple `Tool` protocol
+   shape + Cline structured-output enforcement.
+5. **Wave 2.6 ScreenCaptureKit + AX** (~3-5 days each).
+6. **Train first specialist** (debugger) end-to-end — Wave 3.
+7. **Wire into a Mac app demo** + public release + writeup.
+
+Backgrounded:
+- WebGPU subgroup matmul (browser-side, 3-5 days agent work)
+
+Everything above is buildable. The original "Metal kernels" wall was
+mostly imaginary — the real next step is product surface (Continue
+adapter + tool-call extractor) plus the one Mac-speed lever that
+actually exists on this hardware (cider W8A8).
