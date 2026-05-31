@@ -21,9 +21,12 @@ import TinyGPTModel
 //   - Uses POSIX sockets (Darwin) — zero new dependencies, works on macOS 14+.
 //   - One thread per connection. Sample throughput dominates anyway; the
 //     request rate from a single `lm-eval` driver is sequential.
-//   - JSON parse/encode via Foundation. No streaming (no SSE) for now —
-//     lm-evaluation-harness's `local-chat-completions` doesn't need it for
-//     log-likelihood (loglikelihood) or generate-until tasks.
+//   - JSON parse/encode via Foundation. SSE streaming is supported when
+//     the request body has `stream: true` — emits one event per token in
+//     OpenAI's `chat.completion.chunk` format. lm-evaluation-harness
+//     itself doesn't need streaming for loglikelihood / generate-until
+//     tasks, but realtime/interactive clients do (the north-star
+//     interaction model).
 //   - All MLX work is serialised on a single dispatch queue (`inferenceQueue`)
 //     because the model + KV cache are not thread-safe.
 //
@@ -312,6 +315,14 @@ extension Serve {
                 let maxTokens = (json["max_tokens"] as? Int) ?? 128
                 let temperature = (json["temperature"] as? Double).map { Float($0) } ?? 0.0
                 let stopParam = readStopParam(json["stop"])
+                let stream = (json["stream"] as? Bool) ?? false
+
+                if stream {
+                    streamChat(clientFd: clientFd, prompt: prompt,
+                                maxTokens: maxTokens, temperature: temperature,
+                                stop: stopParam)
+                    return
+                }
 
                 let (text, promptTokens, completionTokens) = try inferenceQueue.sync {
                     try self.generate(prompt: prompt, maxTokens: maxTokens,
@@ -351,6 +362,14 @@ extension Serve {
                 let maxTokens = (json["max_tokens"] as? Int) ?? 128
                 let temperature = (json["temperature"] as? Double).map { Float($0) } ?? 0.0
                 let stopParam = readStopParam(json["stop"])
+                let stream = (json["stream"] as? Bool) ?? false
+
+                if stream {
+                    streamCompletion(clientFd: clientFd, prompt: prompt,
+                                      maxTokens: maxTokens, temperature: temperature,
+                                      stop: stopParam)
+                    return
+                }
 
                 let (text, promptTokens, completionTokens) = try inferenceQueue.sync {
                     try self.generate(prompt: prompt, maxTokens: maxTokens,
@@ -377,6 +396,200 @@ extension Serve {
             } catch {
                 respond(clientFd: clientFd, status: 500, body: "error: \(error)")
             }
+        }
+
+        // MARK: SSE streaming
+
+        /// Streaming variant of /v1/chat/completions.
+        ///
+        /// Wire format (OpenAI-compatible):
+        ///   data: {"id":"chatcmpl-...","object":"chat.completion.chunk",
+        ///           "created":TS,"model":"tinygpt",
+        ///           "choices":[{"index":0,"delta":{"role":"assistant"}}]}
+        ///
+        ///   data: {...,"choices":[{"index":0,"delta":{"content":"hello"}}]}
+        ///   data: {...,"choices":[{"index":0,"delta":{"content":" world"}}]}
+        ///   ...
+        ///   data: {...,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+        ///   data: [DONE]
+        ///
+        /// One generation token may not produce visible output (partial
+        /// BPE byte) — we only emit a delta when the running decoded
+        /// suffix grows. This matches OpenAI's behavior on multi-byte
+        /// tokens (Chinese, emoji, etc.) and is what SSE clients expect.
+        private func streamChat(clientFd: Int32, prompt: String,
+                                  maxTokens: Int, temperature: Float,
+                                  stop: [String]) {
+            let id = "chatcmpl-\(UUID().uuidString)"
+            writeSSEHead(clientFd: clientFd)
+            // Opening delta — sets role on the assistant message.
+            writeSSEEvent(clientFd: clientFd, payload: chunkPayload(
+                id: id, object: "chat.completion.chunk",
+                delta: ["role": "assistant"], finishReason: nil))
+
+            var finishReason = "stop"
+            do {
+                try inferenceQueue.sync {
+                    try self.generateStreaming(prompt: prompt, maxTokens: maxTokens,
+                                                temperature: temperature, stop: stop)
+                    { newText in
+                        self.writeSSEEvent(clientFd: clientFd, payload: self.chunkPayload(
+                            id: id, object: "chat.completion.chunk",
+                            delta: ["content": newText], finishReason: nil))
+                    }
+                }
+            } catch {
+                finishReason = "error"
+            }
+            // Final delta with finish_reason — empty delta per OpenAI spec.
+            writeSSEEvent(clientFd: clientFd, payload: chunkPayload(
+                id: id, object: "chat.completion.chunk",
+                delta: [:], finishReason: finishReason))
+            writeSSETerminator(clientFd: clientFd)
+        }
+
+        /// Streaming variant of /v1/completions. Same wire as streamChat
+        /// but uses "text_completion" object type and `text` field in the
+        /// choice instead of `delta`.
+        private func streamCompletion(clientFd: Int32, prompt: String,
+                                        maxTokens: Int, temperature: Float,
+                                        stop: [String]) {
+            let id = "cmpl-\(UUID().uuidString)"
+            writeSSEHead(clientFd: clientFd)
+
+            var finishReason = "stop"
+            do {
+                try inferenceQueue.sync {
+                    try self.generateStreaming(prompt: prompt, maxTokens: maxTokens,
+                                                temperature: temperature, stop: stop)
+                    { newText in
+                        let payload: [String: Any] = [
+                            "id": id,
+                            "object": "text_completion",
+                            "created": Int(Date().timeIntervalSince1970),
+                            "model": "tinygpt",
+                            "choices": [[
+                                "index": 0,
+                                "text": newText,
+                                "finish_reason": NSNull()
+                            ]]
+                        ]
+                        self.writeSSEEvent(clientFd: clientFd, payload: payload)
+                    }
+                }
+            } catch {
+                finishReason = "error"
+            }
+            let final: [String: Any] = [
+                "id": id,
+                "object": "text_completion",
+                "created": Int(Date().timeIntervalSince1970),
+                "model": "tinygpt",
+                "choices": [[
+                    "index": 0,
+                    "text": "",
+                    "finish_reason": finishReason
+                ]]
+            ]
+            writeSSEEvent(clientFd: clientFd, payload: final)
+            writeSSETerminator(clientFd: clientFd)
+        }
+
+        private func chunkPayload(id: String, object: String,
+                                   delta: [String: Any],
+                                   finishReason: String?) -> [String: Any] {
+            var choice: [String: Any] = [
+                "index": 0,
+                "delta": delta
+            ]
+            choice["finish_reason"] = finishReason ?? NSNull()
+            return [
+                "id": id,
+                "object": object,
+                "created": Int(Date().timeIntervalSince1970),
+                "model": "tinygpt",
+                "choices": [choice]
+            ]
+        }
+
+        /// Streaming generation. Calls `onText` with the newly-decoded
+        /// suffix each time a step extends the visible string. The token
+        /// loop is the same as `generate(...)` — extracted into a
+        /// callback-driven variant rather than duplicated.
+        func generateStreaming(prompt: String, maxTokens: Int,
+                                temperature: Float, stop: [String],
+                                onText: (String) -> Void) throws
+        {
+            let promptIds = tokenizer.encode(prompt)
+            if promptIds.isEmpty { return }
+            let promptArr = MLXArray(promptIds.map { Int32($0) }, [1, promptIds.count])
+            let ctxCap = maxContext
+            let bounded: MLXArray
+            if promptArr.shape[1] > ctxCap {
+                bounded = promptArr[0..., (promptArr.shape[1] - ctxCap) ..< promptArr.shape[1]]
+            } else {
+                bounded = promptArr
+            }
+            var idx = bounded
+            var generated: [Int] = []
+            generated.reserveCapacity(maxTokens)
+            var lastDecoded: String = ""
+            for _ in 0..<maxTokens {
+                let T = idx.shape.last!
+                let lo = max(0, T - ctxCap)
+                let cond = idx[0..., lo..<T]
+                let logits = model(cond)
+                let last = logits[0..., logits.shape[1] - 1, 0...]
+                let nextId: MLXArray
+                if temperature <= 0 {
+                    nextId = argMax(last, axis: -1).reshaped([1, 1])
+                } else {
+                    let scaled = last / MLXArray(temperature)
+                    nextId = MLXRandom.categorical(scaled).reshaped([1, 1])
+                }
+                eval(nextId)
+                generated.append(Int(nextId.item(Int32.self)))
+
+                let nowDecoded = tokenizer.decode(generated)
+                // Only emit a delta when the visible string grew. BPE /
+                // multi-byte UTF-8 can leave us with intermediate bytes
+                // that don't yet form a complete character.
+                if nowDecoded.count > lastDecoded.count
+                    && nowDecoded.hasPrefix(lastDecoded) {
+                    let suffix = String(nowDecoded.dropFirst(lastDecoded.count))
+                    onText(suffix)
+                    lastDecoded = nowDecoded
+                }
+
+                if !stop.isEmpty {
+                    if stop.contains(where: { !$0.isEmpty && nowDecoded.contains($0) }) {
+                        return
+                    }
+                }
+                idx = concatenated([idx, nextId.asType(idx.dtype)], axis: 1)
+            }
+        }
+
+        private func writeSSEHead(clientFd: Int32) {
+            var head = "HTTP/1.1 200 OK\r\n"
+            head += "Content-Type: text/event-stream; charset=utf-8\r\n"
+            head += "Cache-Control: no-cache\r\n"
+            head += "Connection: close\r\n"
+            head += "X-Accel-Buffering: no\r\n"  // tell reverse-proxies not to buffer
+            head += "\r\n"
+            writeAll(clientFd: clientFd, data: Data(head.utf8))
+        }
+
+        private func writeSSEEvent(clientFd: Int32, payload: [String: Any]) {
+            guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+            var frame = "data: ".data(using: .utf8)!
+            frame.append(data)
+            frame.append(Data("\n\n".utf8))
+            writeAll(clientFd: clientFd, data: frame)
+        }
+
+        private func writeSSETerminator(clientFd: Int32) {
+            writeAll(clientFd: clientFd, data: Data("data: [DONE]\n\n".utf8))
         }
 
         private func readStopParam(_ raw: Any?) -> [String] {
