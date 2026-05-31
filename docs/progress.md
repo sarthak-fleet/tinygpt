@@ -173,6 +173,13 @@ full writeup + ranked next-iteration options.
 the gotchas list (gated datasets need `HF_TOKEN`, parquet shards
 not yet decoded, `/tmp` reaping).
 
+**Session retrospective (2026-05-31)**: see
+[session_2026_05_31.md](session_2026_05_31.md) — multi-hour session
+that closed Wave 2.5 research, shipped 5 Wave 2.6 product features,
+audited every CLI, found+fixed the A0 LoRA-save bug, and trained
+the first specialist. Recommended read after every laptop service
+break.
+
 ## Capabilities shipped — Web track
 
 ```
