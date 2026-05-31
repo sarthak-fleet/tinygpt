@@ -73,13 +73,18 @@ enum SFT {
             case "--length-bucket": lengthBuckets = Int(args[i+1]) ?? lengthBuckets; i += 2
             case "--dora":          useDora = true; i += 1
             case "--no-dora":       useDora = false; i += 1
-            case "--vera":          peftVariant = .vera; i += 1
-            case "--rs-lora":       peftVariant = .rsLora; i += 1
-            case "--lora-fa":       peftVariant = .loraFA; i += 1
-            case "--pissa-init":    peftVariant = .pissa; i += 1
-            case "--loftq":         peftVariant = .loftq; i += 1
+            // PEFT-variant flags pick a non-DoRA variant. Auto-disable
+            // DoRA so the user doesn't need to remember `--no-dora`
+            // alongside (an easy footgun — the curated default has
+            // DoRA on, but `--vera` clearly wants VeRA not DoRA-VeRA).
+            case "--vera":          peftVariant = .vera; useDora = false; i += 1
+            case "--rs-lora":       peftVariant = .rsLora; useDora = false; i += 1
+            case "--lora-fa":       peftVariant = .loraFA; useDora = false; i += 1
+            case "--pissa-init":    peftVariant = .pissa; useDora = false; i += 1
+            case "--loftq":         peftVariant = .loftq; useDora = false; i += 1
             case "--adalora-target-rank":
                 peftVariant = .adaLora
+                useDora = false
                 adaLoraTargetRank = Int(args[i+1]) ?? adaLoraTargetRank; i += 2
             case "--layer-drop":    layerDropProb = Float(args[i+1]) ?? layerDropProb; i += 2
             case "--optimizer":
