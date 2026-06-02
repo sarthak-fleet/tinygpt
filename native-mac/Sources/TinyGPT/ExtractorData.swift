@@ -293,13 +293,34 @@ enum ExtractorData {
         return nil
     }
 
-    /// BFCL multi-turn rows put the query in `messages[*]` (ChatML-ish).
-    /// Find the first user message.
+    /// BFCL multi-turn rows put the query in `messages[*]` (ChatML-ish)
+    /// or, for BFCL v4, in `question: [[{role, content}]]` (a nested list
+    /// of message turns; first inner list is the initial turn).
     static func extractFirstUserMessage(_ row: [String: Any]) -> String? {
-        guard let msgs = row["messages"] as? [[String: Any]] else { return nil }
-        for m in msgs {
-            if (m["role"] as? String) == "user", let c = m["content"] as? String {
-                return c
+        // Shape 1: row["messages"] = [{role, content}, ...]
+        if let msgs = row["messages"] as? [[String: Any]] {
+            for m in msgs {
+                if (m["role"] as? String) == "user", let c = m["content"] as? String {
+                    return c
+                }
+            }
+        }
+        // Shape 2: row["question"] = [[{role, content}, ...], ...]  (BFCL v4)
+        if let outer = row["question"] as? [[[String: Any]]] {
+            for inner in outer {
+                for m in inner {
+                    if (m["role"] as? String) == "user", let c = m["content"] as? String {
+                        return c
+                    }
+                }
+            }
+        }
+        // Shape 3: row["question"] = [{role, content}, ...]  (some BFCL v3)
+        if let msgs = row["question"] as? [[String: Any]] {
+            for m in msgs {
+                if (m["role"] as? String) == "user", let c = m["content"] as? String {
+                    return c
+                }
             }
         }
         return nil

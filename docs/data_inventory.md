@@ -26,16 +26,28 @@ Verified by pulling each Tier A foundational set. Sizes from `du -sh`:
 | `NousResearch/hermes-function-calling-v1` | 113 MB | `corpus.jsonl` (11,230 records) | ✅ |
 | `Intel/orca_dpo_pairs` | 67 MB | `corpus.jsonl` | ✅ |
 | `meta-math/MetaMathQA` | 672 MB | `corpus.jsonl` | ✅ |
+| `google/IndicGenBench_xquad_in` | 45 MB | per-language JSON shards | ✅ (eval) |
 | `argilla/ultrafeedback-binarized-preferences-cleaned` | 145 MB | parquet (not decoded) | ⚠️ needs decode |
 | `iamtarun/python_code_instructions_18k_alpaca` | 11 MB | parquet (not decoded) | ⚠️ needs decode |
 | `Locutusque/function-calling-chatml` | 102 MB | parquet (not decoded) | ⚠️ needs decode |
 | `Salesforce/xlam-function-calling-60k` | 0 B | — | 🚫 gated; needs `HF_TOKEN` |
 | `ai4bharat/MILU` | 0 B | — | 🚫 gated; needs `HF_TOKEN` |
 
+### External (git-cloned, not HF Hub)
+
+| Source | On-disk | Form | Ready for use? |
+|---|---|---|---|
+| `gorilla-llm/gorilla` (BFCL v4) | 223 MB | repo + `bfcl_eval/data/*.json` (JSONL despite `.json` ext) | ✅ — 1,951 router pairs extracted via `tinygpt extractor-data --bfcl` into `~/.cache/tinygpt/router/bfcl_*.jsonl` |
+| `sierra-research/tau-bench` | 65 MB | python task files | ⚠️ — clone done; extractor-data parser doesn't yet read Python literal tasks |
+
 Three of the four ready-for-training sets (alpaca-cleaned, hermes-fc-v1,
 orca_dpo_pairs, MetaMathQA) are immediately usable with
 `tinygpt sft` / `tinygpt dpo`. Parquet-only sets stage on disk but
 need a python-side decode pass; see "Known gotchas" §2 below.
+
+GitHub corpus path verified unauthenticated on `sindresorhus/is` (4
+issue→PR records in ~30 s; real corpus build needs `GITHUB_TOKEN`
+for the 5,000 req/h limit).
 
 ## Tool-calling (north-star primary)
 

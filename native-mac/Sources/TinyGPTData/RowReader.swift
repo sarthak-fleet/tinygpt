@@ -67,6 +67,13 @@ public enum RowReader {
         case .jsonl:
             return try readJSONL(url: url, visit: visit)
         case .json:
+            // Some HF-shipped files have `.json` extension but ship as
+            // JSONL (one object per line) — BFCL's BFCL_v4_*.json files
+            // are the canonical case. Sniff for `}\n{` in the head; if
+            // present, dispatch to the JSONL reader instead.
+            if isProbablyJSONL(url: url) {
+                return try readJSONL(url: url, visit: visit)
+            }
             return try readJSON(url: url, visit: visit)
         case .parquet, .arrow:
             // We don't have a decoder. Surface the situation as an empty
@@ -80,6 +87,24 @@ public enum RowReader {
         case .unknown:
             throw HFDatasets.HFError.ioError("unknown shard format for \(url.lastPathComponent)")
         }
+    }
+
+    /// Sniff the first 8 KB for a `}\n{` boundary — a strong signal
+    /// the file is line-delimited JSON despite a misleading `.json`
+    /// extension. False positives are rare (single-doc JSON would need
+    /// a literal `}\n{` inside a string to trip this, which is unusual).
+    private static func isProbablyJSONL(url: URL) -> Bool {
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? fh.close() }
+        guard let head = try? fh.read(upToCount: 8192), head.count >= 3 else { return false }
+        let bytes = [UInt8](head)
+        for i in 0..<(bytes.count - 2) {
+            // "}\n{" — closing brace, newline, opening brace
+            if bytes[i] == 0x7d && bytes[i + 1] == 0x0a && bytes[i + 2] == 0x7b {
+                return true
+            }
+        }
+        return false
     }
 
     /// Streaming JSONL reader. Reads the file as UTF-8 bytes and
