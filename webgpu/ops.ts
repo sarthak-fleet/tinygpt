@@ -47,7 +47,7 @@ const F16_ENTRIES = ["matmul_blocked_f16", "matmul_abt_blocked_f16", "pack_to_f1
  *  so it only compiles on adapters that advertise the shader-f16 feature.
  *  Shared tiles are f16, the inner multiply is f16, the accumulator stays
  *  f32 for K-direction precision. Same bind layout as F16_ENTRIES. */
-const F16C_ENTRIES = ["matmul_blocked_f16_compute"] as const;
+const F16C_ENTRIES = ["matmul_blocked_f16_compute", "matmul_abt_blocked_f16_compute"] as const;
 /** Flash-Attention-2-style fused attention forward. Same bind layout as
  * train.wgsl (g0=q g1=k g2=v g3=attn g4=ctx, p.a=B p.b=T p.c=C p.d=H
  * p.fa=1/sqrt(hd)). Workgroup-cooperative — one workgroup per
@@ -523,6 +523,7 @@ export class GpuOps {
    *  user win). */
   private async verifyShaderF16Compute(): Promise<boolean> {
     if (!this.pipelines["matmul_blocked_f16_compute"] ||
+        !this.pipelines["matmul_abt_blocked_f16_compute"] ||
         !this.pipelines["pack_to_f16"]) {
       return false;
     }
@@ -542,11 +543,9 @@ export class GpuOps {
     const b = new GpuTensor(this.device, K * N);
     b.upload(bData);
 
-    // f32 reference via the existing matmul (vec4) path.
+    // --- Forward check ---
     const cF32 = this.matmul(a, b, M, K, N);
     const refOut = await cF32.download();
-
-    // Pack B and run the shader-f16 compute kernel.
     const bPackedBuf = this.device.createBuffer({
       size: (K * N) * 2,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
@@ -554,20 +553,50 @@ export class GpuOps {
     this.packToF16(b.buffer, bPackedBuf, K, N);
     const cF16c = this.matmulF16Compute(a, bPackedBuf, M, K, N);
     const f16cOut = await cF16c.download();
-
     const fwdResult = this.compareF16Output(refOut, f16cOut, "fwd");
+
+    // --- Backward check (matmulAbt: dA = dY @ W^T) ---
+    // Same packing axis convention as verifyF16Storage's backward block:
+    // W has shape [Nb, Kb] packed along Kb (matmulAbt's K axis).
+    const Mb = 64, Kb = 128, Nb = 64;
+    const aBwdData = new Float32Array(Mb * Kb);
+    const wBwdData = new Float32Array(Nb * Kb);
+    for (let i = 0; i < aBwdData.length; i++) aBwdData[i] = rand();
+    for (let i = 0; i < wBwdData.length; i++) wBwdData[i] = rand();
+    const aBwd = new GpuTensor(this.device, Mb * Kb);
+    aBwd.upload(aBwdData);
+    const wBwd = new GpuTensor(this.device, Nb * Kb);
+    wBwd.upload(wBwdData);
+    const cAbtRef = this.matmulAbt(aBwd, wBwd, Mb, Kb, Nb);
+    const abtRefOut = await cAbtRef.download();
+    cAbtRef.recycle();
+    const wBwdPacked = this.device.createBuffer({
+      size: Nb * Kb * 2,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    this.packToF16(wBwd.buffer, wBwdPacked, Nb, Kb);
+    const cAbtF16c = this.matmulAbtF16Compute(aBwd, wBwdPacked, Mb, Kb, Nb);
+    const abtF16cOut = await cAbtF16c.download();
+    const bwdResult = this.compareF16Output(abtRefOut, abtF16cOut, "bwd");
+
+    const passed = fwdResult.passed && bwdResult.passed;
     console.info(`[ops] shader-f16 compute gate (fwd): ${fwdResult.summary}`);
+    console.info(`[ops] shader-f16 compute gate (bwd): ${bwdResult.summary}`);
     console.info(
-      `[ops] shader-f16 compute gate verdict: ${fwdResult.passed ? "PASS — f16-compute path active" : "FAIL — staying on f16-storage / f32"}`,
+      `[ops] shader-f16 compute gate verdict: ${passed ? "PASS — f16-compute path active" : "FAIL — staying on f16-storage / f32"}`,
     );
 
-    this.shaderF16Active = fwdResult.passed;
+    this.shaderF16Active = passed;
     a.destroy();
     b.destroy();
     bPackedBuf.destroy();
     cF32.recycle();
     cF16c.recycle();
-    return fwdResult.passed;
+    aBwd.destroy();
+    wBwd.destroy();
+    wBwdPacked.destroy();
+    cAbtF16c.recycle();
+    return passed;
   }
 
   /** Tight f32-vs-f32 comparison for the subgroup matmul gate. Both paths
@@ -840,6 +869,25 @@ export class GpuOps {
     const c = this.newTensor(M * N, "matmul.abt.f16.C");
     this.dispatchMixed(
       "matmul_abt_blocked_f16",
+      [a.buffer, bPackedF16, c.buffer],
+      { a: M, b: K, c: N },
+      Math.ceil(M / 64), Math.ceil(N / 64),
+    );
+    return c;
+  }
+
+  /** Backward matmulAbt against a packed-f16 weight, executed via the
+   *  shader-f16 compute kernel (f16 shared tiles + f16 multiply + f32
+   *  accumulator). Mirror of matmulF16Compute for the dY @ W^T path. */
+  matmulAbtF16Compute(
+    a: GpuTensor, bPackedF16: GPUBuffer, M: number, K: number, N: number,
+  ): GpuTensor {
+    if (K % 2 !== 0) {
+      throw new Error(`matmulAbtF16Compute: K must be even (got K=${K})`);
+    }
+    const c = this.newTensor(M * N, "matmul.abt.f16c.C");
+    this.dispatchMixed(
+      "matmul_abt_blocked_f16_compute",
       [a.buffer, bPackedF16, c.buffer],
       { a: M, b: K, c: N },
       Math.ceil(M / 64), Math.ceil(N / 64),

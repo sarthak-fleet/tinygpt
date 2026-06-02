@@ -146,3 +146,92 @@ fn matmul_blocked_f16_compute(
     }
   }
 }
+
+// ===========================================================================
+// Backward dA = dY @ W^T (matmulAbt variant). f16 shared tiles, f16
+// inner multiply, f32 accumulator — mirrors matmul_abt_blocked_f16 from
+// train_f16.wgsl but with f16 throughout the inner loop.
+// ===========================================================================
+var<workgroup> mabc_tileA_f16: array<array<f16, 16>, 64>;  // [m][k]
+var<workgroup> mabc_tileB_f16: array<array<f16, 64>, 16>;  // [k][n] but loaded from W[n,k]
+
+@compute @workgroup_size(16, 16)
+fn matmul_abt_blocked_f16_compute(
+  @builtin(workgroup_id) wid: vec3<u32>,
+  @builtin(local_invocation_id) lid: vec3<u32>,
+) {
+  let M = p.a; let K = p.b; let N = p.c;  // matmulAbt convention: output [M, N], inner K
+  let halfK = K / 2u;
+  let blockRow = wid.x * 64u;
+  let blockCol = wid.y * 64u;
+  let lrow = lid.x; let lcol = lid.y;
+
+  var acc: array<array<f32, 4>, 4>;
+  for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      acc[i][j] = 0.0;
+    }
+  }
+
+  let nTiles = (K + 15u) / 16u;
+  for (var t: u32 = 0u; t < nTiles; t = t + 1u) {
+    let kBase = t * 16u;
+
+    // Load A[blockRow + lrow*4 + i, kBase + lcol] — f32 → f16 on load.
+    for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+      let aRow = blockRow + lrow * 4u + i;
+      let aCol = kBase + lcol;
+      var v: f32 = 0.0;
+      if (aRow < M && aCol < K) { v = g0[aRow * K + aCol]; }
+      mabc_tileA_f16[lrow * 4u + i][lcol] = f16(v);
+    }
+
+    // Load B[blockCol + lcol*4 + j, kBase + lrow] — packed-f16 along K axis.
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      let bRow = blockCol + lcol * 4u + j;
+      let bCol = kBase + lrow;
+      var v: f16 = 0.0h;
+      if (bRow < N && bCol < K) {
+        let bColPair = bCol / 2u;
+        let bIsHigh = (bCol & 1u) == 1u;
+        let pair = unpack2x16float(g1[bRow * halfK + bColPair]);
+        v = f16(select(pair.x, pair.y, bIsHigh));
+      }
+      mabc_tileB_f16[lrow][lcol * 4u + j] = v;
+    }
+    workgroupBarrier();
+
+    let myA0 = lrow * 4u;
+    let myB0 = lcol * 4u;
+    for (var k: u32 = 0u; k < 16u; k = k + 1u) {
+      let a0 = mabc_tileA_f16[myA0 + 0u][k];
+      let a1 = mabc_tileA_f16[myA0 + 1u][k];
+      let a2 = mabc_tileA_f16[myA0 + 2u][k];
+      let a3 = mabc_tileA_f16[myA0 + 3u][k];
+      let b0 = mabc_tileB_f16[k][myB0 + 0u];
+      let b1 = mabc_tileB_f16[k][myB0 + 1u];
+      let b2 = mabc_tileB_f16[k][myB0 + 2u];
+      let b3 = mabc_tileB_f16[k][myB0 + 3u];
+      acc[0][0] = acc[0][0] + f32(a0 * b0); acc[0][1] = acc[0][1] + f32(a0 * b1);
+      acc[0][2] = acc[0][2] + f32(a0 * b2); acc[0][3] = acc[0][3] + f32(a0 * b3);
+      acc[1][0] = acc[1][0] + f32(a1 * b0); acc[1][1] = acc[1][1] + f32(a1 * b1);
+      acc[1][2] = acc[1][2] + f32(a1 * b2); acc[1][3] = acc[1][3] + f32(a1 * b3);
+      acc[2][0] = acc[2][0] + f32(a2 * b0); acc[2][1] = acc[2][1] + f32(a2 * b1);
+      acc[2][2] = acc[2][2] + f32(a2 * b2); acc[2][3] = acc[2][3] + f32(a2 * b3);
+      acc[3][0] = acc[3][0] + f32(a3 * b0); acc[3][1] = acc[3][1] + f32(a3 * b1);
+      acc[3][2] = acc[3][2] + f32(a3 * b2); acc[3][3] = acc[3][3] + f32(a3 * b3);
+    }
+    workgroupBarrier();
+  }
+
+  for (var i: u32 = 0u; i < 4u; i = i + 1u) {
+    let outRow = blockRow + lrow * 4u + i;
+    if (outRow >= M) { continue; }
+    for (var j: u32 = 0u; j < 4u; j = j + 1u) {
+      let outCol = blockCol + lcol * 4u + j;
+      if (outCol < N) {
+        g2[outRow * N + outCol] = acc[i][j];
+      }
+    }
+  }
+}

@@ -285,11 +285,19 @@ export class GpuModel {
   ): GpuTensor {
     // dB = x^T @ dy never reads the weight — always stays on f32 vec4.
     const dB = this.keep(this.ops.matmulAtb(x, dy, cin, N, cout));
-    // dA = dy @ W^T reads the weight. If the f16-storage path is active
-    // and this weight has a packed mirror, dispatch the f16 variant.
+    // dA = dy @ W^T reads the weight. Same dispatch preference as the
+    // forward linear: f16-compute > f16-storage > f32-vec4, gated on
+    // shaderF16Active / useF16Storage / matShape evenness.
     let dA: GpuTensor;
-    if (this.useF16Storage && w.wF16 && w.matShape && cin % 2 === 0 && cout % 2 === 0) {
-      dA = this.keep(this.ops.matmulAbtF16Weight(dy, w.wF16, N, cout, cin));
+    if (
+      this.useF16Storage && w.wF16 && w.matShape &&
+      cin % 2 === 0 && cout % 2 === 0
+    ) {
+      if (this.ops.shaderF16Active) {
+        dA = this.keep(this.ops.matmulAbtF16Compute(dy, w.wF16, N, cout, cin));
+      } else {
+        dA = this.keep(this.ops.matmulAbtF16Weight(dy, w.wF16, N, cout, cin));
+      }
     } else {
       dA = this.keep(this.ops.matmulAbt(dy, w.w, N, cout, cin));
     }
