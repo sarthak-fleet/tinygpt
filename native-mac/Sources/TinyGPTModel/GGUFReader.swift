@@ -58,6 +58,7 @@ public enum GGUFReader {
         case f16  = 1
         case q4_0 = 2
         case q8_0 = 8
+        case q4_K = 12
     }
 
     public struct TensorInfo {
@@ -196,6 +197,86 @@ public enum GGUFReader {
                     let payload = blockStart.advanced(by: 2).assumingMemoryBound(to: Int8.self)
                     for i in 0..<32 {
                         out[b * 32 + i] = scale * Float(payload[i])
+                    }
+                }
+            }
+            return MLXArray(out, info.shape)
+        case .q4_K:
+            // K-quant: 256-element super-blocks, 144 bytes each.
+            //   2 bytes  d     — fp16 outer scale for the 8 sub-block scales
+            //   2 bytes  dmin  — fp16 outer scale for the 8 sub-block mins
+            //  12 bytes  packed 6-bit (8 sub-scales + 8 sub-mins)
+            // 128 bytes  qs    — 256 4-bit quantised values (2 per byte)
+            //
+            // Sub-block layout (8 sub-blocks of 32 elements). The
+            // packing for the (scale, min) pair of sub-block j follows
+            // llama.cpp/ggml-quants.c::get_scale_min_k4:
+            //   j < 4:   sc = scales[j] & 0x3f
+            //            m  = scales[j+4] & 0x3f
+            //   j ≥ 4:   sc = (scales[j+4] & 0x0f) | ((scales[j-4] >> 6) << 4)
+            //            m  = (scales[j+4] >> 4)   | ((scales[j  ] >> 6) << 4)
+            //
+            // The qs bytes are read in 32-byte chunks, each chunk
+            // covering TWO consecutive sub-blocks (low nibble for
+            // sub-block 2i, high nibble for sub-block 2i+1).
+            // Dequant per element: x = d·sc·(quant_4bit) - dmin·m.
+            precondition(nElems % 256 == 0, "Q4_K expects multiple-of-256 element count (got \(nElems))")
+            let blockBytes = 2 + 2 + 12 + 128
+            let nBlocks = nElems / 256
+            guard raw.count >= base + nBlocks * blockBytes else {
+                throw GGUFError.truncated("q4_K tensor \(info.name)")
+            }
+            var out = [Float](repeating: 0, count: nElems)
+            raw.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
+                let bytesBase = ptr.baseAddress!.advanced(by: base)
+                for b in 0..<nBlocks {
+                    let blockStart = bytesBase.advanced(by: b * blockBytes)
+                    let d = halfToFloat(blockStart.load(as: UInt16.self))
+                    let dmin = halfToFloat(blockStart.advanced(by: 2).load(as: UInt16.self))
+                    let scales = blockStart.advanced(by: 4).assumingMemoryBound(to: UInt8.self)
+                    let qs = blockStart.advanced(by: 16).assumingMemoryBound(to: UInt8.self)
+                    // Decode all 8 (sc, m) pairs upfront — small enough
+                    // to keep on stack-like arrays.
+                    var scArr = [UInt8](repeating: 0, count: 8)
+                    var mArr  = [UInt8](repeating: 0, count: 8)
+                    for j in 0..<4 {
+                        scArr[j] = scales[j] & 0x3f
+                        mArr[j]  = scales[j + 4] & 0x3f
+                    }
+                    for j in 4..<8 {
+                        // llama.cpp/ggml-quants.c::get_scale_min_k4:
+                        //   d = (q[j+4] & 0x0f) | ((q[j-4] >> 6) << 4)
+                        //   m = (q[j+4] >>  4)  | ((q[j  ] >> 6) << 4)
+                        // i.e. q[j+4] is the "fancy-half" byte storing
+                        // the LOW 4 bits of both sc and m for this
+                        // sub-block, while q[j-4] / q[j] contribute the
+                        // top 2 bits of sc / m respectively (in their
+                        // own top 2 bits).
+                        scArr[j] = (scales[j + 4] & 0x0f) | ((scales[j - 4] >> 6) << 4)
+                        mArr[j]  = (scales[j + 4] >> 4)   | ((scales[j]     >> 6) << 4)
+                    }
+                    // Walk qs in 32-byte chunks; each chunk = two
+                    // sub-blocks. Out offset advances by 64 per chunk.
+                    var qsOff = 0
+                    var outBase = b * 256
+                    var sbIdx = 0
+                    while sbIdx < 8 {
+                        let sc1 = Float(scArr[sbIdx])
+                        let m1  = Float(mArr[sbIdx])
+                        let sc2 = Float(scArr[sbIdx + 1])
+                        let m2  = Float(mArr[sbIdx + 1])
+                        let d1 = d * sc1
+                        let mm1 = dmin * m1
+                        let d2 = d * sc2
+                        let mm2 = dmin * m2
+                        for l in 0..<32 {
+                            let byte = qs[qsOff + l]
+                            out[outBase + l]      = d1 * Float(byte & 0x0f) - mm1
+                            out[outBase + 32 + l] = d2 * Float(byte >> 4)    - mm2
+                        }
+                        qsOff += 32
+                        outBase += 64
+                        sbIdx += 2
                     }
                 }
             }

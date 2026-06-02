@@ -73,6 +73,7 @@ enum GGUFInspect {
         case .f16:  return "F16"
         case .q4_0: return "Q4_0"
         case .q8_0: return "Q8_0"
+        case .q4_K: return "Q4_K"
         case nil:   return "unsupported(\(t))"
         }
     }
