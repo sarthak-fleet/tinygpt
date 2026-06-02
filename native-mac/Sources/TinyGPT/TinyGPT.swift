@@ -83,6 +83,8 @@ struct TinyGPT {
             Magpie.run(args: Array(args.dropFirst()))
         case "tuned-lens":
             TunedLens.run(args: Array(args.dropFirst()))
+        case "linear-probe":
+            LinearProbe.run(args: Array(args.dropFirst()))
         case "train-heads":
             TrainHeads.run(args: Array(args.dropFirst()))
         case "compare":

@@ -89,8 +89,9 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 ## Quantization + compression
 
 - ✅ HQQ (`tinygpt hqq` — int4 q-then-dq, 0.087 rel error)
-- ✅ GPTQ (`tinygpt gptq` — int4, 0.102 rel error)
-- ✅ AWQ safetensors reader (loads HF AWQ-quantized weights)
+- ✅ GPTQ (`tinygpt gptq` — from-scratch int4 quant of own model, 0.102 rel error)
+- ✅ AWQ safetensors reader (loads HF AWQ-quantized models)
+- ✅ GPTQ safetensors reader (`GPTQReader.swift` — loads HF GPTQ-format models; tested 72 tensors quantised in 31s)
 - ✅ SmoothQuant (in-training)
 - ✅ Pruning — unstructured (`tinygpt prune-unstructured`) + structured (`tinygpt prune-structured`)
 - ✅ LASER selective rank reduction (`tinygpt laser`)
@@ -107,6 +108,7 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 - ✅ MoE (dense routing — sparse hard routing blocked, see §2)
 - ✅ Mixture of Depths (soft sigmoid gate — hard routing blocked, see §2)
 - ✅ Differential attention (`--diff-attn`)
+- ✅ YOCO cross-layer KV sharing (`--yoco`) — CrossAttention.swift module, second-half blocks reuse first-half K/V. See `docs/yoco_results.md`. *(Was marked "designed only" in older audit — actually shipped.)*
 
 ## Tokenization
 
@@ -120,6 +122,7 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 - ✅ Attention heatmap ("Watch the model think" panel)
 - ✅ Per-layer ablation ("Ablate & sample" button)
 - ✅ Activation patching — both variants (zero + donor-swap, shipped 2026-06-02 in `17021bc`)
+- ✅ Linear probes (`tinygpt linear-probe`) — train Linear(d_model → C) on per-layer hidden states + label data; `.lp` sidecar format. Detects whether a layer represents an arbitrary external property (Alain & Bengio 2016).
 
 ## Browser / Web track
 
@@ -248,8 +251,7 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 | Mixture-of-Depths hard top-K | same | Soft sigmoid gate shipped |
 | Fast BPE encoding | swift-transformers single-threaded; 2 GB corpus = ~30 min | Rust-backed encoder via FFI (future) |
 | Native int4 / int8 WebGPU matmul | spec doesn't yet have quantized matmul extensions | Wait for subgroup / coop-matrix extensions |
-| GPTQ / GGUF safetensors readers | not yet written | Could write — just hasn't been done; AWQ is shipped |
-| YOCO cross-layer KV sharing | API plumbing, not blocked technically | ~150 lines, designed |
+| GGUF safetensors reader | not yet written | Could write (~2 days); AWQ + GPTQ readers already ship |
 
 ## 🚧 Blocked by budget
 
