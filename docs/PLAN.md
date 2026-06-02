@@ -104,6 +104,7 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 - ✅ GPTQ (`tinygpt gptq` — from-scratch int4 quant of own model, 0.102 rel error)
 - ✅ AWQ safetensors reader (loads HF AWQ-quantized models)
 - ✅ GPTQ safetensors reader (`GPTQReader.swift` — loads HF GPTQ-format models; tested 72 tensors quantised in 31s)
+- ✅ GGUF reader (`GGUFReader.swift` + `tinygpt gguf-inspect`) — parses v2/v3 header + metadata + tensor inventory; dequantises F32 / F16 / Q4_0 / Q8_0 tensors to fp32. K-quants (Q4_K / Q6_K / etc.) slot into the same switch when needed.
 - ✅ SmoothQuant (in-training)
 - ✅ Pruning — unstructured (`tinygpt prune-unstructured`) + structured (`tinygpt prune-structured`)
 - ✅ LASER selective rank reduction (`tinygpt laser`)
@@ -135,6 +136,7 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 - ✅ Per-layer ablation ("Ablate & sample" button)
 - ✅ Activation patching — both variants (zero + donor-swap, shipped 2026-06-02 in `17021bc`)
 - ✅ Linear probes (`tinygpt linear-probe`) — train Linear(d_model → C) on per-layer hidden states + label data; `.lp` sidecar format. Detects whether a layer represents an arbitrary external property (Alain & Bengio 2016).
+- ✅ ROME — surgical fact editing (`tinygpt rome`). Rank-1 update to one MLP's W_out, identity-Hessian first cut. Verified on shakespeare.tinygpt: `--target X --layer 11 --scale 10` flipped sampled next-token to X. Covariance-based ROME is the follow-up.
 
 ## Browser / Web track
 
@@ -343,11 +345,17 @@ What's left:
 **Genuinely new value-adds, not yet built**
 
 - ⬜ **Sparse autoencoders (SAE)** — Anthropic-style feature decomposition. Different mechanism from logit/tuned lens / linear probe. Multi-day build.
-- ⬜ **ROME / MEMIT** — surgical fact editing in MLP weights. ~1-2 days each. Reuses our donor-swap activation patching for fact-location.
-- ⬜ **GGUF safetensors reader** — loads llama.cpp-format quantized models that AWQ + GPTQ readers don't. ~2 days.
-- ⬜ **Deduplication for raw corpora** — hash-based duplicate removal. Easy (~30 min), matters mainly for raw web scrapes.
+- ⬜ **MEMIT** — multi-fact extension of ROME (Meng et al. 2023). ROME shipped; MEMIT solves the rank-K update for multiple facts simultaneously via least-squares. ~1 day.
+- ⬜ **GGUF k-quant types** (Q4_K, Q6_K, Q8_K, …) — extends the existing GGUFReader. ~1 day per type once block layout is decoded.
 - ⬜ **Sample packing (cross-source)** — combine examples from *different* sources into one batch (distinct from intra-source sequence packing, which ships).
 - ⬜ **Vocab trimming** — drop unused BPE tokens to shrink embedding matrix. Niche.
+
+**Shipped this session (third → fourth audit pass corrections):**
+
+- ✅ Linear probes (`tinygpt linear-probe`)
+- ✅ Deduplication (`tinygpt dedupe`, line + doc modes)
+- ✅ ROME (`tinygpt rome`, identity-Hessian first cut)
+- ✅ GGUF reader (`GGUFReader.swift` + `tinygpt gguf-inspect`)
 
 **Stale ⬜ markers caught + corrected this session — now ✅:**
 
