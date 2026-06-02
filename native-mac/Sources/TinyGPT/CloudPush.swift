@@ -16,7 +16,7 @@ enum CloudPush {
             switch args[i] {
             case "--tag":     tag = args[i+1]; i += 2
             case "--dry-run": dryRun = true; i += 1
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") {
                     fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -52,7 +52,7 @@ enum CloudPush {
         }
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt push <local.tinygpt> --tag <name> [--dry-run]
 
@@ -62,6 +62,6 @@ enum CloudPush {
         Credentials: set in env (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
         R2_SECRET_ACCESS_KEY, R2_BUCKET) or in ~/.config/tinygpt/r2.env.
         """)
-        exit(2)
+        exit(code)
     }
 }

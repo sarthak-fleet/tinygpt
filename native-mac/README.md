@@ -60,6 +60,18 @@ tinygpt train --preset tiny --steps 500 --corpus shakespeare.txt --out my.tinygp
 tinygpt sample my.tinygpt --prompt "ROMEO:" --tokens 100
 ```
 
+### Install paths
+
+- **Cache** (datasets, GitHub corpora, BPE-tokenized sidecars, in-flight
+  finetune adapters): `~/.cache/tinygpt/` — persistent across reboots.
+  macOS reaps `/tmp` aggressively (mid-session in some cases), so we
+  default everything user-fetched here.
+- **Binary**: build via `swift build -c release` →
+  `native-mac/.build/release/tinygpt`. If you want it on `$PATH`,
+  symlink to `~/.local/bin/tinygpt`.
+- **Build cache**: `native-mac/.build/` and `native-mac/.xcode-build/`
+  (incremental; safe to `rm -rf` to force a clean rebuild).
+
 ## Measured perf (M5 Pro, 48 GB unified memory)
 
 ### Training

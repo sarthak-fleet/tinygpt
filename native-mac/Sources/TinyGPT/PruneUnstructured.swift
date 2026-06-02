@@ -52,7 +52,7 @@ enum PruneUnstructured {
             case "--ft-lr":        ftLR = Float(args[i+1]) ?? ftLR; i += 2
             case "--include-embeddings": includeEmbeddings = true; i += 1
             case "--no-mask": emitMask = false; i += 1
-            case "-h", "--help":   exitUsage()
+            case "-h", "--help":   exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 inPath = args[i]; i += 1
@@ -530,7 +530,7 @@ enum PruneUnstructured {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt prune-unstructured <model.tinygpt> [options]
 
@@ -557,6 +557,6 @@ enum PruneUnstructured {
         to zero) — Metal has no sparse matmul, so wallclock is unaffected.
         The compression win shows up after gzipping the file.
         """)
-        exit(2)
+        exit(code)
     }
 }

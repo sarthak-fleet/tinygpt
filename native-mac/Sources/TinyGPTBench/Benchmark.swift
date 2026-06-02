@@ -57,7 +57,7 @@ public enum Benchmark {
                 guard i + 1 < args.count else { exitUsage() }
                 promptOverride = args[i + 1]; i += 2
             case "-h", "--help":
-                exitUsage()
+                exitUsage(0)
             default:
                 fputs("unknown bench flag: \(args[i])\n", stderr)
                 exitUsage()
@@ -189,7 +189,7 @@ public enum Benchmark {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    static func exitUsage() -> Never {
+    static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt bench --model <path> [options]
 
@@ -211,6 +211,6 @@ public enum Benchmark {
 
         Design doc: docs/benchmark_harness_design.md.
         """)
-        exit(2)
+        exit(code)
     }
 }

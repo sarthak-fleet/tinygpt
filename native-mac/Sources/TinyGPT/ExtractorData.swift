@@ -113,7 +113,7 @@ enum ExtractorData {
             case "--dry-run":
                 dryRun = true; i += 1
             case "-h", "--help":
-                exitUsage()
+                exitUsage(0)
             default:
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
             }
@@ -470,7 +470,7 @@ enum ExtractorData {
         }
     }
 
-    static func exitUsage() -> Never {
+    static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt extractor-data [flags]
 
@@ -499,6 +499,6 @@ enum ExtractorData {
           tinygpt extractor-data --bfcl ~/.cache/tinygpt/datasets/.../corpus.jsonl --out router_data.jsonl
           tinygpt extractor-data --tools tools.json --synth --bfcl ... --out router_data.jsonl
         """)
-        exit(2)
+        exit(code)
     }
 }

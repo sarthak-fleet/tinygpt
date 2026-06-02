@@ -28,7 +28,7 @@ enum Escalate {
             case "--prompt":   prompt = args[i+1]; i += 2
             case "--system":   systemPrompt = args[i+1]; i += 2
             case "--max-tokens": maxTokens = Int(args[i+1]) ?? 1024; i += 2
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
             }
@@ -56,7 +56,7 @@ enum Escalate {
         }
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt escalate --provider {anthropic|openai} --prompt "..."
 
@@ -75,6 +75,6 @@ enum Escalate {
           --system "..."                    Optional system prompt
           --max-tokens N                    Response length cap (default 1024)
         """)
-        exit(2)
+        exit(code)
     }
 }

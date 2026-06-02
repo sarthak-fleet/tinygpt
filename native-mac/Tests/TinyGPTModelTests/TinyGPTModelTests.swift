@@ -227,6 +227,174 @@ final class TinyGPTModelTests: XCTestCase {
                        "LoRA injection param count drifted — recompute or check shapes")
     }
 
+    /// Save → reload roundtrip: perturb LoRA A/B with non-zero values,
+    /// write to disk via LoraAdapterWriter, build a fresh base model with
+    /// the same seed, apply the saved adapter, and assert the forward
+    /// matches the original. This catches the A0 regression where SFT's
+    /// curated DoRA-on-by-default flag caused the writer's
+    /// `as? LoraLinear` cast to silently miss every module — producing an
+    /// empty adapter that loaded as a no-op. Closes coverage gap noted in
+    /// docs/PLAN.md §3 (Tier C / C7).
+    func test_loraAdapter_saveReloadRoundtrip_preservesForward() throws {
+        let cfg = ModelConfig(vocabSize: 32, contextLength: 8, nLayers: 2,
+                              nHeads: 2, dModel: 16, dMlp: 32)
+
+        // --- Train side: identical seed, inject LoRA, perturb A/B ---
+        MLXRandom.seed(0xBEEF)
+        let trainModel = TinyGPTModel(cfg)
+        LoraInjection.inject(trainModel, config: .qv)
+
+        // Overwrite A/B with deterministic non-zero values so the LoRA
+        // delta is real (B starts at zero so default forward equals base).
+        MLXRandom.seed(0xDEAD)
+        var blocksList: [NestedItem<String, MLXArray>] = []
+        for block in trainModel.blocks {
+            var attn: [String: NestedItem<String, MLXArray>] = [:]
+            if let lora = block.attn.qProj as? LoraLinear {
+                attn["q_proj"] = .dictionary([
+                    "loraA": .value(MLXRandom.normal(lora.loraA.shape, scale: 0.1)),
+                    "loraB": .value(MLXRandom.normal(lora.loraB.shape, scale: 0.1)),
+                ])
+            }
+            if let lora = block.attn.vProj as? LoraLinear {
+                attn["v_proj"] = .dictionary([
+                    "loraA": .value(MLXRandom.normal(lora.loraA.shape, scale: 0.1)),
+                    "loraB": .value(MLXRandom.normal(lora.loraB.shape, scale: 0.1)),
+                ])
+            }
+            blocksList.append(.dictionary(["attn": .dictionary(attn)]))
+        }
+        var root = NestedDictionary<String, MLXArray>()
+        root["blocks"] = .array(blocksList)
+        try trainModel.update(parameters: root, verify: [])
+
+        let idx = MLXArray([Int32]([1, 2, 3, 4]), [1, 4])
+        let trainLogits = trainModel(idx)
+        MLX.eval(trainLogits)
+        let trainFloats = trainLogits.asArray(Float.self)
+
+        // --- Sanity: with non-zero B, forward must differ from base ---
+        MLXRandom.seed(0xBEEF)
+        let baseOnly = TinyGPTModel(cfg)
+        let baseLogits = baseOnly(idx)
+        MLX.eval(baseLogits)
+        let baseFloats = baseLogits.asArray(Float.self)
+        var baseTrainDelta: Float = 0
+        for i in 0..<baseFloats.count {
+            baseTrainDelta = max(baseTrainDelta, abs(baseFloats[i] - trainFloats[i]))
+        }
+        XCTAssertGreaterThan(baseTrainDelta, 1e-4,
+                             "After perturbing LoRA A/B the forward should diverge from the base model")
+
+        // --- Write adapter to disk ---
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lora-roundtrip-\(UUID().uuidString).lora")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try LoraAdapterWriter.write(model: trainModel, baseConfig: cfg,
+                                     loraConfig: .qv, finalLoss: nil, to: url)
+
+        // --- Read back: header carries the right number of entries ---
+        let adapter = try LoraAdapterReader.read(url)
+        // .qv → 2 suffixes (q, v) × 2 layers = 4 entries.
+        XCTAssertEqual(adapter.header.entries.count, 4,
+                       "writer produced empty/short adapter — regression of the A0 LoRA-save bug (PEFT-variant flags must disable DoRA so as? LoraLinear succeeds)")
+        XCTAssertEqual(adapter.header.rank, 4)
+        XCTAssertEqual(adapter.header.baseLayers, cfg.nLayers)
+        XCTAssertEqual(adapter.header.baseDModel, cfg.dModel)
+
+        // --- Reload side: fresh base with same seed, apply adapter ---
+        MLXRandom.seed(0xBEEF)
+        let reloadModel = TinyGPTModel(cfg)
+        try LoraAdapterReader.apply(adapter, to: reloadModel)
+        let reloadLogits = reloadModel(idx)
+        MLX.eval(reloadLogits)
+        let reloadFloats = reloadLogits.asArray(Float.self)
+
+        var reloadDelta: Float = 0
+        for i in 0..<trainFloats.count {
+            reloadDelta = max(reloadDelta, abs(trainFloats[i] - reloadFloats[i]))
+        }
+        XCTAssertLessThan(reloadDelta, 1e-5,
+                          "save→reload roundtrip must produce identical forward (max delta \(reloadDelta))")
+    }
+
+    // MARK: - ChatML inline-system split
+
+    /// Datasets like hermes-function-calling-v1 carry the system role as a
+    /// `"system: ..."` prefix inside the `instruction` string. The chatml
+    /// template's `splitChatmlSystem` peels that into a proper
+    /// `<|im_start|>system ... <|im_end|>` block. C6 fix verification.
+    func test_chatml_splitsInlineSystemPrefix() {
+        // Simple hermes shape.
+        let (sys1, user1) = PromptTemplate.splitChatmlSystem(
+            "system: You are an AI.\nuser: Hi")
+        XCTAssertEqual(sys1, "<|im_start|>system\nYou are an AI.<|im_end|>\n")
+        XCTAssertEqual(user1, "Hi")
+
+        // Case-insensitive role markers.
+        let (sys2, user2) = PromptTemplate.splitChatmlSystem(
+            "System: helper\nUser: hello")
+        XCTAssertEqual(sys2, "<|im_start|>system\nhelper<|im_end|>\n")
+        XCTAssertEqual(user2, "hello")
+
+        // Blank line between system and user.
+        let (sys3, user3) = PromptTemplate.splitChatmlSystem(
+            "system: you are X.\n\nuser: query")
+        XCTAssertEqual(sys3, "<|im_start|>system\nyou are X.<|im_end|>\n")
+        XCTAssertEqual(user3, "query")
+
+        // No system prefix — pass through unchanged.
+        let (sys4, user4) = PromptTemplate.splitChatmlSystem("What's 2+2?")
+        XCTAssertEqual(sys4, "")
+        XCTAssertEqual(user4, "What's 2+2?")
+
+        // Multiline system with embedded tool-spec tags (hermes-fc).
+        let (sys5, user5) = PromptTemplate.splitChatmlSystem(
+            "system: helpful <tools>{...}</tools>\nuser: q")
+        XCTAssertEqual(sys5, "<|im_start|>system\nhelpful <tools>{...}</tools><|im_end|>\n")
+        XCTAssertEqual(user5, "q")
+    }
+
+    /// End-to-end render check: chatml.render() of an instruction that
+    /// carries an inline `system: ...` prefix must produce a proper
+    /// <|im_start|>system block before the user turn.
+    func test_chatml_render_splitsSystemFromInstruction() {
+        let (full, _) = PromptTemplate.chatml.render(
+            instruction: "system: be terse\nuser: 2+2?",
+            input: "",
+            response: "4")
+        XCTAssertTrue(full.contains("<|im_start|>system\nbe terse<|im_end|>"),
+                      "render output missing system block: \(full)")
+        XCTAssertTrue(full.contains("<|im_start|>user\n2+2?<|im_end|>"),
+                      "render output missing or malformed user block: \(full)")
+        XCTAssertTrue(full.contains("<|im_start|>assistant\n4<|im_end|>"),
+                      "render output missing assistant turn: \(full)")
+    }
+
+    /// Reading an adapter written against a different base config must
+    /// fail with a clear error rather than silently apply mismatched
+    /// shapes. Guards the LoraAdapterReader.apply config-match check.
+    func test_loraAdapter_apply_rejectsArchitectureMismatch() throws {
+        let cfg = ModelConfig(vocabSize: 32, contextLength: 8, nLayers: 2,
+                              nHeads: 2, dModel: 16, dMlp: 32)
+        MLXRandom.seed(0xBEEF)
+        let m = TinyGPTModel(cfg)
+        LoraInjection.inject(m, config: .qv)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lora-mismatch-\(UUID().uuidString).lora")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try LoraAdapterWriter.write(model: m, baseConfig: cfg,
+                                     loraConfig: .qv, finalLoss: nil, to: url)
+
+        // Different-shape model — should refuse.
+        let wrongCfg = ModelConfig(vocabSize: 32, contextLength: 8, nLayers: 4,
+                                    nHeads: 2, dModel: 16, dMlp: 32)
+        let wrongModel = TinyGPTModel(wrongCfg)
+        let adapter = try LoraAdapterReader.read(url)
+        XCTAssertThrowsError(try LoraAdapterReader.apply(adapter, to: wrongModel))
+    }
+
     // MARK: - ModelLoader auto-detection
 
     /// .tinygpt file path → fromScratch. Missing-file path throws. We

@@ -104,7 +104,7 @@ enum DPO {
                 lossType = lt; i += 2
             case "--gamma":         simpoGamma = Float(args[i+1]) ?? simpoGamma; i += 2
             case "--orpo-lambda":   orpoLambda = Float(args[i+1]) ?? orpoLambda; i += 2
-            case "-h", "--help":    exitUsage()
+            case "-h", "--help":    exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 basePath = args[i]; i += 1
@@ -464,7 +464,7 @@ enum DPO {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt dpo <base> [options]
 
@@ -503,6 +503,6 @@ enum DPO {
         --adalora-target-rank R  AdaLoRA — train per-rank importance, target avg rank R.
         --layer-drop F           LayerDrop fraction (0.0-0.5) — stochastically skip whole blocks.
         """)
-        exit(2)
+        exit(code)
     }
 }

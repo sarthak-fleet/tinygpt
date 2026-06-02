@@ -45,7 +45,7 @@ enum HQQ {
             case "--p":           p = Float(args[i+1]) ?? p; i += 2
             case "--layers":      layersSpec = args[i+1]; i += 2
             case "--iterations":  iterations = Int(args[i+1]) ?? iterations; i += 2
-            case "-h", "--help":  exitUsage()
+            case "-h", "--help":  exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 inPath = args[i]; i += 1
@@ -246,7 +246,7 @@ enum HQQ {
         return out.filter { $0 >= 0 && $0 < total }
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt hqq <input.tinygpt> [options]
 
@@ -264,6 +264,6 @@ enum HQQ {
         fp32 forward path (no inference speedup until the packed-int
         matmul kernel ships).
         """)
-        exit(2)
+        exit(code)
     }
 }

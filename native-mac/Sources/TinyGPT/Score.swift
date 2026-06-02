@@ -85,7 +85,7 @@ enum Score {
                 modelId = args[i + 1]; i += 2
             case "--dry-run":
                 dryRun = true; i += 1
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") {
                     fputs("score-bench: unknown flag: \(args[i])\n", stderr)
@@ -764,7 +764,7 @@ enum Score {
         s.count >= width ? s : s + String(repeating: " ", count: width - s.count)
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt score-bench <model.tinygpt> [options]
 
@@ -778,7 +778,7 @@ enum Score {
         the result back into the manifest. Vocab-incompatible benchmarks are
         recorded as `null` (consistent with the existing browser scorer).
         """)
-        exit(2)
+        exit(code)
     }
 }
 

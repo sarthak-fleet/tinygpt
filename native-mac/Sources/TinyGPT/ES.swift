@@ -55,7 +55,7 @@ enum ES {
             case "--lr":         lr = Float(args[i+1]) ?? lr; i += 2
             case "--batch":      batchSize = Int(args[i+1]); i += 2
             case "--ctx":        ctxOverride = Int(args[i+1]); i += 2
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 modelPath = args[i]; i += 1
@@ -265,7 +265,7 @@ enum ES {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt es <model.tinygpt> --corpus <text> [options]
 
@@ -282,6 +282,6 @@ enum ES {
         Slower per-step than SGD but useful as an educational counterpoint
         and for non-differentiable reward signals.
         """)
-        exit(2)
+        exit(code)
     }
 }

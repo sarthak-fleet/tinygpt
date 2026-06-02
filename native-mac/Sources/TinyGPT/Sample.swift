@@ -135,7 +135,7 @@ enum Sample {
             case "--no-json-stop-on-complete":
                 jsonStopOnComplete = false; i += 1
             case "-h", "--help":
-                exitUsage()
+                exitUsage(0)
             default:
                 if args[i].hasPrefix("-") {
                     fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -835,7 +835,7 @@ enum Sample {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt sample <path.tinygpt> [options]
 
@@ -891,6 +891,6 @@ enum Sample {
                               keep generating until --tokens is reached
                               (useful for streaming-style protocols).
         """)
-        exit(2)
+        exit(code)
     }
 }

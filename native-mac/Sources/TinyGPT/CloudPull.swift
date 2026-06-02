@@ -13,7 +13,7 @@ enum CloudPull {
             case "--tag":     tag = args[i+1]; i += 2
             case "--out":     out = args[i+1]; i += 2
             case "--dry-run": dryRun = true; i += 1
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
             }
@@ -40,13 +40,13 @@ enum CloudPull {
         }
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt pull --tag <name> [--out path] [--dry-run]
 
         Download a checkpoint from Cloudflare R2. Same credential
         resolution as `tinygpt push`.
         """)
-        exit(2)
+        exit(code)
     }
 }

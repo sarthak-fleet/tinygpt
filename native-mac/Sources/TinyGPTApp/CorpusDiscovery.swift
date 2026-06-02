@@ -65,7 +65,13 @@ enum CorpusDiscovery {
     private static func candidatePaths() -> [URL] {
         var paths: [URL] = []
         let fm = FileManager.default
-        // The fetch_corpora.sh default
+        let home = fm.homeDirectoryForCurrentUser
+        // ~/.cache/tinygpt/corpora — primary persistent cache (macOS doesn't
+        // reap this, unlike /tmp).
+        paths.append(home.appendingPathComponent(".cache/tinygpt/corpora"))
+        // /tmp/tinygpt-corpora — legacy fetch_corpora.sh default. Kept for
+        // backwards compatibility but macOS reaps it; new fetches go to
+        // ~/.cache/tinygpt/corpora.
         paths.append(URL(fileURLWithPath: "/tmp/tinygpt-corpora"))
         // Bundled resources/corpora (production install)
         if let resourceURL = Bundle.main.resourceURL {

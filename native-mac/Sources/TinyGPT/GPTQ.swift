@@ -65,7 +65,7 @@ enum GPTQWorker {
             case "--lambda":        lambda = Float(args[i+1]) ?? lambda; i += 2
             case "--samples":       maxSamples = Int(args[i+1]) ?? maxSamples; i += 2
             case "--ctx":           contextLength = Int(args[i+1]) ?? contextLength; i += 2
-            case "-h", "--help":    exitUsage()
+            case "-h", "--help":    exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 inPath = args[i]; i += 1
@@ -491,7 +491,7 @@ enum GPTQWorker {
         }
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt gptq <input.tinygpt> [options]
 
@@ -508,6 +508,6 @@ enum GPTQWorker {
         dequantised. Loads + runs unchanged via the existing fp32 forward
         path (no inference speedup until the packed-int matmul kernel ships).
         """)
-        exit(2)
+        exit(code)
     }
 }

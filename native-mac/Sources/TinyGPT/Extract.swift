@@ -49,7 +49,7 @@ enum Extract {
                 guard i + 1 < args.count else { exitUsage() }
                 threshold = Float(args[i + 1]) ?? threshold; i += 2
             case "-h", "--help":
-                exitUsage()
+                exitUsage(0)
             default:
                 if args[i].hasPrefix("-") {
                     fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -145,7 +145,7 @@ enum Extract {
         return ids
     }
 
-    static func exitUsage() -> Never {
+    static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt extract <router.tinygpt> [--query "<text>" | --stdin] [flags]
 
@@ -157,7 +157,7 @@ enum Extract {
 
         Companion sidecar (auto-loaded): <router.tinygpt>.labels.json
         """)
-        exit(2)
+        exit(code)
     }
 }
 

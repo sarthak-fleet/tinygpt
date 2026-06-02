@@ -32,7 +32,7 @@ enum Screen {
         case "capture":  runCapture(args: rest)
         case "tree":     runTree(args: rest)
         case "both":     runBoth(args: rest)
-        case "-h", "--help": exitUsage()
+        case "-h", "--help": exitUsage(0)
         default:
             fputs("screen: unknown subcommand '\(sub)'\n", stderr)
             exitUsage()
@@ -47,7 +47,7 @@ enum Screen {
         while i < args.count {
             switch args[i] {
             case "--out": outPath = args[i+1]; i += 2
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 fputs("capture: unknown flag '\(args[i])'\n", stderr); exitUsage()
             }
@@ -79,7 +79,7 @@ enum Screen {
             case "--max-depth": maxDepth = Int(args[i+1]) ?? maxDepth; i += 2
             case "--max-children": maxChildren = Int(args[i+1]) ?? maxChildren; i += 2
             case "--compact": pretty = false; i += 1
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 fputs("tree: unknown flag '\(args[i])'\n", stderr); exitUsage()
             }
@@ -111,7 +111,7 @@ enum Screen {
         while i < args.count {
             switch args[i] {
             case "--out-dir": outDir = args[i+1]; i += 2
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 fputs("both: unknown flag '\(args[i])'\n", stderr); exitUsage()
             }
@@ -180,7 +180,7 @@ enum Screen {
         return try enc.encode(node)
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt screen <capture|tree|both> [flags]
 
@@ -211,6 +211,6 @@ enum Screen {
         the calling process; the simplest workflow is to launch tinygpt
         from a terminal that already has the relevant grants.
         """)
-        exit(2)
+        exit(code)
     }
 }

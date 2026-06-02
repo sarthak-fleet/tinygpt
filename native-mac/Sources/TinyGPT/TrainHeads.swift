@@ -56,7 +56,7 @@ enum TrainHeads {
             case "--ctx":        ctxOverride = Int(args[i+1]); i += 2
             case "--num-heads":  numHeads = max(1, Int(args[i+1]) ?? numHeads); i += 2
             case "--hidden-dim": hiddenDim = Int(args[i+1]); i += 2
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 modelPath = args[i]; i += 1
@@ -309,7 +309,7 @@ enum TrainHeads {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt train-heads <model.tinygpt> --type {medusa|eagle} --corpus <text> --out <path> [options]
 
@@ -327,6 +327,6 @@ enum TrainHeads {
         closure-captured so MLX autograd never updates its parameters.
         Output: a .heads sidecar loadable via `tinygpt sample --heads`.
         """)
-        exit(2)
+        exit(code)
     }
 }

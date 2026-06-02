@@ -9,7 +9,7 @@ enum CloudList {
         case "list":   runList(Array(args.dropFirst()))
         case "delete": runDelete(Array(args.dropFirst()))
         case "setup":  runSetup(Array(args.dropFirst()))
-        case "-h", "--help": exitUsage()
+        case "-h", "--help": exitUsage(0)
         default:
             fputs("unknown cloud subcommand: \(sub)\n", stderr); exitUsage()
         }
@@ -124,7 +124,7 @@ enum CloudList {
         }
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt cloud <subcommand>
 
@@ -133,6 +133,6 @@ enum CloudList {
           delete --tag <name>            Remove a checkpoint
           setup                          Interactive credential setup
         """)
-        exit(2)
+        exit(code)
     }
 }

@@ -31,7 +31,7 @@ enum Compare {
             case "--batches": nBatches = Int(args[i+1]) ?? nBatches; i += 2
             case "--batch":   batchSize = Int(args[i+1]); i += 2
             case "--no-sample": sampleAfter = false; i += 1
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 basePath = args[i]; i += 1
@@ -180,7 +180,7 @@ enum Compare {
         return "\(n) B"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt compare <base.tinygpt> [options]
 
@@ -190,6 +190,6 @@ enum Compare {
         --batch N            Batch size (default 8)
         --no-sample          Skip the side-by-side sample at the end
         """)
-        exit(2)
+        exit(code)
     }
 }

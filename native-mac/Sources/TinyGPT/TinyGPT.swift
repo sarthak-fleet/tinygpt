@@ -19,177 +19,6 @@ struct TinyGPT {
             printUsage()
             exit(2)
         }
-        // Pre-switch shim for the score-bench subcommand: dispatched here
-        // (rather than as a `case` inside the main switch) so the formal
-        // case-dispatch list stays unchanged until the merge PR — see
-        // // TODO(score-bench-merge) below.
-        if cmd == "score-bench" {
-            Score.run(args: Array(args.dropFirst()))
-            return
-        }
-        // Same pre-switch shim pattern for `train-heads` — see the merge
-        // To-do note next to `tuned-lens` in the switch below. Other agents
-        // are concurrently touching this switch; we ship the shim to keep
-        // the surface area testable until the speculative-heads PR lands.
-        if cmd == "train-heads" {
-            TrainHeads.run(args: Array(args.dropFirst()))
-            return
-        }
-        // TODO(score-bench-merge): once review is happy, move the dispatch
-        // for `score-bench` into the case below (next to `case "eval":`)
-        // and delete the pre-switch shim above.
-        //
-        // Same pre-switch shim treatment for `gptq` — the from-scratch
-        // GPTQ worker (Sources/TinyGPT/GPTQ.swift::GPTQWorker.run) is
-        // still smoke-testing, so we dispatch it here rather than wire
-        // a `case "gptq":` inside the switch. See TODO(gptq-cli) below.
-        if cmd == "gptq" {
-            GPTQWorker.run(args: Array(args.dropFirst()))
-            return
-        }
-        // Pre-switch shim for the pruning subcommands. Same pattern as
-        // score-bench: live behind a shim while the implementation is
-        // baked. TODO(pruning-merge) below removes these once stable.
-        if cmd == "prune-unstructured" {
-            PruneUnstructured.run(args: Array(args.dropFirst()))
-            return
-        }
-        if cmd == "prune-structured" {
-            PruneStructured.run(args: Array(args.dropFirst()))
-            return
-        }
-        // Pre-switch shim for the HF Datasets Hub integration
-        // (`download-dataset` / `list-datasets`). Same shim pattern as
-        // score-bench/pruning: other agents are concurrently touching
-        // this switch, so we keep the dispatch on the safe side of the
-        // case list until merge. See TODO(hf-datasets-merge) below and
-        // docs/hf_datasets_integration.md.
-        if cmd == "download-dataset" {
-            DownloadDataset.run(args: Array(args.dropFirst()))
-            return
-        }
-        if cmd == "list-datasets" {
-            ListDatasets.run(args: Array(args.dropFirst()))
-            return
-        }
-        // Pre-switch shim for the CF R2 cloud save/load pipeline.
-        // `tinygpt push <local.tinygpt> --tag <name>` — upload checkpoint
-        // `tinygpt pull --tag <name> [--out path]` — download checkpoint
-        // `tinygpt cloud {list|delete|setup}` — bucket management
-        // Shells out to `aws` CLI with R2's S3-compatible endpoint.
-        // Credentials in env or ~/.config/tinygpt/r2.env. See R2Client.swift
-        // and docs/cloud_save_load.md.
-        if cmd == "push" {
-            CloudPush.run(args: Array(args.dropFirst()))
-            return
-        }
-        if cmd == "pull" {
-            CloudPull.run(args: Array(args.dropFirst()))
-            return
-        }
-        if cmd == "cloud" {
-            CloudList.run(args: Array(args.dropFirst()))
-            return
-        }
-        // TODO(cloud-merge): roll up push/pull/cloud into the switch
-        // below once the dispatch pattern is settled.
-        //
-        // Pre-switch shim for cloud-escalation calls. The other half
-        // of the north-star architecture: when the on-device specialist
-        // defers, this is how it reaches a larger remote model
-        // (Claude / GPT). Programmatic use via CloudEscalate.complete()
-        // from AgentLoop; CLI use via `tinygpt escalate`.
-        if cmd == "escalate" {
-            Escalate.run(args: Array(args.dropFirst()))
-            return
-        }
-        // Pre-switch shim for the GitHub data pipeline. Same shim
-        // pattern as download-dataset/list-datasets above: kept on the
-        // safe side of the case list until the corpus extractor is
-        // battle-tested. The actual implementation is in
-        // FetchGitHub.swift (CLI), TinyGPTData/GitHubAPI.swift (REST
-        // client) and TinyGPTData/GitHubCorpus.swift (issue→PR
-        // pairing). Sister agent A5 is concurrently editing the
-        // switch block; the shim keeps merge blast radius zero.
-        // TODO(github-data-merge): once the smoke-test corpus has been
-        // sanity-checked against `tinygpt sft`, move dispatch for
-        // `fetch-github` into the switch (next to `case "hf-load":`)
-        // and delete the shim below. See docs/github_data_integration.md.
-        if cmd == "fetch-github" {
-            FetchGitHub.run(args: Array(args.dropFirst()))
-            return
-        }
-        // TODO(hf-datasets-merge): once the HF data pipeline is stable,
-        // move dispatch for `download-dataset` and `list-datasets` into
-        // the case block below (next to `case "hf-load":`) and remove
-        // the shim above. Until then the shim keeps the switch surface
-        // unchanged for the agents working on the rest of the CLI.
-        // TODO(pruning-merge): move dispatch for `prune-unstructured` and
-        // `prune-structured` into the case below (next to `case "hqq":`)
-        // and delete the pre-switch shim above. The CLI lives behind a
-        // shim because the structured-head path is still shape-preserving
-        // (zero-out, not physical-removal — see docs/pruning.md "Caveats");
-        // when the asymmetric-attention module lands, the case rolls up.
-        //
-        // Pre-switch shim for the agent runtime — `tinygpt agent <model>
-        // --tools tools.json` ties together the cold-start loader, the
-        // persistent KV cache, and a tool-dispatch loop into the product
-        // surface ("user installs the app, runs `tinygpt agent specialist
-        // .tinygpt`, gets a specialized agent"). Lives behind the shim
-        // because A3 is concurrently adding flags in Sample.swift; see
-        // TODO(agent-merge) below. Module files:
-        //   - Agent.swift        — CLI entry
-        //   - AgentLoop.swift    — conversation + tool dispatch
-        //   - ToolSchema.swift   — JSON tool definitions
-        //   - ToolExecutor.swift — subprocess execution backend
-        if cmd == "agent" {
-            Agent.run(args: Array(args.dropFirst()))
-            return
-        }
-        // TODO(agent-merge): once the agent runtime stabilises and the
-        // companion Sample.swift flag additions land (A3), move dispatch
-        // for `agent` into the switch below (next to `case "sample":`)
-        // and delete the pre-switch shim above.
-        //
-        // Pre-switch shim for the tool-call extractor (mini-router) —
-        // Wave 2.6 scaffold. Three subcommands form the pipeline:
-        //   extractor-data    — build (query, tool) JSONL from BFCL / τ-bench / synth
-        //   train-extractor   — train a ToolRouterModel + write router.tinygpt
-        //   extract           — run a router checkpoint over a query
-        // See docs/tool_call_extractor.md for design + training notes.
-        // TODO(extractor-merge): roll into the case block once the
-        // training infra has been smoke-tested on a real corpus.
-        if cmd == "extractor-data" {
-            ExtractorData.run(args: Array(args.dropFirst()))
-            return
-        }
-        if cmd == "train-extractor" {
-            TrainExtractor.run(args: Array(args.dropFirst()))
-            return
-        }
-        if cmd == "extract" {
-            Extract.run(args: Array(args.dropFirst()))
-            return
-        }
-        //
-        // Pre-switch shim for the Wave 2.6 screen-reading scaffold.
-        //   tinygpt screen capture --out window.png       — PNG via ScreenCaptureKit
-        //   tinygpt screen tree    [--out tree.json]      — AX tree as JSON
-        //   tinygpt screen both    --out-dir /tmp/snap    — both, side-by-side
-        // Module: TinyGPTScreen (ScreenCapture.swift + AccessibilityTree.swift).
-        // CLI handler: Sources/TinyGPT/Screen.swift. Permissions are surfaced
-        // with clear remediation rather than crashing. See TODO(screen-merge)
-        // below for the eventual roll-up into the main switch.
-        if cmd == "screen" {
-            Screen.run(args: Array(args.dropFirst()))
-            return
-        }
-        // TODO(screen-merge): once the screen-reading bundle (capture +
-        // AX tree + vision-encoder integration) is stable, move dispatch
-        // for `screen` into the switch below (next to `case "sample":`)
-        // and delete the pre-switch shim above. Until then the shim keeps
-        // the switch surface stable for the other concurrently-edited
-        // subcommands.
         switch cmd {
         case "inspect":
             guard let path = args.dropFirst().first else {
@@ -242,32 +71,52 @@ struct TinyGPT {
             LASER.run(args: Array(args.dropFirst()))
         case "hqq":
             HQQ.run(args: Array(args.dropFirst()))
-        // TODO(gptq-cli): wire `case "gptq":` here once the from-scratch
-        // GPTQ worker (Sources/TinyGPT/GPTQ.swift::GPTQWorker.run) finishes
-        // its smoke-test cycle. Dispatch shape would be:
-        //     case "gptq":
-        //         GPTQWorker.run(args: Array(args.dropFirst()))
-        // Marker left deliberately so the build still surfaces unused-
-        // file warnings (forcing us to either ship or remove) and so
-        // the help text gets a matching entry in `printUsage`.
+        case "gptq":
+            GPTQWorker.run(args: Array(args.dropFirst()))
+        case "prune-unstructured":
+            PruneUnstructured.run(args: Array(args.dropFirst()))
+        case "prune-structured":
+            PruneStructured.run(args: Array(args.dropFirst()))
+        case "score-bench":
+            Score.run(args: Array(args.dropFirst()))
         case "magpie":
             Magpie.run(args: Array(args.dropFirst()))
         case "tuned-lens":
             TunedLens.run(args: Array(args.dropFirst()))
-        // TODO(train-heads-merge): wire up `tinygpt train-heads` once the
-        // speculative-heads PR (MedusaHeads.swift / EagleDraft.swift /
-        // TrainHeads.swift) is merged. Until then a manual case here would
-        // race other agents touching this switch — see HANDOFF.md.
-        //   case "train-heads":
-        //       TrainHeads.run(args: Array(args.dropFirst()))
+        case "train-heads":
+            TrainHeads.run(args: Array(args.dropFirst()))
         case "compare":
             Compare.run(args: Array(args.dropFirst()))
         case "hf-inspect":
             HFInspect.run(args: Array(args.dropFirst()))
         case "hf-load":
             HFLoad.run(args: Array(args.dropFirst()))
+        case "download-dataset":
+            DownloadDataset.run(args: Array(args.dropFirst()))
+        case "list-datasets":
+            ListDatasets.run(args: Array(args.dropFirst()))
+        case "fetch-github":
+            FetchGitHub.run(args: Array(args.dropFirst()))
+        case "extractor-data":
+            ExtractorData.run(args: Array(args.dropFirst()))
+        case "train-extractor":
+            TrainExtractor.run(args: Array(args.dropFirst()))
+        case "extract":
+            Extract.run(args: Array(args.dropFirst()))
+        case "push":
+            CloudPush.run(args: Array(args.dropFirst()))
+        case "pull":
+            CloudPull.run(args: Array(args.dropFirst()))
+        case "cloud":
+            CloudList.run(args: Array(args.dropFirst()))
+        case "escalate":
+            Escalate.run(args: Array(args.dropFirst()))
         case "sample":
             Sample.run(args: Array(args.dropFirst()))
+        case "agent":
+            Agent.run(args: Array(args.dropFirst()))
+        case "screen":
+            Screen.run(args: Array(args.dropFirst()))
         case "serve":
             Serve.run(args: Array(args.dropFirst()))
         case "debug-names":

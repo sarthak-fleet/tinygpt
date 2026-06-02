@@ -118,7 +118,7 @@ enum EvalIndic {
             case "--limit":          limit = Int(args[i+1]); i += 2
             case "--max-new-tokens": maxNewTokens = Int(args[i+1]) ?? maxNewTokens; i += 2
             case "--verbose":        verbose = true; i += 1
-            case "-h", "--help":     exitUsage()
+            case "-h", "--help":     exitUsage(0)
             default:
                 if args[i].hasPrefix("-") {
                     fputs("eval-indic: unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -592,7 +592,7 @@ enum EvalIndic {
 
     // MARK: - Usage
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt eval-indic --task <milu|indicgenbench|all> --model <path> [options]
 
@@ -612,7 +612,7 @@ enum EvalIndic {
         See docs/research/indic_evals.md for schema, scoring, baselines,
         and the published-paper context.
         """)
-        exit(2)
+        exit(code)
     }
 }
 

@@ -39,7 +39,16 @@ public enum PromptTemplate: String, Sendable {
         }
         switch self {
         case .chatml:
-            let preface = "<|im_start|>user\n\(userTurn)<|im_end|>\n<|im_start|>assistant\n"
+            // Detect inline `system: ...` prefix and split it into a
+            // proper <|im_start|>system block. Datasets that convert
+            // OpenAI-style `[{role, content}, ...]` arrays to a flat
+            // `instruction` string (notably hermes-function-calling-v1)
+            // bury the system role as a "system: ..." prefix; without
+            // this split the system content gets wrapped in the user turn
+            // and inference-time prompts have to mimic the buried shape,
+            // which is a real footgun.
+            let (systemBlock, userContent) = Self.splitChatmlSystem(userTurn)
+            let preface = "\(systemBlock)<|im_start|>user\n\(userContent)<|im_end|>\n<|im_start|>assistant\n"
             return (preface + response + "<|im_end|>", preface.utf8.count)
         case .alpaca:
             let preface = "### Instruction:\n\(userTurn)\n\n### Response:\n"
@@ -51,6 +60,58 @@ public enum PromptTemplate: String, Sendable {
             let preface = "\(userTurn) "
             return (preface + response, preface.utf8.count)
         }
+    }
+
+    /// Look for a `system: ...` prefix at the start of the text and
+    /// peel it off into a `<|im_start|>system ... <|im_end|>` block.
+    /// Returns `(systemBlock, userContent)`. If no system prefix is
+    /// present, returns `("", text)`. Matches case-insensitively on the
+    /// `system:` / `user:` role markers since dataset converters aren't
+    /// consistent. Handles the common patterns:
+    ///
+    ///     "system: You are X.\nuser: hello"
+    ///     "System: You are X.\n\nUser: hello"
+    ///     "system: only a system msg"   (no user boundary; everything
+    ///                                    becomes system, user empty)
+    static func splitChatmlSystem(_ text: String) -> (system: String, user: String) {
+        let trimmed = String(text.drop { $0 == " " || $0 == "\t" || $0 == "\n" })
+        let head = String(trimmed.prefix(7)).lowercased()
+        guard head == "system:" else { return ("", text) }
+        let afterSystem = String(String(trimmed.dropFirst(7))
+            .drop { $0 == " " || $0 == "\t" })
+        // Find the first role boundary (newline followed by "user:" /
+        // "assistant:" / "system:"). Search via the lowercased copy and
+        // translate the offset back as an Int — String.Index from one
+        // String can't be used on another even when they're char-equal
+        // after lowercasing.
+        let lowered = afterSystem.lowercased()
+        let boundaries = ["\nuser:", "\nassistant:", "\nsystem:"]
+        var bestOffset: Int? = nil
+        var bestLen: Int = 0
+        for marker in boundaries {
+            if let r = lowered.range(of: marker) {
+                let off = lowered.distance(from: lowered.startIndex, to: r.lowerBound)
+                if bestOffset == nil || off < bestOffset! {
+                    bestOffset = off
+                    bestLen = marker.count
+                }
+            }
+        }
+        let systemContent: String
+        let userContent: String
+        if let off = bestOffset {
+            let split = afterSystem.index(afterSystem.startIndex, offsetBy: off)
+            let userStart = afterSystem.index(split, offsetBy: bestLen)
+            systemContent = String(afterSystem[..<split])
+            userContent = String(afterSystem[userStart...])
+        } else {
+            systemContent = afterSystem
+            userContent = ""
+        }
+        let sysTrim = systemContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userTrim = userContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let block = "<|im_start|>system\n\(sysTrim)<|im_end|>\n"
+        return (block, userTrim)
     }
 }
 

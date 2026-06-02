@@ -63,7 +63,7 @@ enum Bench {
                 guard i + 1 < args.count else { exitUsage() }
                 warmup = Int(args[i + 1]) ?? warmup; i += 2
             case "-h", "--help":
-                exitUsage()
+                exitUsage(0)
             default:
                 fputs("unknown bench flag: \(args[i])\n", stderr); exitUsage()
             }
@@ -195,9 +195,9 @@ enum Bench {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
-        usage: tinygpt bench [options]
+        usage: tinygpt bench-train [options]
 
         --preset huge|mega    Model size (default huge — matches gallery)
         --steps N             Timed steps (default 200)
@@ -205,6 +205,6 @@ enum Bench {
         --dtype float32|float16  Training dtype (default float32)
         --warmup N            Warmup steps (default 20, excluded from timing)
         """)
-        exit(2)
+        exit(code)
     }
 }

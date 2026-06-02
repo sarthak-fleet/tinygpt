@@ -186,7 +186,12 @@ final class FinetuneController: ObservableObject {
         let corpusName = URL(fileURLWithPath: corpusPath).deletingPathExtension().lastPathComponent
         let stamp = Int(Date().timeIntervalSince1970)
         let name = "\(baseName)-\(corpusName)-\(stamp).lora"
-        return URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(name)
+        // ~/.cache/tinygpt/adapters/ — persistent across reboots; /tmp gets
+        // reaped by macOS, losing the LoRA file mid-session.
+        let cache = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/tinygpt/adapters", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        return cache.appendingPathComponent(name)
     }
 
     private nonisolated func formatNum(_ n: Int) -> String {

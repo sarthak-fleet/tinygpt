@@ -45,7 +45,7 @@ enum Magpie {
             case "--max-user":         maxUserTokens = Int(args[i+1]) ?? maxUserTokens; i += 2
             case "--max-assistant":    maxAssistantTokens = Int(args[i+1]) ?? maxAssistantTokens; i += 2
             case "--temperature":      temperature = Float(args[i+1]) ?? temperature; i += 2
-            case "-h", "--help":       exitUsage()
+            case "-h", "--help":       exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 modelPath = args[i]; i += 1
@@ -223,7 +223,7 @@ enum Magpie {
         return s
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt magpie <model> [options]
 
@@ -240,6 +240,6 @@ enum Magpie {
         dataset is then filtered by the user via simple rules
         ("length > 20" / "no repeating loops") before SFT.
         """)
-        exit(2)
+        exit(code)
     }
 }

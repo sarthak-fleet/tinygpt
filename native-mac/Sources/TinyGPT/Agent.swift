@@ -94,7 +94,7 @@ enum Agent {
                 guard i + 1 < args.count else { exitUsage() }
                 routerThreshold = Float(args[i + 1]) ?? routerThreshold; i += 2
             case "-h", "--help":
-                exitUsage()
+                exitUsage(0)
             default:
                 if args[i].hasPrefix("-") {
                     fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -314,7 +314,7 @@ enum Agent {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt agent <path.tinygpt|model_dir> --tools tools.json [options]
 
@@ -363,6 +363,6 @@ enum Agent {
           tinygpt agent specialist.tinygpt --tools tools.json --json-out
           tinygpt agent specialist.tinygpt --tools tools.json --cloud-escalate anthropic
         """)
-        exit(2)
+        exit(code)
     }
 }

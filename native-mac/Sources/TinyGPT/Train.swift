@@ -212,7 +212,7 @@ enum Train {
                     fputs("--qat must be int4 or int8 (got \(v))\n", stderr); exit(2)
                 }
                 i += 2
-            case "-h", "--help":  exitUsage()
+            case "-h", "--help":  exitUsage(0)
             default:
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
             }
@@ -990,7 +990,7 @@ enum Train {
         return "\(n) B"
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt train [options]
 
@@ -1105,6 +1105,6 @@ enum Train {
 
         Ctrl-C flushes a final checkpoint then exits cleanly.
         """)
-        exit(2)
+        exit(code)
     }
 }

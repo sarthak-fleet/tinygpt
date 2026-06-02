@@ -56,7 +56,7 @@ enum TunedLens {
             case "--lr":         lr = Float(args[i+1]) ?? lr; i += 2
             case "--batch":      batchSize = Int(args[i+1]); i += 2
             case "--ctx":        ctxOverride = Int(args[i+1]); i += 2
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 modelPath = args[i]; i += 1
@@ -210,7 +210,7 @@ enum TunedLens {
         return 8
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt tuned-lens <model.tinygpt> --corpus <text> [options]
 
@@ -226,6 +226,6 @@ enum TunedLens {
         model FROZEN. Output: a small sidecar file that any future
         sample / lens path can attach via `attachTunedLens(from:)`.
         """)
-        exit(2)
+        exit(code)
     }
 }

@@ -52,7 +52,7 @@ enum Finetune {
                 peftVariant = .adaLora
                 adaLoraTargetRank = Int(args[i+1]) ?? adaLoraTargetRank; i += 2
             case "--layer-drop":   layerDropProb = Float(args[i+1]) ?? layerDropProb; i += 2
-            case "-h", "--help": exitUsage()
+            case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 basePath = args[i]; i += 1
@@ -117,19 +117,31 @@ enum Finetune {
             guard let tokDir = load.hfTokenizerDir else {
                 fputs("HF model loaded but no tokenizer directory recorded\n", stderr); exit(1)
             }
-            let text: String
-            do { text = try String(contentsOf: corpusURL, encoding: .utf8) }
-            catch { fputs("error reading corpus: \(error)\n", stderr); exit(1) }
-            corpusBytes = text.utf8.count
-            print("loading BPE tokenizer from \(tokDir.lastPathComponent)…")
-            let tok: HFTokenizer
-            do { tok = try HFTokenizer.loadBlocking(from: tokDir) }
-            catch { fputs("tokenizer load failed: \(error)\n", stderr); exit(1) }
-            print("encoding corpus…")
-            let ids: [Int]
-            do { ids = try tok.encode(text) }
-            catch { fputs("tokenizer encode failed: \(error)\n", stderr); exit(1) }
-            let tokens = ids.map { Int32($0) }
+            let attrs = (try? FileManager.default.attributesOfItem(atPath: corpusURL.path)) ?? [:]
+            let fileSize = (attrs[.size] as? Int) ?? 0
+            let cacheURL = TokenCache.cacheURL(corpus: corpusURL, tokenizerDir: tokDir,
+                                                vocabSize: cfg.vocabSize)
+            let tokens: [Int32]
+            if let cu = cacheURL, let cached = TokenCache.read(cu) {
+                print("using cached BPE tokens (\(cu.lastPathComponent))")
+                tokens = cached
+                corpusBytes = fileSize
+            } else {
+                let text: String
+                do { text = try String(contentsOf: corpusURL, encoding: .utf8) }
+                catch { fputs("error reading corpus: \(error)\n", stderr); exit(1) }
+                corpusBytes = fileSize > 0 ? fileSize : text.utf8.count
+                print("loading BPE tokenizer from \(tokDir.lastPathComponent)…")
+                let tok: HFTokenizer
+                do { tok = try HFTokenizer.loadBlocking(from: tokDir) }
+                catch { fputs("tokenizer load failed: \(error)\n", stderr); exit(1) }
+                print("encoding corpus…")
+                let ids: [Int]
+                do { ids = try tok.encode(text) }
+                catch { fputs("tokenizer encode failed: \(error)\n", stderr); exit(1) }
+                tokens = ids.map { Int32($0) }
+                if let cu = cacheURL { try? TokenCache.write(tokens, to: cu) }
+            }
             corpusDescription = "\(corpusPath) (\(formatBytes(corpusBytes)) · \(formatNum(tokens.count)) BPE tokens)"
             let corpus = TokenizedCorpus(tokens: tokens, vocabSize: cfg.vocabSize)
             sampleBatch = { B, T in corpus.sampleBatch(batchSize: B, contextLength: T) }
@@ -253,7 +265,7 @@ enum Finetune {
             return "AdaLoRA\(t) (Zhang et al., 2023)"
         }
     }
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt finetune <base.tinygpt> [options]
 
@@ -276,6 +288,6 @@ enum Finetune {
         --adalora-target-rank R  AdaLoRA — train per-rank importance scores, target avg rank R.
         --layer-drop F           LayerDrop fraction (0.0-0.5) — stochastically skip whole blocks.
         """)
-        exit(2)
+        exit(code)
     }
 }

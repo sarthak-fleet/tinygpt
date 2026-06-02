@@ -56,7 +56,7 @@ public enum Serve {
                 guard i + 1 < args.count, let n = Int(args[i + 1]) else { exitUsage() }
                 maxContext = n; i += 2
             case "-h", "--help":
-                exitUsage()
+                exitUsage(0)
             default:
                 if args[i].hasPrefix("-") {
                     fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
@@ -91,7 +91,7 @@ public enum Serve {
                                 maxContextOverride: maxContext)
     }
 
-    private static func exitUsage() -> Never {
+    private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt serve <model.tinygpt | hf-dir> [options]
 
@@ -125,7 +125,7 @@ public enum Serve {
                           "apiBase": "http://127.0.0.1:11434" }] }
         See docs/continue_provider.md for the full walkthrough.
         """)
-        exit(2)
+        exit(code)
     }
 }
 
