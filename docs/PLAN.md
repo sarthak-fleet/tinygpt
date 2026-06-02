@@ -137,6 +137,7 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 - ✅ Activation patching — both variants (zero + donor-swap, shipped 2026-06-02 in `17021bc`)
 - ✅ Linear probes (`tinygpt linear-probe`) — train Linear(d_model → C) on per-layer hidden states + label data; `.lp` sidecar format. Detects whether a layer represents an arbitrary external property (Alain & Bengio 2016).
 - ✅ ROME — surgical fact editing (`tinygpt rome`). Rank-1 update to one MLP's W_out, identity-Hessian first cut. Verified on shakespeare.tinygpt: `--target X --layer 11 --scale 10` flipped sampled next-token to X. Covariance-based ROME is the follow-up.
+- ✅ MEMIT — batched fact editing (`tinygpt memit`). Rank-K least-squares ΔW = R(KᵀK + λI)⁻¹Kᵀ via hand-rolled Gauss-Jordan inverse on the small N×N system. Verified math: per-fact residual ~1e-4 at scale=1 (machine noise — least-squares is exact). Single-layer visibility-in-sampling tradeoff documented; multi-layer MEMIT (distribute update across 5-7 mid-network layers) is the next-cut.
 
 ## Browser / Web track
 
@@ -345,7 +346,7 @@ What's left:
 **Genuinely new value-adds, not yet built**
 
 - ⬜ **Sparse autoencoders (SAE)** — Anthropic-style feature decomposition. Different mechanism from logit/tuned lens / linear probe. Multi-day build.
-- ⬜ **MEMIT** — multi-fact extension of ROME (Meng et al. 2023). ROME shipped; MEMIT solves the rank-K update for multiple facts simultaneously via least-squares. ~1 day.
+- ⬜ **Multi-layer MEMIT** — single-layer MEMIT ships; the proper Meng 2023 algorithm distributes the rank-K update across 5-7 mid-network layers (residual partitioned by causal-trace influence weights). Cleaner sampling visibility without per-layer overcommit. Same math per-layer.
 - ⬜ **GGUF k-quant types** (Q4_K, Q6_K, Q8_K, …) — extends the existing GGUFReader. ~1 day per type once block layout is decoded.
 - ⬜ **Sample packing (cross-source)** — combine examples from *different* sources into one batch (distinct from intra-source sequence packing, which ships).
 - ⬜ **Vocab trimming** — drop unused BPE tokens to shrink embedding matrix. Niche.
@@ -355,6 +356,7 @@ What's left:
 - ✅ Linear probes (`tinygpt linear-probe`)
 - ✅ Deduplication (`tinygpt dedupe`, line + doc modes)
 - ✅ ROME (`tinygpt rome`, identity-Hessian first cut)
+- ✅ MEMIT (`tinygpt memit`, single-layer least-squares, exact per-fact residual at scale=1)
 - ✅ GGUF reader (`GGUFReader.swift` + `tinygpt gguf-inspect`)
 
 **Stale ⬜ markers caught + corrected this session — now ✅:**

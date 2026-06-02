@@ -89,6 +89,8 @@ struct TinyGPT {
             Dedupe.run(args: Array(args.dropFirst()))
         case "rome":
             ROME.run(args: Array(args.dropFirst()))
+        case "memit":
+            MEMIT.run(args: Array(args.dropFirst()))
         case "gguf-inspect":
             GGUFInspect.run(args: Array(args.dropFirst()))
         case "train-heads":
