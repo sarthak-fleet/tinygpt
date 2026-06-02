@@ -203,6 +203,11 @@ export class GpuModel {
       gatePassed = false;
     }
     if (!gatePassed) return false;
+    // Also settle the shader-f16 compute gate. The compute kernel chains
+    // off the storage gate (no point trying it if storage failed), but
+    // gating both before flipping useF16Storage means linear()'s dispatch
+    // sees a stable shaderF16Active value on its first invocation.
+    try { await this.ops.shaderF16Ready; } catch { /* defaults false */ }
 
     // Pack every matShape'd weight. Skip params that aren't 2D matmul-B
     // targets (biases, layernorm gain/bias) — those stay f32, used directly
@@ -231,6 +236,14 @@ export class GpuModel {
     return this.useF16Storage;
   }
 
+  /** True iff the shader-f16 compute matmul kernel both compiled AND
+   *  passed the startup numerics gate. When true the linear() forward
+   *  routes through `matmulF16Compute` (f16 mul + f32 accum); implies
+   *  f16StorageActive. Surfaced for the `+shader-f16` capability pill. */
+  get shaderF16Active(): boolean {
+    return this.useF16Storage && this.ops.shaderF16Active;
+  }
+
   numParams(): number {
     return this.params.reduce((n, p) => n + p.size, 0);
   }
@@ -241,13 +254,24 @@ export class GpuModel {
 
   // --- linear = matmul + bias ----------------------------------------------
   private linear(x: GpuTensor, w: Param, b: Param, N: number, cin: number, cout: number) {
-    // f16-storage fast path: matmulF16Weight reads B as packed-half (half
-    // the bytes per inner-loop K-step), f32 accumulate. Numerics-gated at
-    // GpuOps create time and again at prepareForInference time, so this
-    // branch is only ever taken on configurations that pass both checks.
+    // Forward matmul dispatch preference (high → low):
+    //   1. shader-f16 compute (f16 mul + f32 accum) — reuses the packed
+    //      f16 mirror of w produced by prepareForInference. Gated by
+    //      shaderF16Active.
+    //   2. f16-storage matmul (f32 mul, packed-f16 weight loads) — same
+    //      packed mirror, just f32 inner loop. Gated by f16StorageActive
+    //      (implied true when shaderF16Active is true).
+    //   3. f32 vec4 / blocked matmul — default fallback.
     let y: GpuTensor;
-    if (this.useF16Storage && w.wF16 && w.matShape && cin % 2 === 0 && cout % 2 === 0) {
-      y = this.keep(this.ops.matmulF16Weight(x, w.wF16, N, cin, cout));
+    if (
+      this.useF16Storage && w.wF16 && w.matShape &&
+      cin % 2 === 0 && cout % 2 === 0
+    ) {
+      if (this.ops.shaderF16Active) {
+        y = this.keep(this.ops.matmulF16Compute(x, w.wF16, N, cin, cout));
+      } else {
+        y = this.keep(this.ops.matmulF16Weight(x, w.wF16, N, cin, cout));
+      }
     } else {
       y = this.keep(this.ops.matmul(x, w.w, N, cin, cout));
     }

@@ -310,7 +310,12 @@ async function warmupGenerate(g: GpuModel, ctx: number): Promise<void> {
   const f16Active = await g.prepareForInference();
   if (f16Active) {
     // Surface to the main thread so the +f16 pill can update post-init.
-    post({ type: "gpu_caps", caps: { f16Storage: true } });
+    // shaderF16Active settles after f16-storage (the compute kernel reuses
+    // the packed mirror), so we know its state at this point.
+    post({
+      type: "gpu_caps",
+      caps: { f16Storage: true, shaderF16: g.shaderF16Active },
+    });
   }
   // 32 tokens is a reasonable middle-ground prompt length. One forward at
   // T=32 compiles every inference kernel against bind-group layouts that
@@ -319,7 +324,9 @@ async function warmupGenerate(g: GpuModel, ctx: number): Promise<void> {
   const T = Math.min(32, ctx);
   const prompt = Array.from({ length: T }, (_, i) => 10 + (i % 90));
   await g.generate(prompt, 1, 0, 0, 0);
-  const note = f16Active ? " · f16-storage matmul active" : "";
+  const note = g.shaderF16Active
+    ? " · f16-compute matmul active"
+    : f16Active ? " · f16-storage matmul active" : "";
   post({ type: "status", message: `inference warmed up in ${((performance.now() - t0) / 1000).toFixed(1)}s${note} — ready to generate.` });
 }
 

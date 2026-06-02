@@ -2651,6 +2651,18 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
           slot.appendChild(pill);
         }
       }
+      if (msg.caps.shaderF16) {
+        const slot = document.getElementById("gpuAccel");
+        if (slot && !slot.querySelector('[data-explain="shaderF16Active"]')) {
+          const pill = document.createElement("button");
+          pill.type = "button";
+          pill.className = "pill on pill-btn";
+          pill.dataset.explain = "shaderF16Active";
+          pill.title = "shader-f16 compute matmul — f16 shared tiles + f16 multiplies + f32 accumulator (passed numerics gate)";
+          pill.textContent = "+f16 compute";
+          slot.appendChild(pill);
+        }
+      }
       if (msg.caps.cooperativeMatrix) {
         (window as unknown as { __tgUpdateGpuAccelPills?: (e: { cooperativeMatrix?: boolean }) => void })
           .__tgUpdateGpuAccelPills?.({ cooperativeMatrix: true });

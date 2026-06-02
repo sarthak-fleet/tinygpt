@@ -152,9 +152,12 @@ export type FromWorker =
   | { type: "inspect"; result: InspectResult }
   // Updates the capability pills with paths discovered post-device-init:
   // f16Storage is set once GpuModel.prepareForInference() returns true
-  // (numerics gate passed AND weights packed). cooperativeMatrix will land
-  // here when #92 ships. Sent at most once per loaded model.
-  | { type: "gpu_caps"; caps: { f16Storage?: boolean; cooperativeMatrix?: boolean } }
+  // (numerics gate passed AND weights packed). shaderF16 is set when the
+  // shader-f16 compute matmul (`enable f16;` + f16 shared tiles + f16
+  // multiplies + f32 accumulators) also passes its numerics gate.
+  // cooperativeMatrix will land here when #92 ships. Sent at most once
+  // per loaded model.
+  | { type: "gpu_caps"; caps: { f16Storage?: boolean; shaderF16?: boolean; cooperativeMatrix?: boolean } }
   // Fires when the worker has destroyed its loaded model (auto-offload).
   // Main thread hides the GPU-mem pill + disables Generate + shows a small
   // "model freed after idle" toast with a "reload" affordance.

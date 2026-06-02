@@ -15,6 +15,7 @@ import shader from "./train.wgsl?raw";
 import sgShader from "./train_sg.wgsl?raw";
 import vec4Shader from "./train_vec4.wgsl?raw";
 import f16Shader from "./train_f16.wgsl?raw";
+import f16ComputeShader from "./train_f16_compute.wgsl?raw";
 import fa2Shader from "./attention_fa2.wgsl?raw";
 import { BufferPool, GpuTensor, type GpuContext } from "./tensor";
 
@@ -42,6 +43,11 @@ const VEC4_ENTRIES = ["matmul_blocked_vec4"] as const;
  *  declared as array<u32> for packed-f16 weight storage. K and N must be
  *  even. Gated on a startup numerics check (see verifyF16Storage). */
 const F16_ENTRIES = ["matmul_blocked_f16", "matmul_abt_blocked_f16", "pack_to_f16"] as const;
+/** Entry points that live in train_f16_compute.wgsl — declares `enable f16;`
+ *  so it only compiles on adapters that advertise the shader-f16 feature.
+ *  Shared tiles are f16, the inner multiply is f16, the accumulator stays
+ *  f32 for K-direction precision. Same bind layout as F16_ENTRIES. */
+const F16C_ENTRIES = ["matmul_blocked_f16_compute"] as const;
 /** Flash-Attention-2-style fused attention forward. Same bind layout as
  * train.wgsl (g0=q g1=k g2=v g3=attn g4=ctx, p.a=B p.b=T p.c=C p.d=H
  * p.fa=1/sqrt(hd)). Workgroup-cooperative — one workgroup per
@@ -55,6 +61,7 @@ type Entry =
   | (typeof SG_ENTRIES)[number]
   | (typeof VEC4_ENTRIES)[number]
   | (typeof F16_ENTRIES)[number]
+  | (typeof F16C_ENTRIES)[number]
   | (typeof FA2_ENTRIES)[number];
 
 /** Params uniform: up to four u32 (dims) and four f32 (eps, scale, ...). */
@@ -95,6 +102,11 @@ export class GpuOps {
      *  and any future implementation where subgroupAdd diverges past the
      *  float-reassociation tolerance. */
     public matmulSgActive: boolean,
+    /** True iff `shader-f16` is advertised AND the f16-compute matmul
+     *  passed the startup numerics gate. Implies f16StorageActive (the
+     *  compute path reuses the packed-f16 storage layout). When false the
+     *  matmul path falls back to f16-storage or f32-vec4 as available. */
+    public shaderF16Active: boolean,
   ) {}
 
   /** Destroy every GPU buffer this GpuOps owns — pool, dummies, per-batch
@@ -145,6 +157,11 @@ export class GpuOps {
    *  resolved-false for devices without subgroups support (so awaiters
    *  unblock immediately on those paths). */
   public matmulSgReady: Promise<boolean> = Promise.resolve(false);
+
+  /** Promise resolving when the shader-f16 compute gate has finished.
+   *  Default resolved-false for devices without `shader-f16` (so awaiters
+   *  unblock immediately). */
+  public shaderF16Ready: Promise<boolean> = Promise.resolve(false);
 
   static create(ctx: GpuContext): GpuOps {
     const device = ctx.device;
@@ -206,6 +223,20 @@ export class GpuOps {
       });
     }
 
+    // F16-compute matmul. Declares `enable f16;` so we only compile when
+    // the adapter advertised the `shader-f16` feature (Chrome 121+ stable).
+    // Same bind layout, but the inner multiply runs in f16 + shared tiles
+    // are f16 — modest extra speedup on Apple stacking on f16 storage.
+    if (ctx.capabilities.shaderF16) {
+      const f16cModule = device.createShaderModule({ code: f16ComputeShader });
+      for (const f16cEntry of F16C_ENTRIES) {
+        pipelines[f16cEntry] = device.createComputePipeline({
+          layout: pipelineLayout,
+          compute: { module: f16cModule, entryPoint: f16cEntry },
+        });
+      }
+    }
+
     // FA2 fused attention forward — workgroup-cooperative, online softmax.
     // Separate module because the WGSL declares a workgroup-scope Q tile
     // sized for hd ≤ MAX_HD that train.wgsl doesn't carry.
@@ -226,6 +257,7 @@ export class GpuOps {
       device, layout, pipelines, dummies, new BufferPool(device),
       ctx.subgroups, /* f16StorageActive */ false,
       /* matmulSgActive */ false,
+      /* shaderF16Active */ false,
     );
 
     // Kick off the numerics gate in the background. Until it settles, all
@@ -245,6 +277,26 @@ export class GpuOps {
         console.warn("[ops] matmul-sg numerics gate threw:", err);
         return false;
       });
+    }
+
+    // Shader-f16 compute matmul gate. Only runs if shader-f16 was advertised
+    // AND the kernel compiled. The check serialises after the f16-storage
+    // gate because the compute kernel reads the same packed-f16 storage
+    // produced by pack_to_f16 — if storage doesn't gate-pass, compute can't
+    // either. Sequencing prevents wasting GPU time on a path that will never
+    // activate (the dispatch fallback implies storage active too).
+    if (ctx.capabilities.shaderF16 && pipelines["matmul_blocked_f16_compute"]) {
+      ops.shaderF16Ready = (async () => {
+        const storagePass = await ops.f16Ready;
+        if (!storagePass) {
+          console.info("[ops] shader-f16 gate skipped — f16-storage gate failed first");
+          return false;
+        }
+        return ops.verifyShaderF16Compute().catch((err) => {
+          console.warn("[ops] shader-f16 compute gate threw:", err);
+          return false;
+        });
+      })();
     }
 
     return ops;
@@ -457,6 +509,65 @@ export class GpuOps {
     cAbtRefT.recycle();
     cAbtSgT.recycle();
     return passed;
+  }
+
+  /** Numerics gate for the shader-f16 compute matmul.
+   *
+   *  Reuses the f16-storage gate's packing + tolerance machinery — only
+   *  the inner kernel differs (multiply in f16 instead of f32). The
+   *  accumulator stays f32 in both paths, so the per-K rounding budget
+   *  (~√K × eps_f16) is the same; we apply the same magnitude-aware
+   *  thresholds as `verifyF16Storage`. Only the forward kernel is gated
+   *  here — the backward matmulAbt-f16-compute variant is queued for a
+   *  follow-up (forward dominates sampling latency, which is the primary
+   *  user win). */
+  private async verifyShaderF16Compute(): Promise<boolean> {
+    if (!this.pipelines["matmul_blocked_f16_compute"] ||
+        !this.pipelines["pack_to_f16"]) {
+      return false;
+    }
+    const M = 64, K = 128, N = 128;
+    const aData = new Float32Array(M * K);
+    const bData = new Float32Array(K * N);
+    let seed = 54321;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return (seed / 0x7fffffff) * 0.4 - 0.2;
+    };
+    for (let i = 0; i < aData.length; i++) aData[i] = rand();
+    for (let i = 0; i < bData.length; i++) bData[i] = rand();
+
+    const a = new GpuTensor(this.device, M * K);
+    a.upload(aData);
+    const b = new GpuTensor(this.device, K * N);
+    b.upload(bData);
+
+    // f32 reference via the existing matmul (vec4) path.
+    const cF32 = this.matmul(a, b, M, K, N);
+    const refOut = await cF32.download();
+
+    // Pack B and run the shader-f16 compute kernel.
+    const bPackedBuf = this.device.createBuffer({
+      size: (K * N) * 2,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    this.packToF16(b.buffer, bPackedBuf, K, N);
+    const cF16c = this.matmulF16Compute(a, bPackedBuf, M, K, N);
+    const f16cOut = await cF16c.download();
+
+    const fwdResult = this.compareF16Output(refOut, f16cOut, "fwd");
+    console.info(`[ops] shader-f16 compute gate (fwd): ${fwdResult.summary}`);
+    console.info(
+      `[ops] shader-f16 compute gate verdict: ${fwdResult.passed ? "PASS — f16-compute path active" : "FAIL — staying on f16-storage / f32"}`,
+    );
+
+    this.shaderF16Active = fwdResult.passed;
+    a.destroy();
+    b.destroy();
+    bPackedBuf.destroy();
+    cF32.recycle();
+    cF16c.recycle();
+    return fwdResult.passed;
   }
 
   /** Tight f32-vs-f32 comparison for the subgroup matmul gate. Both paths
@@ -676,6 +787,30 @@ export class GpuOps {
     const c = this.newTensor(M * N, "matmul.f16.C");
     this.dispatchMixed(
       "matmul_blocked_f16",
+      [a.buffer, bPackedF16, c.buffer],
+      { a: M, b: K, c: N },
+      Math.ceil(M / 64), Math.ceil(N / 64),
+    );
+    return c;
+  }
+
+  /** Forward matmul C = A @ B where B is a pre-packed f16 buffer, executed
+   *  via the shader-f16 compute kernel (`enable f16;` + f16 shared tiles +
+   *  f16 multiply + f32 accumulator). Same packing contract as
+   *  matmulF16Weight — the dispatched kernel just trades the shared-tile
+   *  type and inner-multiply precision for the modest extra speedup on
+   *  shader-f16 capable adapters. Callers should consult `shaderF16Active`
+   *  before dispatching; falls back to `matmulF16Weight` or the f32 path
+   *  when the gate hasn't passed. */
+  matmulF16Compute(
+    a: GpuTensor, bPackedF16: GPUBuffer, M: number, K: number, N: number,
+  ): GpuTensor {
+    if (K % 2 !== 0 || N % 2 !== 0) {
+      throw new Error(`matmulF16Compute: K and N must be even (got K=${K}, N=${N})`);
+    }
+    const c = this.newTensor(M * N, "matmul.f16c.C");
+    this.dispatchMixed(
+      "matmul_blocked_f16_compute",
       [a.buffer, bPackedF16, c.buffer],
       { a: M, b: K, c: N },
       Math.ceil(M / 64), Math.ceil(N / 64),

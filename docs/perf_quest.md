@@ -30,7 +30,7 @@ it preserves loss.
 | Lever | Status | Detection | Realistic gain | Risk |
 |---|---|---|---|---|
 | **Storage-f16 matmul** (existing `matmul_tiled_f16.wgsl`) | scaffolded; not wired into prod path yet | always available (uses `pack2x16float`) | ~1.5×, all users | medium — needs weight pre-packing, train.wgsl bind-layout adaptation |
-| **shader-f16 full compute** | not started | `device.features.has("shader-f16")` — Chrome 121+ stable | additional ~1.3-1.5× | medium — precision drift; needs gate per #94 |
+| **shader-f16 full compute** | **shipped** (`train_f16_compute.wgsl` · gate in `verifyShaderF16Compute`) | `device.features.has("shader-f16")` — Chrome 121+ stable | additional ~1.2-1.5× | medium — precision drift; gated, falls back to f16-storage / vec4 on failure |
 | **Cooperative matrix** (`enable chromium_experimental_subgroup_matrix`) | probe-compile detection landed | probe-compile a trial shader | ~3× NVIDIA · ~1.3× Apple | high — experimental WGSL extension, evolving API, sparse docs |
 | **WebNN inference (sampling only)** | scaffolded; probe lands | `navigator.ml` + `createContext({deviceType: "gpu"\|"npu"})` | ~3-5× on Apple/Windows | high — new code path; training stays WebGPU |
 

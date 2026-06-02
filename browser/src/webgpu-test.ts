@@ -110,6 +110,26 @@ async function main(): Promise<void> {
     }
   }
 
+  // --- shader-f16 compute matmul gate ------------------------------------
+  // Settles after the f16-storage gate (the compute kernel reuses the
+  // packed-f16 mirror). Skip-with-note on devices that don't advertise
+  // shader-f16 so the harness stays green there. Like matmulSgActive, a
+  // failure here never regresses training — shaderF16Active defaults false
+  // and the matmul path falls back to f16-storage or vec4 as available.
+  {
+    if (!ctx.capabilities.shaderF16) {
+      lines.push("skip shader-f16 compute gate     device has no shader-f16 feature");
+      out.textContent = lines.join("\n");
+    } else {
+      const passed = await ops.shaderF16Ready;
+      check(
+        "shader-f16 compute gate",
+        passed,
+        passed ? "PASS — matmul_blocked_f16_compute active" : "FAIL — falling back to f16-storage or vec4",
+      );
+    }
+  }
+
   // --- matmul (stage 1) ---------------------------------------------------
   {
     const M = 24, K = 40, N = 18;
