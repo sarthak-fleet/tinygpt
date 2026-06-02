@@ -16,6 +16,27 @@ known gotchas?) the registry doesn't cover.
 - Convert: `tinygpt extractor-data` (BFCL/τ-bench → router pairs)
 - Default cache: `~/.cache/tinygpt/datasets/`
 
+## Cache snapshot — 2026-06-02
+
+Verified by pulling each Tier A foundational set. Sizes from `du -sh`:
+
+| Dataset | On-disk | Cached form | Ready for training? |
+|---|---|---|---|
+| `yahma/alpaca-cleaned` | 82 MB | `corpus.jsonl` (51,760 records) | ✅ |
+| `NousResearch/hermes-function-calling-v1` | 113 MB | `corpus.jsonl` (11,230 records) | ✅ |
+| `Intel/orca_dpo_pairs` | 67 MB | `corpus.jsonl` | ✅ |
+| `meta-math/MetaMathQA` | 672 MB | `corpus.jsonl` | ✅ |
+| `argilla/ultrafeedback-binarized-preferences-cleaned` | 145 MB | parquet (not decoded) | ⚠️ needs decode |
+| `iamtarun/python_code_instructions_18k_alpaca` | 11 MB | parquet (not decoded) | ⚠️ needs decode |
+| `Locutusque/function-calling-chatml` | 102 MB | parquet (not decoded) | ⚠️ needs decode |
+| `Salesforce/xlam-function-calling-60k` | 0 B | — | 🚫 gated; needs `HF_TOKEN` |
+| `ai4bharat/MILU` | 0 B | — | 🚫 gated; needs `HF_TOKEN` |
+
+Three of the four ready-for-training sets (alpaca-cleaned, hermes-fc-v1,
+orca_dpo_pairs, MetaMathQA) are immediately usable with
+`tinygpt sft` / `tinygpt dpo`. Parquet-only sets stage on disk but
+need a python-side decode pass; see "Known gotchas" §2 below.
+
 ## Tool-calling (north-star primary)
 
 | Dataset | Size | Schema | Status | Gotchas |
