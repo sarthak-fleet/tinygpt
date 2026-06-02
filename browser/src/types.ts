@@ -157,7 +157,7 @@ export type FromWorker =
   // multiplies + f32 accumulators) also passes its numerics gate.
   // cooperativeMatrix will land here when #92 ships. Sent at most once
   // per loaded model.
-  | { type: "gpu_caps"; caps: { f16Storage?: boolean; shaderF16?: boolean; cooperativeMatrix?: boolean } }
+  | { type: "gpu_caps"; caps: { f16Storage?: boolean; shaderF16?: boolean; cooperativeMatrix?: boolean; coopMatrixActive?: boolean; webnnPassed?: boolean; webnnDevice?: string } }
   // Fires when the worker has destroyed its loaded model (auto-offload).
   // Main thread hides the GPU-mem pill + disables Generate + shows a small
   // "model freed after idle" toast with a "reload" affordance.

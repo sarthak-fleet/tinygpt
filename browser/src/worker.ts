@@ -20,6 +20,7 @@ import { decode, encode } from "./tokenizer";
 import type { FromWorker, RunConfig, ToWorker } from "./types";
 import { benchmarkById } from "./benchmarks/registry";
 import { BenchmarkError, type BenchmarkModel } from "./benchmarks/types";
+import { probeWebNNActive } from "./webnn_probe";
 
 const ctx = self as unknown as {
   postMessage(msg: FromWorker, transfer?: Transferable[]): void;
@@ -314,8 +315,29 @@ async function warmupGenerate(g: GpuModel, ctx: number): Promise<void> {
     // the packed mirror), so we know its state at this point.
     post({
       type: "gpu_caps",
-      caps: { f16Storage: true, shaderF16: g.shaderF16Active },
+      caps: {
+        f16Storage: true,
+        shaderF16: g.shaderF16Active,
+        coopMatrixActive: g.coopMatrixActive,
+      },
     });
+  }
+
+  // WebNN active probe — independent of WebGPU path. Builds a tiny
+  // MLGraph and confirms it actually computes (CoreML/ANE on Apple,
+  // DirectML/NPU on Windows). Result drives the "+WebNN (PASS)" /
+  // "+WebNN (no backend)" pill state. Cheap (~30ms when the API works,
+  // ~5ms when it short-circuits on missing navigator.ml).
+  try {
+    const webnn = await probeWebNNActive();
+    if (webnn.apiReachable) {
+      post({
+        type: "gpu_caps",
+        caps: { webnnPassed: webnn.numericsPassed, webnnDevice: webnn.deviceType ?? undefined },
+      });
+    }
+  } catch (err) {
+    console.warn("[worker] WebNN active probe threw:", err);
   }
   // 32 tokens is a reasonable middle-ground prompt length. One forward at
   // T=32 compiles every inference kernel against bind-group layouts that

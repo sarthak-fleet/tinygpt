@@ -2663,6 +2663,42 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
           slot.appendChild(pill);
         }
       }
+      if (msg.caps.coopMatrixActive) {
+        const slot = document.getElementById("gpuAccel");
+        if (slot && !slot.querySelector('[data-explain="coopMatrixActive"]')) {
+          const pill = document.createElement("button");
+          pill.type = "button";
+          pill.className = "pill on pill-btn";
+          pill.dataset.explain = "coopMatrixActive";
+          pill.title = "cooperative-matrix matmul — hardware MMA (tensor cores / AMX) via subgroupMatrixMultiplyAccumulate (passed numerics gate)";
+          pill.textContent = "+coop-matrix";
+          slot.appendChild(pill);
+        }
+      }
+      if (typeof msg.caps.webnnPassed === "boolean") {
+        // Active WebNN probe completed. Upgrade or replace the static
+        // "+WebNN" pill based on whether the matmul graph actually
+        // computed within tolerance.
+        const slot = document.getElementById("gpuAccel");
+        if (slot) {
+          const existing = slot.querySelector('[data-explain="webnn"]');
+          if (existing) existing.remove();
+          const pill = document.createElement("button");
+          pill.type = "button";
+          pill.dataset.explain = "webnn";
+          if (msg.caps.webnnPassed) {
+            pill.className = "pill on pill-btn";
+            const dev = msg.caps.webnnDevice ?? "gpu";
+            pill.title = `WebNN (deviceType=${dev}) — probed and passed numerics gate. Routes inference to CoreML / ANE / DirectML / NPU.`;
+            pill.textContent = `+WebNN (${dev})`;
+          } else {
+            pill.className = "pill off pill-btn";
+            pill.title = "WebNN namespace present but probe matmul failed numerics gate — the backend isn't reliable for inference right now.";
+            pill.textContent = "+WebNN (no backend)";
+          }
+          slot.appendChild(pill);
+        }
+      }
       if (msg.caps.cooperativeMatrix) {
         (window as unknown as { __tgUpdateGpuAccelPills?: (e: { cooperativeMatrix?: boolean }) => void })
           .__tgUpdateGpuAccelPills?.({ cooperativeMatrix: true });

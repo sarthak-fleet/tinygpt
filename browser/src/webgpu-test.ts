@@ -130,6 +130,25 @@ async function main(): Promise<void> {
     }
   }
 
+  // --- cooperative-matrix matmul gate ------------------------------------
+  // Skips when chromium_experimental_subgroup_matrix isn't exposed. A
+  // gate failure on devices that DO have the extension is most likely an
+  // API-version mismatch with the running Chrome's tint — the kernel
+  // falls back to f16-compute / f16-storage / vec4 unchanged.
+  {
+    if (!ctx.capabilities.cooperativeMatrix) {
+      lines.push("skip coop-matrix gate            device has no chromium_experimental_subgroup_matrix");
+      out.textContent = lines.join("\n");
+    } else {
+      const passed = await ops.coopMatrixReady;
+      check(
+        "coop-matrix numerics gate",
+        passed,
+        passed ? "PASS — matmul_blocked_coopmat active" : "FAIL — falling back to f16-compute / f16-storage / vec4",
+      );
+    }
+  }
+
   // --- matmul (stage 1) ---------------------------------------------------
   {
     const M = 24, K = 40, N = 18;

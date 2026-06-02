@@ -21,7 +21,7 @@ page.on("console", (m) => {
   // Capture numerics-gate verdicts so the headless run reports the
   // detailed mean|ref| / max_abs / mean_rel summaries from verifyMatmulSg
   // and verifyF16Storage (which only emit via console.info inside the page).
-  if (/\[ops\]\s+(matmul-sg|f16-storage|shader-f16) (gate|compute gate)/.test(t)) gateLines.push(t);
+  if (/\[ops\]\s+(matmul-sg|f16-storage|shader-f16|coop-matrix) (gate|compute gate)/.test(t)) gateLines.push(t);
 });
 
 await page.goto(`${BASE}/webgpu-test.html`, { waitUntil: "load" });

@@ -203,11 +203,12 @@ export class GpuModel {
       gatePassed = false;
     }
     if (!gatePassed) return false;
-    // Also settle the shader-f16 compute gate. The compute kernel chains
-    // off the storage gate (no point trying it if storage failed), but
-    // gating both before flipping useF16Storage means linear()'s dispatch
-    // sees a stable shaderF16Active value on its first invocation.
+    // Also settle the shader-f16 compute and coop-matrix gates. Both
+    // chain off the storage gate (no point trying them if storage
+    // failed), and gating both before flipping useF16Storage means
+    // linear()'s dispatch sees stable values on its first invocation.
     try { await this.ops.shaderF16Ready; } catch { /* defaults false */ }
+    try { await this.ops.coopMatrixReady; } catch { /* defaults false */ }
 
     // Pack every matShape'd weight. Skip params that aren't 2D matmul-B
     // targets (biases, layernorm gain/bias) — those stay f32, used directly
@@ -244,6 +245,13 @@ export class GpuModel {
     return this.useF16Storage && this.ops.shaderF16Active;
   }
 
+  /** True iff the cooperative-matrix matmul kernel compiled, gate
+   *  passed, AND the model's packed mirrors are set up. Implies
+   *  f16StorageActive. Surfaces the `+coop-matrix` capability pill. */
+  get coopMatrixActive(): boolean {
+    return this.useF16Storage && this.ops.coopMatrixActive;
+  }
+
   numParams(): number {
     return this.params.reduce((n, p) => n + p.size, 0);
   }
@@ -255,19 +263,22 @@ export class GpuModel {
   // --- linear = matmul + bias ----------------------------------------------
   private linear(x: GpuTensor, w: Param, b: Param, N: number, cin: number, cout: number) {
     // Forward matmul dispatch preference (high → low):
-    //   1. shader-f16 compute (f16 mul + f32 accum) — reuses the packed
-    //      f16 mirror of w produced by prepareForInference. Gated by
+    //   1. coop-matrix (hardware MMA — tensor cores / AMX). Requires N
+    //      and cout multiples of 8 in addition to even (the kernel tiles
+    //      8×8). Gated by coopMatrixActive.
+    //   2. shader-f16 compute (f16 mul + f32 accum). Gated by
     //      shaderF16Active.
-    //   2. f16-storage matmul (f32 mul, packed-f16 weight loads) — same
-    //      packed mirror, just f32 inner loop. Gated by f16StorageActive
-    //      (implied true when shaderF16Active is true).
-    //   3. f32 vec4 / blocked matmul — default fallback.
+    //   3. f16-storage matmul (f32 mul, packed-f16 weight loads). Gated
+    //      by f16StorageActive (implied true when shaderF16Active is true).
+    //   4. f32 vec4 / blocked matmul — default fallback.
     let y: GpuTensor;
     if (
       this.useF16Storage && w.wF16 && w.matShape &&
       cin % 2 === 0 && cout % 2 === 0
     ) {
-      if (this.ops.shaderF16Active) {
+      if (this.ops.coopMatrixActive && N % 8 === 0 && cin % 8 === 0 && cout % 8 === 0) {
+        y = this.keep(this.ops.matmulCoopMat(x, w.wF16, N, cin, cout));
+      } else if (this.ops.shaderF16Active) {
         y = this.keep(this.ops.matmulF16Compute(x, w.wF16, N, cin, cout));
       } else {
         y = this.keep(this.ops.matmulF16Weight(x, w.wF16, N, cin, cout));

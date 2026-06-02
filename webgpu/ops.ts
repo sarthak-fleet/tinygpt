@@ -16,6 +16,7 @@ import sgShader from "./train_sg.wgsl?raw";
 import vec4Shader from "./train_vec4.wgsl?raw";
 import f16Shader from "./train_f16.wgsl?raw";
 import f16ComputeShader from "./train_f16_compute.wgsl?raw";
+import coopMatShader from "./train_coopmat.wgsl?raw";
 import fa2Shader from "./attention_fa2.wgsl?raw";
 import { BufferPool, GpuTensor, type GpuContext } from "./tensor";
 
@@ -48,6 +49,15 @@ const F16_ENTRIES = ["matmul_blocked_f16", "matmul_abt_blocked_f16", "pack_to_f1
  *  Shared tiles are f16, the inner multiply is f16, the accumulator stays
  *  f32 for K-direction precision. Same bind layout as F16_ENTRIES. */
 const F16C_ENTRIES = ["matmul_blocked_f16_compute", "matmul_abt_blocked_f16_compute"] as const;
+/** Entry points that live in train_coopmat.wgsl — declare
+ *  `enable chromium_experimental_subgroup_matrix;` so the module only
+ *  parses on adapters that expose the cooperative-matrix primitives
+ *  (NVIDIA tensor cores, AMD MFMA, Apple AMX/simdgroup). Compilation is
+ *  gated by capabilities.cooperativeMatrix (probe-compiled at context
+ *  init). The shape of the API (load / multiply-accumulate / store) is
+ *  evolving — if the kernel fails to compile against the running
+ *  Chrome's tint, the gate stays inactive and matmul falls back. */
+const COOPMAT_ENTRIES = ["matmul_blocked_coopmat"] as const;
 /** Flash-Attention-2-style fused attention forward. Same bind layout as
  * train.wgsl (g0=q g1=k g2=v g3=attn g4=ctx, p.a=B p.b=T p.c=C p.d=H
  * p.fa=1/sqrt(hd)). Workgroup-cooperative — one workgroup per
@@ -62,6 +72,7 @@ type Entry =
   | (typeof VEC4_ENTRIES)[number]
   | (typeof F16_ENTRIES)[number]
   | (typeof F16C_ENTRIES)[number]
+  | (typeof COOPMAT_ENTRIES)[number]
   | (typeof FA2_ENTRIES)[number];
 
 /** Params uniform: up to four u32 (dims) and four f32 (eps, scale, ...). */
@@ -107,6 +118,11 @@ export class GpuOps {
      *  compute path reuses the packed-f16 storage layout). When false the
      *  matmul path falls back to f16-storage or f32-vec4 as available. */
     public shaderF16Active: boolean,
+    /** True iff `chromium_experimental_subgroup_matrix` parsed cleanly
+     *  AND the coop-matrix matmul passed the startup numerics gate.
+     *  When false the forward path falls back to f16-compute /
+     *  f16-storage / vec4 as available. */
+    public coopMatrixActive: boolean,
   ) {}
 
   /** Destroy every GPU buffer this GpuOps owns — pool, dummies, per-batch
@@ -162,6 +178,11 @@ export class GpuOps {
    *  Default resolved-false for devices without `shader-f16` (so awaiters
    *  unblock immediately). */
   public shaderF16Ready: Promise<boolean> = Promise.resolve(false);
+
+  /** Promise resolving when the cooperative-matrix gate has finished.
+   *  Default resolved-false for devices without the extension OR when
+   *  the kernel failed to compile against the running Chrome's tint. */
+  public coopMatrixReady: Promise<boolean> = Promise.resolve(false);
 
   static create(ctx: GpuContext): GpuOps {
     const device = ctx.device;
@@ -237,6 +258,26 @@ export class GpuOps {
       }
     }
 
+    // Cooperative-matrix matmul. Compiles only if the device passes the
+    // probe-compile (`chromium_experimental_subgroup_matrix` parses).
+    // Wrapped in try because tint may reject the API form even when the
+    // probe succeeded — different Chrome revisions ship slightly
+    // different surfaces. On any failure, coopMatrixActive stays false
+    // and matmul falls back to f16-compute / f16-storage / vec4.
+    if (ctx.capabilities.cooperativeMatrix && ctx.capabilities.shaderF16) {
+      try {
+        const cmModule = device.createShaderModule({ code: coopMatShader });
+        for (const cmEntry of COOPMAT_ENTRIES) {
+          pipelines[cmEntry] = device.createComputePipeline({
+            layout: pipelineLayout,
+            compute: { module: cmModule, entryPoint: cmEntry },
+          });
+        }
+      } catch (err) {
+        console.info("[ops] coop-matrix kernel failed to compile against this Chrome's tint — falling back. Error:", err);
+      }
+    }
+
     // FA2 fused attention forward — workgroup-cooperative, online softmax.
     // Separate module because the WGSL declares a workgroup-scope Q tile
     // sized for hd ≤ MAX_HD that train.wgsl doesn't carry.
@@ -258,6 +299,7 @@ export class GpuOps {
       ctx.subgroups, /* f16StorageActive */ false,
       /* matmulSgActive */ false,
       /* shaderF16Active */ false,
+      /* coopMatrixActive */ false,
     );
 
     // Kick off the numerics gate in the background. Until it settles, all
@@ -294,6 +336,27 @@ export class GpuOps {
         }
         return ops.verifyShaderF16Compute().catch((err) => {
           console.warn("[ops] shader-f16 compute gate threw:", err);
+          return false;
+        });
+      })();
+    }
+
+    // Cooperative-matrix matmul gate. Chains off the shader-f16 gate
+    // because the coop-matrix kernel ALSO needs the packed-f16 mirror
+    // (same input shape as the f16-compute path). If either prerequisite
+    // fails or the kernel didn't compile, the gate short-circuits to
+    // false — coopMatrixActive stays inactive and matmul() picks the
+    // next-best path down the preference list.
+    if (ctx.capabilities.cooperativeMatrix &&
+        pipelines["matmul_blocked_coopmat"]) {
+      ops.coopMatrixReady = (async () => {
+        const storagePass = await ops.f16Ready;
+        if (!storagePass) {
+          console.info("[ops] coop-matrix gate skipped — f16-storage gate failed first");
+          return false;
+        }
+        return ops.verifyCoopMatrix().catch((err) => {
+          console.warn("[ops] coop-matrix gate threw:", err);
           return false;
         });
       })();
@@ -599,6 +662,63 @@ export class GpuOps {
     return passed;
   }
 
+  /** Numerics gate for the cooperative-matrix matmul.
+   *
+   *  Same f32-reference / f16-target comparison as verifyShaderF16Compute.
+   *  Uses M, K, N that are multiples of 8 (the coop-matrix tile size).
+   *  A failure here is overwhelmingly likely to be one of:
+   *    1. Chrome's tint shipped a different API surface than the WGSL
+   *       we wrote (the kernel might compile but compute garbage).
+   *    2. The adapter advertised the extension but the driver translation
+   *       to MMA instructions has a bug.
+   *  In both cases the right action is fallback — never breaks training. */
+  private async verifyCoopMatrix(): Promise<boolean> {
+    if (!this.pipelines["matmul_blocked_coopmat"] ||
+        !this.pipelines["pack_to_f16"]) {
+      return false;
+    }
+    const M = 64, K = 128, N = 128;
+    const aData = new Float32Array(M * K);
+    const bData = new Float32Array(K * N);
+    let seed = 99887;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return (seed / 0x7fffffff) * 0.4 - 0.2;
+    };
+    for (let i = 0; i < aData.length; i++) aData[i] = rand();
+    for (let i = 0; i < bData.length; i++) bData[i] = rand();
+
+    const a = new GpuTensor(this.device, M * K);
+    a.upload(aData);
+    const b = new GpuTensor(this.device, K * N);
+    b.upload(bData);
+
+    const cF32 = this.matmul(a, b, M, K, N);
+    const refOut = await cF32.download();
+
+    const bPackedBuf = this.device.createBuffer({
+      size: (K * N) * 2,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+    this.packToF16(b.buffer, bPackedBuf, K, N);
+    const cCm = this.matmulCoopMat(a, bPackedBuf, M, K, N);
+    const cmOut = await cCm.download();
+
+    const result = this.compareF16Output(refOut, cmOut, "fwd");
+    console.info(`[ops] coop-matrix gate (fwd): ${result.summary}`);
+    console.info(
+      `[ops] coop-matrix gate verdict: ${result.passed ? "PASS — coop-matrix path active" : "FAIL — falling back to f16-compute / f16-storage / vec4"}`,
+    );
+
+    this.coopMatrixActive = result.passed;
+    a.destroy();
+    b.destroy();
+    bPackedBuf.destroy();
+    cF32.recycle();
+    cCm.recycle();
+    return result.passed;
+  }
+
   /** Tight f32-vs-f32 comparison for the subgroup matmul gate. Both paths
    *  are pure-f32 so only float-reassociation noise is expected. Threshold:
    *  mean_rel < 0.1%, max_abs < 0.1% of mean|ref|. This is an order of
@@ -872,6 +992,31 @@ export class GpuOps {
       [a.buffer, bPackedF16, c.buffer],
       { a: M, b: K, c: N },
       Math.ceil(M / 64), Math.ceil(N / 64),
+    );
+    return c;
+  }
+
+  /** Forward matmul via the cooperative-matrix kernel
+   *  (`subgroupMatrixMultiplyAccumulate`). Routes to hardware MMA units
+   *  (NVIDIA tensor cores, AMD MFMA, Apple AMX). Same packing contract
+   *  as matmulF16Compute. Callers should consult `coopMatrixActive`
+   *  before dispatching; falls back to f16-compute / f16-storage / f32
+   *  when the gate didn't pass. */
+  matmulCoopMat(
+    a: GpuTensor, bPackedF16: GPUBuffer, M: number, K: number, N: number,
+  ): GpuTensor {
+    if (K % 2 !== 0 || N % 2 !== 0) {
+      throw new Error(`matmulCoopMat: K and N must be even (got K=${K}, N=${N})`);
+    }
+    // Coop-matrix kernel uses 8×8 output tiles — dispatch one workgroup
+    // per (M/8, N/8) tile. M and N should be multiples of 8 in practice;
+    // the kernel's bounds checks handle ragged edges if not.
+    const c = this.newTensor(M * N, "matmul.coopmat.C");
+    this.dispatchMixed(
+      "matmul_blocked_coopmat",
+      [a.buffer, bPackedF16, c.buffer],
+      { a: M, b: K, c: N },
+      Math.ceil(M / 8), Math.ceil(N / 8),
     );
     return c;
   }
