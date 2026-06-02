@@ -87,6 +87,10 @@ struct TinyGPT {
             LinearProbe.run(args: Array(args.dropFirst()))
         case "dedupe":
             Dedupe.run(args: Array(args.dropFirst()))
+        case "rome":
+            ROME.run(args: Array(args.dropFirst()))
+        case "gguf-inspect":
+            GGUFInspect.run(args: Array(args.dropFirst()))
         case "train-heads":
             TrainHeads.run(args: Array(args.dropFirst()))
         case "compare":

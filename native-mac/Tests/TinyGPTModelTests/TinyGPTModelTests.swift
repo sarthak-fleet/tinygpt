@@ -6,6 +6,24 @@ import TinyGPTIO
 import XCTest
 @testable import TinyGPTModel
 
+// Helpers for the GGUF reader test — append little-endian primitives
+// and length-prefixed UTF-8 strings to a Data buffer.
+private extension Data {
+    mutating func append(u32 value: UInt32) {
+        var v = value.littleEndian
+        withUnsafeBytes(of: &v) { self.append(contentsOf: $0) }
+    }
+    mutating func append(u64 value: UInt64) {
+        var v = value.littleEndian
+        withUnsafeBytes(of: &v) { self.append(contentsOf: $0) }
+    }
+    mutating func appendGGUFString(_ s: String) {
+        let bytes = Array(s.utf8)
+        self.append(u64: UInt64(bytes.count))
+        self.append(contentsOf: bytes)
+    }
+}
+
 /// MLX-Swift's SPM build does NOT compile the Metal shader library
 /// (`default.metallib`) — Xcode compiles `.metal` files automatically as part
 /// of its build system, but `swift build` doesn't run the Metal toolchain.
@@ -369,6 +387,98 @@ final class TinyGPTModelTests: XCTestCase {
                       "render output missing or malformed user block: \(full)")
         XCTAssertTrue(full.contains("<|im_start|>assistant\n4<|im_end|>"),
                       "render output missing assistant turn: \(full)")
+    }
+
+    // MARK: - GGUF reader roundtrip
+
+    /// Hand-build a tiny GGUF file in-memory (magic, header, one F32
+    /// tensor + one Q4_0 tensor), parse it back, and verify the
+    /// dequantised values match expectations within fp16 noise. Guards
+    /// the bit-level parser against drift in the GGUF spec.
+    func test_ggufReader_parsesF32AndQ4_0() throws {
+        // Build a minimal valid GGUF v3 file with:
+        //   - 0 metadata KVs
+        //   - 2 tensors: "fp32_demo" (4 floats), "q4_demo" (32 q4_0 values)
+        // Tensor data layout: alignment is 32 (default); we'll size
+        // the header carefully so the data section starts there.
+        var buf = Data()
+        // Header
+        buf.append(contentsOf: [0x47, 0x47, 0x55, 0x46])  // "GGUF"
+        buf.append(u32: 3)                                  // version
+        buf.append(u64: 2)                                  // tensor_count
+        buf.append(u64: 0)                                  // metadata_kv_count
+        // Tensor 1: fp32_demo, [4], type=F32 (0), offset=0
+        buf.appendGGUFString("fp32_demo")
+        buf.append(u32: 1)         // n_dim
+        buf.append(u64: 4)         // dim[0]
+        buf.append(u32: 0)         // type F32
+        buf.append(u64: 0)         // offset
+        // Tensor 2: q4_demo, [32], type=Q4_0 (2), offset=16 (after 4 floats)
+        buf.appendGGUFString("q4_demo")
+        buf.append(u32: 1)         // n_dim
+        buf.append(u64: 32)        // dim[0]
+        buf.append(u32: 2)         // type Q4_0
+        buf.append(u64: 16)        // offset = sizeof(fp32_demo) = 16
+
+        // Pad to 32-byte alignment.
+        while buf.count % 32 != 0 { buf.append(0) }
+        let dataBase = buf.count
+
+        // Append tensor 1 data: 4 floats [1.0, -2.5, 3.25, 0.125].
+        for v in [Float(1.0), Float(-2.5), Float(3.25), Float(0.125)] {
+            var bits = v.bitPattern.littleEndian
+            withUnsafeBytes(of: &bits) { buf.append(contentsOf: $0) }
+        }
+        XCTAssertEqual(buf.count, dataBase + 16)
+
+        // Append tensor 2 data: one Q4_0 block (2-byte fp16 scale + 16
+        // bytes of nibbles). Use scale = 1.0 (fp16 bits 0x3c00) and
+        // payload nibbles [0..15] in the LO halves, [15..0] in the HI
+        // halves. After dequant (subtract 8, multiply by scale):
+        //   element i (i<16):  (i - 8) * 1.0
+        //   element i (i≥16):  (15 - (i-16) - 8) * 1.0 = (7 - (i-16))
+        buf.append(contentsOf: [0x00, 0x3c])  // fp16 1.0
+        for i in 0..<16 {
+            let lo = UInt8(i)
+            let hi = UInt8(15 - i)
+            buf.append((hi << 4) | lo)
+        }
+        XCTAssertEqual(buf.count, dataBase + 16 + 2 + 16)
+
+        // Write to a temp file and parse.
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gguf-test-\(UUID().uuidString).gguf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try buf.write(to: url)
+
+        let parsed = try GGUFReader.parse(url: url)
+        XCTAssertEqual(parsed.tensors.count, 2)
+        XCTAssertEqual(parsed.tensors[0].name, "fp32_demo")
+        XCTAssertEqual(parsed.tensors[0].shape, [4])
+        XCTAssertEqual(parsed.tensors[1].name, "q4_demo")
+        XCTAssertEqual(parsed.tensors[1].shape, [32])
+
+        // F32 tensor round-trips exactly.
+        let fp32 = try GGUFReader.loadTensor(parsed.tensors[0], from: parsed)
+        let fp32Vals = fp32.asArray(Float.self)
+        XCTAssertEqual(fp32Vals.count, 4)
+        XCTAssertEqual(fp32Vals[0], 1.0, accuracy: 0)
+        XCTAssertEqual(fp32Vals[1], -2.5, accuracy: 0)
+        XCTAssertEqual(fp32Vals[2], 3.25, accuracy: 0)
+        XCTAssertEqual(fp32Vals[3], 0.125, accuracy: 0)
+
+        // Q4_0 tensor dequantises to (i - 8) for i in [0..15], then
+        // (7 - j) for j in [0..15] — i.e. the second half counts down
+        // from 7 to -8.
+        let q4 = try GGUFReader.loadTensor(parsed.tensors[1], from: parsed)
+        let q4Vals = q4.asArray(Float.self)
+        XCTAssertEqual(q4Vals.count, 32)
+        for i in 0..<16 {
+            XCTAssertEqual(q4Vals[i], Float(i - 8), accuracy: 1e-6, "low-nibble mismatch at \(i)")
+        }
+        for j in 0..<16 {
+            XCTAssertEqual(q4Vals[16 + j], Float(7 - j), accuracy: 1e-6, "high-nibble mismatch at \(j)")
+        }
     }
 
     /// Reading an adapter written against a different base config must
