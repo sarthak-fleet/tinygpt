@@ -21,7 +21,7 @@ import { BufferPool, GpuTensor, type GpuContext } from "./tensor";
 const ENTRIES = [
   "matmul", "matmul_blocked", "matmul_abt", "matmul_abt_blocked",
   "matmul_atb", "matmul_atb_blocked", "add", "bias_add",
-  "bias_grad", "patch_zero", "gelu_forward", "gelu_backward", "layernorm_forward",
+  "bias_grad", "patch_zero", "patch_replace", "gelu_forward", "gelu_backward", "layernorm_forward",
   "layernorm_dx", "layernorm_dgb", "attn_softmax", "attn_value", "attn_fused_sv", "attn_dscores",
   "attn_dscores_fa2", "attn_dv_fa2",
   "attn_dq", "attn_dk", "attn_dv", "embed_forward", "embed_tok_grad",
@@ -802,6 +802,19 @@ export class GpuOps {
   zeroRow(x: GpuTensor, row: number, N: number, C: number): GpuTensor {
     const out = this.newTensor(N * C, "patch.zero");
     this.dispatch("patch_zero", [x, out], { a: N, b: row, c: C },
+                  Math.ceil((N * C) / 64));
+    return out;
+  }
+
+  /** Copy `x [N, C]` to a fresh tensor with row `row` replaced by
+   *  `donorRow [C]`. Used by full Meng et al. (2022) activation
+   *  patching — the donor row is a hidden-state slice captured from
+   *  a different forward pass. */
+  replaceRow(
+    x: GpuTensor, donorRow: GpuTensor, row: number, N: number, C: number,
+  ): GpuTensor {
+    const out = this.newTensor(N * C, "patch.replace");
+    this.dispatch("patch_replace", [x, donorRow, out], { a: N, b: row, c: C },
                   Math.ceil((N * C) / 64));
     return out;
   }

@@ -83,13 +83,18 @@ export type ToWorker =
       ablations: { layer: number; target: "attn" | "mlp" | "all" }[];
     }
   // Activation patching — re-runs generation with the residual stream
-  // ZEROED at the specified (layer, position) coordinates. The output
-  // reveals how load-bearing that token's representation was at that
-  // depth. Simplest causal intervention; donor → recipient swap is
-  // the follow-up.
+  // either ZEROED or REPLACED at the specified (layer, position) of the
+  // recipient prompt. When `donor` is present, the worker runs a
+  // capture forward over the donor prompt and substitutes its hidden
+  // state at (donor.layer, donor.position) into the recipient's
+  // residual stream (full Meng et al. 2022 donor → recipient swap).
   | {
       type: "patch"; prompt: string; tokens: number; temperature: number;
-      patches: { layer: number; position: number }[];
+      patches: {
+        layer: number;
+        position: number;
+        donor?: { prompt: string; layer: number; position: number };
+      }[];
     }
   // Upload a `.lenses` sidecar (per-layer trained projection probes
   // from `tinygpt tuned-lens`). The worker stores them in-memory; the

@@ -231,41 +231,23 @@ swap the sigmoid gate for argTopK + STE and the compute saving lands too.
 | Logit lens | ✅ shipped | Button in browser playground. |
 | Attention heatmap | ✅ shipped | Existing "Watch the model think" panel. |
 | Per-layer ablation | ✅ shipped | "Ablate & sample" button. |
-| Activation patching | ✅ shipped — position-zeroing variant | Worker `patch` message + `GpuModel.generatePatched`. Zeroes the residual stream at (layer, position); donor → recipient SWAP is the next iteration. |
-| Tuned lens | ✅ shipped | `tinygpt tuned-lens` Mac CLI command trains per-layer probes on a frozen base. Sidecar `.lenses` file format. `TinyGPTModel.forwardTunedLens` for inference once loaded. |
+| Activation patching | ✅ shipped — both variants | Worker `patch` message + `GpuModel.generatePatched`. Zero-patch zeroes the residual stream at (layer, position); donor → recipient SWAP captures another prompt's hidden state at (donorLayer, donorPosition) and substitutes it at the recipient. Both wired to the playground's Inspect panel ("Zero & sample" and "Swap & sample" buttons). |
+| Tuned lens | ✅ shipped | `tinygpt tuned-lens` Mac CLI command trains per-layer probes on a frozen base. Sidecar `.lenses` file format. `TinyGPTModel.forwardTunedLens` for inference once loaded. Browser playground accepts the sidecar via the "Upload .lenses" affordance and routes the lens button through the tuned probes when loaded. |
 
-### Activation patching (Meng et al., 2022)  *(shipped — zero-patch variant)*
+### Activation patching (Meng et al., 2022)  *(shipped — zero + donor-swap)*
 
-`webgpu/train.wgsl` gains a `patch_zero` kernel; worker exposes a
-`patch` message. The simplest causal intervention: at the specified
-(layer, position), ZERO OUT the residual stream value. The output
-reveals whether that token's representation at that depth was
-load-bearing.
+`webgpu/train.wgsl` exposes two patching kernels: `patch_zero` replaces
+one residual-stream row with zeros, `patch_replace` replaces it with
+the contents of a separately captured donor row. The worker's `patch`
+message accepts an optional `donor: { prompt, layer, position }`
+field per patch; when present, `GpuModel.captureHidden` runs a forward
+over the donor prompt, downloads the residual-stream slice at the
+donor coords, and `GpuModel.generatePatched` uploads it and routes the
+recipient's forward through `patch_replace`.
 
-The full donor → recipient SWAP (Meng et al., 2022's original
-variant) requires:
-- A second forward over the donor prompt with hidden-state capture
-  at (layer, position) coords (download to CPU is fine for the
-  small models we run).
-- An "upload + scatter into a row" GPU op (slot the donor's value
-  into the recipient's residual stream at that position).
-- A two-prompt UI to pick donor and recipient.
-
-The shipped zero-patch is mechanically the same gate (replace one
-row of x); the donor-swap path differs only in WHAT we put in that
-row. Bounded follow-up.
-
-### Tuned lens (Belrose et al., 2023)  *(shipped)*
-
-`tinygpt tuned-lens <model> --corpus <text>` trains one
-`Linear(d_model → vocab)` per layer with the base model frozen.
-Cross-entropy on each layer's projection, mean across layers, AdamW.
-Output: a small `.lenses` sidecar (~`L × (vocab+1) × d_model` floats)
-in a custom "TGTL v1" format.
-
-Inference side: `TinyGPTModel.forwardTunedLens(idx)` runs the base
-forward with `forwardLayerwise`, then applies the per-layer probes —
-cleaner than the raw logit lens for "what does layer 3 think the
-next token is?" questions. The browser playground's lens button
-still uses the raw final-LN+LM-head projection; wiring the tuned
-sidecar into the browser is the next iteration.
+UI: the playground's Inspect panel exposes both as separate buttons —
+"Zero & sample" for the causal intervention (which tokens depended on
+that representation being intact?) and "Swap & sample" for the full
+Meng et al. variant (which downstream outputs causally depend on the
+donor's representation at that coord?). The donor prompt, layer, and
+position are entered alongside the recipient coords.

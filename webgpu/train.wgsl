@@ -333,6 +333,23 @@ fn patch_zero(@builtin(global_invocation_id) gid: vec3<u32>) {
   g1[idx] = select(g0[idx], 0.0, row == p.b);
 }
 
+// Donor-swap activation patching (Meng et al., 2022): copy x[N, C] → out[N, C]
+// with one ROW replaced by the contents of donor_row[C]. The donor is a
+// pre-captured hidden state from a separate forward pass; substituting it
+// at (layer, position) reveals which downstream tokens depend on that
+// representation. Same shape contract as patch_zero — just a different
+// payload in the patched row.
+// g0=x[N,C] g1=donor_row[C] g2=out[N,C]   p.a=N p.b=row-to-replace p.c=C
+@compute @workgroup_size(64)
+fn patch_replace(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let idx = gid.x;
+  let total = p.a * p.c;
+  if (idx >= total) { return; }
+  let row = idx / p.c;
+  let col = idx % p.c;
+  g2[idx] = select(g0[idx], g1[col], row == p.b);
+}
+
 // db[d] = sum over rows of dy[row,d]   g0=dy[rows,D] g1=db[D]   p.a=rows p.b=D
 @compute @workgroup_size(64)
 fn bias_grad(@builtin(global_invocation_id) gid: vec3<u32>) {

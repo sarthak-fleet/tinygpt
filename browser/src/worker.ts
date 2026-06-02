@@ -803,12 +803,18 @@ async function doAblate(
 
 /**
  * Activation-patching generator. Replays sampling with the residual
- * stream zeroed at the specified (layer, position) tuples. WebGPU
- * only — the WASM model doesn't expose the per-block forward hooks.
+ * stream either ZEROED or REPLACED at the specified (layer, position)
+ * tuples of the recipient. If a patch carries a donor prompt, the
+ * worker runs a capture forward over the donor and substitutes its
+ * hidden state into the recipient. WebGPU only — the WASM model
+ * doesn't expose the per-block forward hooks.
  */
 async function doPatch(
   prompt: string, tokens: number, temperature: number,
-  patches: { layer: number; position: number }[],
+  patches: {
+    layer: number; position: number;
+    donor?: { prompt: string; layer: number; position: number };
+  }[],
 ): Promise<void> {
   if (!gpuModel) {
     post({ type: "patch_failed", message: "Activation patching requires the WebGPU backend." });
@@ -817,8 +823,21 @@ async function doPatch(
   try {
     const seed = (Date.now() & 0xffff) >>> 0;
     const promptIds = [...encode(prompt)];
+    // Translate donor prompts to byte ids in the worker so the
+    // GpuModel sees a uniform numeric interface.
+    const enriched = patches.map((p) => {
+      if (!p.donor) return { layer: p.layer, position: p.position };
+      return {
+        layer: p.layer, position: p.position,
+        donor: {
+          prompt: [...encode(p.donor.prompt)],
+          layer: p.donor.layer,
+          position: p.donor.position,
+        },
+      };
+    });
     const out = await gpuModel.generatePatched(
-      promptIds, patches, tokens, temperature, 40, seed,
+      promptIds, enriched, tokens, temperature, 40, seed,
     );
     post({
       type: "patch_done",

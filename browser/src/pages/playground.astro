@@ -3450,6 +3450,27 @@ const pageBody = `
             </div>
             <div id="ablateResult" class="sample-stats" hidden></div>
           </div>
+
+          <div class="inspect-section" id="inspectPatch">
+            <h4>Activation patching <span class="inspect-tag">interpretability</span></h4>
+            <p class="inspect-help">Intervene on the residual stream at (layer, position) of the recipient prompt above. <strong>Zero</strong>: drop that token's representation at that depth — exposes whether it's load-bearing. <strong>Swap</strong>: substitute a hidden state captured from a separate donor prompt at the same coords — the full Meng et al. (2022) variant that reveals which downstream outputs causally depend on the donor's representation.</p>
+            <div class="inspect-controls">
+              <label class="inspect-inline">Layer <input id="patchLayer" type="number" min="0" value="0" disabled style="width:56px" title="Layer in the recipient" /></label>
+              <label class="inspect-inline">Position <input id="patchPosition" type="number" min="0" value="0" disabled style="width:64px" title="Position in the recipient prompt" /></label>
+              <button id="runPatchZero" class="secondary" disabled>Zero &amp; sample</button>
+            </div>
+            <div class="inspect-controls" style="margin-top:6px">
+              <label class="inspect-inline" style="flex:1 1 100%">Donor prompt
+                <input id="patchDonorPrompt" type="text" disabled placeholder="another prompt to capture from" title="Donor prompt for the swap variant" style="width:100%" />
+              </label>
+            </div>
+            <div class="inspect-controls">
+              <label class="inspect-inline">Donor layer <input id="patchDonorLayer" type="number" min="0" value="0" disabled style="width:56px" title="Layer in the donor (use same layer for clean baseline)" /></label>
+              <label class="inspect-inline">Donor pos <input id="patchDonorPosition" type="number" min="0" value="0" disabled style="width:64px" title="Position in the donor prompt to capture" /></label>
+              <button id="runPatchSwap" class="secondary" disabled>Swap &amp; sample</button>
+            </div>
+            <div id="patchResult" class="sample-stats" hidden></div>
+          </div>
         </details>
         <div class="sample-note" id="sampleNote">
           <span id="sampleNoteContent">

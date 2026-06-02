@@ -157,6 +157,27 @@ async function main(): Promise<void> {
     check("bias grad", maxError(db, refDb) < tol, "");
   }
 
+  // --- activation patching (zero + donor swap) ----------------------------
+  {
+    const N = 8, C = 16, target = 3;
+    const x = rand(N * C);
+    const xt = GpuTensor.fromData(dev, x);
+
+    // zero variant: one row replaced with zeros, others untouched.
+    const zeroed = await ops.zeroRow(xt, target, N, C).download();
+    const refZero = new Float32Array(x);
+    for (let c = 0; c < C; c++) refZero[target * C + c] = 0;
+    check("patch zero", maxError(zeroed, refZero) < tol, "");
+
+    // donor-swap variant: one row replaced by donor[C], others untouched.
+    const donor = rand(C);
+    const donorT = GpuTensor.fromData(dev, donor);
+    const swapped = await ops.replaceRow(xt, donorT, target, N, C).download();
+    const refSwap = new Float32Array(x);
+    for (let c = 0; c < C; c++) refSwap[target * C + c] = donor[c];
+    check("patch replace", maxError(swapped, refSwap) < tol, "");
+  }
+
   // --- layernorm ----------------------------------------------------------
   {
     const N = 20, D = 48, eps = 1e-5;

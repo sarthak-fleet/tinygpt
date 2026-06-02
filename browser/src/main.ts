@@ -77,6 +77,14 @@ const els = {
   ablateTarget: byId<HTMLSelectElement>("ablateTarget"),
   runAblate: byId<HTMLButtonElement>("runAblate"),
   ablateResult: byId<HTMLDivElement>("ablateResult"),
+  patchLayer: byId<HTMLInputElement>("patchLayer"),
+  patchPosition: byId<HTMLInputElement>("patchPosition"),
+  patchDonorPrompt: byId<HTMLInputElement>("patchDonorPrompt"),
+  patchDonorLayer: byId<HTMLInputElement>("patchDonorLayer"),
+  patchDonorPosition: byId<HTMLInputElement>("patchDonorPosition"),
+  runPatchZero: byId<HTMLButtonElement>("runPatchZero"),
+  runPatchSwap: byId<HTMLButtonElement>("runPatchSwap"),
+  patchResult: byId<HTMLDivElement>("patchResult"),
   hfDataset: byId<HTMLSelectElement>("hfDataset"),
   hfStatus: byId<HTMLSpanElement>("hfStatus"),
   hfCustom: byId<HTMLDivElement>("hfCustom"),
@@ -938,6 +946,13 @@ function setBenchAvailable(enabled: boolean): void {
   els.ablateLayer.disabled = !enabled;
   els.ablateTarget.disabled = !enabled;
   els.runAblate.disabled = !enabled;
+  els.patchLayer.disabled = !enabled;
+  els.patchPosition.disabled = !enabled;
+  els.patchDonorPrompt.disabled = !enabled;
+  els.patchDonorLayer.disabled = !enabled;
+  els.patchDonorPosition.disabled = !enabled;
+  els.runPatchZero.disabled = !enabled;
+  els.runPatchSwap.disabled = !enabled;
   if (enabled) {
     els.lensUploadLabel.removeAttribute("disabled");
   } else {
@@ -946,6 +961,7 @@ function setBenchAvailable(enabled: boolean): void {
     els.benchResult.hidden = true;
     els.lensResult.hidden = true;
     els.ablateResult.hidden = true;
+    els.patchResult.hidden = true;
   }
 }
 
@@ -1047,6 +1063,68 @@ els.runAblate.addEventListener("click", () => {
   send({
     type: "ablate", prompt: promptVal, tokens, temperature,
     ablations: [{ layer, target }],
+  });
+});
+
+// Activation patching — Zero variant: drop the residual stream at
+// (layer, position) and re-sample. Simplest causal intervention.
+function readPatchSharedInputs() {
+  const layer = parseInt(els.patchLayer.value, 10);
+  const position = parseInt(els.patchPosition.value, 10);
+  if (!Number.isFinite(layer) || layer < 0) return null;
+  if (!Number.isFinite(position) || position < 0) return null;
+  const promptVal = byId<HTMLInputElement>("prompt").value || "ROMEO:";
+  const tokens = parseInt(byId<HTMLInputElement>("genTokens").value, 10) || 64;
+  const temperature = parseFloat(byId<HTMLInputElement>("temp").value) || 0.8;
+  return { layer, position, promptVal, tokens, temperature };
+}
+
+els.runPatchZero.addEventListener("click", () => {
+  if (els.runPatchZero.disabled) return;
+  const i = readPatchSharedInputs();
+  if (!i) return;
+  els.runPatchZero.disabled = true;
+  els.runPatchZero.textContent = "patching…";
+  els.patchResult.hidden = false;
+  els.patchResult.textContent =
+    `sampling with residual zeroed at layer ${i.layer}, position ${i.position}…`;
+  send({
+    type: "patch", prompt: i.promptVal, tokens: i.tokens, temperature: i.temperature,
+    patches: [{ layer: i.layer, position: i.position }],
+  });
+});
+
+// Activation patching — Swap variant: capture the donor prompt's
+// hidden state at (donorLayer, donorPosition), substitute it into
+// the recipient's residual stream at (layer, position), re-sample.
+// Full Meng et al. (2022) donor → recipient intervention.
+els.runPatchSwap.addEventListener("click", () => {
+  if (els.runPatchSwap.disabled) return;
+  const i = readPatchSharedInputs();
+  if (!i) return;
+  const donorPrompt = els.patchDonorPrompt.value;
+  const donorLayer = parseInt(els.patchDonorLayer.value, 10);
+  const donorPosition = parseInt(els.patchDonorPosition.value, 10);
+  if (donorPrompt.length === 0) {
+    els.patchResult.hidden = false;
+    els.patchResult.textContent =
+      "swap needs a donor prompt — fill it in or use Zero & sample for the no-donor variant.";
+    return;
+  }
+  if (!Number.isFinite(donorLayer) || donorLayer < 0) return;
+  if (!Number.isFinite(donorPosition) || donorPosition < 0) return;
+  els.runPatchSwap.disabled = true;
+  els.runPatchSwap.textContent = "swapping…";
+  els.patchResult.hidden = false;
+  els.patchResult.textContent =
+    `capturing donor L${donorLayer}.${donorPosition} from "${donorPrompt}", ` +
+    `then sampling with substitution at L${i.layer}.${i.position}…`;
+  send({
+    type: "patch", prompt: i.promptVal, tokens: i.tokens, temperature: i.temperature,
+    patches: [{
+      layer: i.layer, position: i.position,
+      donor: { prompt: donorPrompt, layer: donorLayer, position: donorPosition },
+    }],
   });
 });
 
@@ -2636,6 +2714,28 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
       els.ablateResult.textContent = `ablate failed: ${msg.message}`;
       els.runAblate.disabled = false;
       els.runAblate.textContent = "Ablate & sample";
+      break;
+    case "patch_done": {
+      const tag = msg.patches.map((p) => `L${p.layer}.${p.position}`).join(", ");
+      els.patchResult.hidden = false;
+      els.patchResult.innerHTML =
+        `<div style="margin-bottom:4px"><strong>patched [${tag}]</strong></div>` +
+        `<div style="white-space:pre-wrap;font-family:monospace">${
+          msg.text.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]!))
+        }</div>`;
+      els.runPatchZero.disabled = false;
+      els.runPatchZero.textContent = "Zero & sample";
+      els.runPatchSwap.disabled = false;
+      els.runPatchSwap.textContent = "Swap & sample";
+      break;
+    }
+    case "patch_failed":
+      els.patchResult.hidden = false;
+      els.patchResult.textContent = `patch failed: ${msg.message}`;
+      els.runPatchZero.disabled = false;
+      els.runPatchZero.textContent = "Zero & sample";
+      els.runPatchSwap.disabled = false;
+      els.runPatchSwap.textContent = "Swap & sample";
       break;
     case "tuned_lenses_loaded":
       els.lensResult.hidden = false;

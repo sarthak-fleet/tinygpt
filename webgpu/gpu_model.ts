@@ -283,20 +283,41 @@ export class GpuModel {
   public attnAblated: boolean[] = [];
   public mlpAblated: boolean[] = [];
 
-  /** Position-level patch: at layer l, position p, ZERO OUT the
-   *  block's residual stream value (replace x[p,:] with zeros for the
-   *  remainder of the forward pass). The simplest causal intervention
-   *  — pinpoints whether a specific token's representation at a
-   *  specific depth is load-bearing for the model's output.
+  /** Position-level patch: at layer l, position p, replace the block's
+   *  residual stream value for that position. When `donorRow` is null,
+   *  the row is ZEROED OUT (simplest causal intervention — exposes
+   *  whether that token's representation at this depth is load-bearing).
+   *  When `donorRow` is a GpuTensor of length `dModel`, the row is
+   *  REPLACED by the donor's contents — full Meng et al. (2022)
+   *  donor → recipient activation patching.
    *
-   *  Full donor → recipient activation patching (Meng et al., 2022)
-   *  swaps in another forward's saved hidden state instead of zeroing.
-   *  That requires a tensor-slice "replace one row" kernel — queued
-   *  behind this simpler intervention.
+   *  The donor row is captured by an earlier `captureHidden` call
+   *  over the donor prompt; its buffer must outlive the entire
+   *  `generatePatched` loop (per-step `freeScratch` would otherwise
+   *  recycle it). `generatePatched` owns the lifecycle and recycles
+   *  the donor buffers when the loop finishes.
    *
    *  Each entry is consumed by `forward` and cleared after
    *  `generatePatched` returns. */
-  public patchPositions: { layer: number; position: number }[] = [];
+  public patchPositions: {
+    layer: number;
+    position: number;
+    donorRow?: GpuTensor | null;
+  }[] = [];
+
+  /** Hidden-state capture requests, set by `captureHidden`. Each entry
+   *  is filled in-place as the forward sweeps through its target layer:
+   *  the captured tensor is the per-block residual-stream output
+   *  immediately after that layer's MLP add, matching the same slot
+   *  `patchPositions` operates on (so donor-swap is mechanically a
+   *  symmetric capture + replace). Cleared after `captureHidden` runs.
+   */
+  private captureRequests: {
+    layer: number;
+    position: number;
+    tensor?: GpuTensor;
+    T?: number;
+  }[] = [];
 
   /** Forward pass. Returns logits and everything the backward pass needs. */
   private forward(ids: Float32Array, batch: number, T: number) {
@@ -333,14 +354,30 @@ export class GpuModel {
       var r2 = this.mlpAblated[l]
         ? r1
         : this.keep(this.ops.add(r1, mo, N * C));
-      // Position-zero patch: at the specified (layer, position),
-      // replace the block's residual-stream output with zeros for that
-      // single position. Pure causal intervention — exposes whether
-      // that token's representation at this depth is load-bearing.
+      // Position-level patch: at the specified (layer, position),
+      // either ZERO out the block's residual-stream output for that
+      // single position (no donorRow) or REPLACE it with a donor's
+      // captured hidden state (donor-swap, Meng et al. 2022).
       for (const patch of this.patchPositions) {
         if (patch.layer !== l) continue;
         if (patch.position < 0 || patch.position >= T) continue;
-        r2 = this.keep(this.ops.zeroRow(r2, patch.position, T, C));
+        if (patch.donorRow) {
+          r2 = this.keep(this.ops.replaceRow(r2, patch.donorRow, patch.position, T, C));
+        } else {
+          r2 = this.keep(this.ops.zeroRow(r2, patch.position, T, C));
+        }
+      }
+      // Capture: when a captureRequest targets this layer, save the
+      // post-patch r2 tensor so the host can download it after the
+      // batch ends. The captured slice is one row [C] at the
+      // requested position. During capture, patchPositions is empty
+      // (callers run capture without active interventions), so r2 is
+      // the clean residual-stream value.
+      for (const cr of this.captureRequests) {
+        if (cr.layer !== l) continue;
+        if (cr.position < 0 || cr.position >= T) continue;
+        cr.tensor = r2;
+        cr.T = T;
       }
       caches.push({
         blockIn, ln1o: ln1.y, m1: ln1.mean, r1s: ln1.rstd, q, k, v,
@@ -421,25 +458,137 @@ export class GpuModel {
     }
   }
 
-  /** Generate WITH per-(layer, position) zero-patches applied.
-   *  Phase-8 activation patching, simplest variant: the residual
-   *  stream at the specified (layer, position) is zeroed AFTER that
-   *  layer's MLP add, before the next layer's input. The model's
-   *  output reveals how load-bearing that token's representation
-   *  was at that depth. Full donor → recipient swap (Meng et al.,
-   *  2022) is the next iteration. */
+  /** Generate WITH per-(layer, position) activation patches applied.
+   *  Phase-8 interpretability — the residual stream at the specified
+   *  (layer, position) is replaced AFTER that layer's MLP add, before
+   *  the next layer's input.
+   *
+   *  Two variants in one entry point:
+   *    - `donor` absent  → ZERO that position (the simplest causal
+   *      intervention; pinpoints load-bearing representations).
+   *    - `donor` present → REPLACE that position with the donor
+   *      prompt's hidden state at `(donor.layer, donor.position)`
+   *      (full Meng et al. 2022 donor → recipient swap; pinpoints
+   *      which downstream tokens depend on the donor's representation).
+   *
+   *  The donor is captured by an internal forward pass over
+   *  `donor.prompt` before the recipient generation begins. Donor
+   *  buffers are recycled when the loop ends. */
   async generatePatched(
     promptIds: number[],
-    patches: { layer: number; position: number }[],
+    patches: {
+      layer: number;
+      position: number;
+      donor?: { prompt: number[]; layer: number; position: number };
+    }[],
     maxNew: number, temperature: number, topK: number, seed: number,
     onToken?: (tok: number, idxIntoMaxNew: number) => void,
   ): Promise<number[]> {
-    this.patchPositions = patches.slice();
+    const C = this.cfg.dModel;
+    // Pre-pass: capture every distinct donor (prompt, layer, position)
+    // request. We dedupe by a stable key so a recipient with multiple
+    // patches from the same (prompt, layer, position) only runs the
+    // donor forward once.
+    const donorByKey = new Map<string, GpuTensor>();
+    const captured: GpuTensor[] = [];
+    for (const p of patches) {
+      if (!p.donor) continue;
+      const key = `${p.donor.prompt.join(",")}#${p.donor.layer}#${p.donor.position}`;
+      if (donorByKey.has(key)) continue;
+      if (p.donor.prompt.length === 0) {
+        throw new Error("donor prompt is empty — capture has no tokens to run forward on");
+      }
+      const hidden = await this.captureHidden(
+        p.donor.prompt, [{ layer: p.donor.layer, position: p.donor.position }],
+      );
+      if (hidden.length === 0) {
+        // captureHidden silently drops out-of-bounds requests; turn that
+        // into a hard error so the UI never shows a swap result that's
+        // really a zero-patch in disguise (the residual stream would be
+        // zeroed instead of replaced when donorRow ends up null).
+        const T = Math.min(p.donor.prompt.length, this.cfg.ctx);
+        throw new Error(
+          `donor capture returned no hidden state for (layer=${p.donor.layer}, ` +
+          `position=${p.donor.position}). Check layer < ${this.cfg.layers} and ` +
+          `position < ${T} (donor prompt window).`,
+        );
+      }
+      const slice = hidden[0].data;
+      if (slice.length !== C) {
+        throw new Error(
+          `donor capture returned ${slice.length} floats, expected ${C} (d_model)`,
+        );
+      }
+      const t = this.ops.upload(slice);
+      donorByKey.set(key, t);
+      captured.push(t);
+    }
+    this.patchPositions = patches.map((p) => {
+      if (!p.donor) return { layer: p.layer, position: p.position, donorRow: null };
+      const key = `${p.donor.prompt.join(",")}#${p.donor.layer}#${p.donor.position}`;
+      const donorRow = donorByKey.get(key);
+      if (!donorRow) {
+        // Defensive: every donor request that survived the capture loop
+        // above should have a row in donorByKey. If it doesn't, the patch
+        // would silently degrade to a zero-patch — fail loudly instead.
+        throw new Error(
+          `internal: missing donor row for (layer=${p.donor.layer}, ` +
+          `position=${p.donor.position}) after capture`,
+        );
+      }
+      return { layer: p.layer, position: p.position, donorRow };
+    });
     try {
       return await this.generate(promptIds, maxNew, temperature, topK, seed, onToken);
     } finally {
       this.patchPositions = [];
+      // Donor tensors live outside scratch; recycle them explicitly so
+      // the pool can hand the buffers to the next call.
+      for (const t of captured) t.recycle();
     }
+  }
+
+  /** Run one forward over `promptIds` and download the residual-stream
+   *  hidden state at each requested (layer, position). Used as the
+   *  donor-capture pre-pass for `generatePatched`.
+   *
+   *  The captured slot is the per-block output AFTER that layer's MLP
+   *  add — the same slot `patchPositions` replaces, so the donor data
+   *  and the patch insertion are layer-aligned. */
+  async captureHidden(
+    promptIds: number[],
+    captures: { layer: number; position: number }[],
+  ): Promise<{ layer: number; position: number; data: Float32Array }[]> {
+    if (captures.length === 0) return [];
+    const { ctx, dModel: C } = this.cfg;
+    const T = Math.min(promptIds.length, ctx);
+    if (T === 0) return [];
+    const window = new Float32Array(promptIds.slice(promptIds.length - T));
+    this.captureRequests = captures.map((c) => ({
+      layer: c.layer, position: c.position,
+    }));
+    this.ops.beginBatch();
+    this.forward(window, 1, T);
+    this.ops.endBatch();
+
+    const out: { layer: number; position: number; data: Float32Array }[] = [];
+    for (const cr of this.captureRequests) {
+      if (!cr.tensor || cr.T === undefined) continue;
+      if (cr.position >= cr.T) continue;
+      // Download the whole r2 block ([T, C] flat), then slice the row.
+      // The block is small enough (T ≤ ctx, C ≤ 1024) that one extra
+      // copy doesn't matter; partial-row downloads would need a
+      // staging-buffer offset API we don't currently use anywhere else.
+      const full = await cr.tensor.download();
+      out.push({
+        layer: cr.layer,
+        position: cr.position,
+        data: full.slice(cr.position * C, (cr.position + 1) * C),
+      });
+    }
+    this.captureRequests = [];
+    this.freeScratch();
+    return out;
   }
 
   /** Generate WITH per-layer ablations applied. Sets the `attnAblated` /
