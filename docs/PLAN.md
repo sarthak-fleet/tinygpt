@@ -5,12 +5,15 @@ description: Single source of truth for what's shipped, skipped, and still to bu
 
 # TinyGPT — master plan
 
-**Last verified against codebase**: 2026-06-02
+**Last verified against codebase**: 2026-06-02 (third pass — multiple re-audits this session caught additional stale ⬜ markers)
 **Sources merged**: `docs/roadmap/*` · `docs/progress.md` · `docs/backlog.md` · `docs/feature_audit_2026_05_31.md`
 
 Three sections — **shipped**, **skipped**, **TODO**. Every claim verified
-against the code on 2026-06-02 (categories.md had stale ⬜ markers for
-items that shipped weeks ago — fixed here).
+against the code. The first audit caught Lion/Sophia/Muon/PEFT-bundle/
+gradient-clipping; the second caught YOCO + GPTQ-reader + token-elim
+(dropped under value-add filter); the third caught embedding RMSNorm,
+cosine warmup, layer-wise LR decay, DeepNorm, BPE-dropout, Real CI —
+all shipped, all previously marked ⬜.
 
 ### Status legend
 
@@ -64,6 +67,15 @@ items that shipped weeks ago — fixed here).
 - ✅ Document-level shuffling (implicit via batch sampler)
 - ✅ Gradient checkpointing (CustomFunction VJP workaround for missing `mlx_checkpoint`)
 - ✅ QAT (in-training, `--qat`)
+- ✅ Persistent tokenized cache (TokenCache.swift; wired into Train + Eval + Distill + Finetune)
+
+## Training stability (verified 2026-06-02 — these were all marked ⬜ in older docs)
+
+- ✅ Embedding RMSNorm (`--embedding-rmsnorm` / `cfg.useEmbeddingRMSNorm`)
+- ✅ DeepNorm residual scaling (`--deep-norm` / `cfg.useDeepNorm` + `deepNormAlpha/Beta`)
+- ✅ Layer-wise LR decay (`cfg.lrLayerDecay`)
+- ✅ Cosine warmup (`--lr-schedule cosine --warmup 500` — the curated default)
+- ✅ BPE-dropout (`BPEDropout.swift` — per-merge skip during encoding for regularization)
 
 ## PEFT bundle
 
@@ -135,8 +147,9 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 - ✅ Multi-threaded WASM (pthreads + SAB) — measured ~2×
 - ✅ Memory64 module (`tinygpt64.{js,wasm}`) — partial: Node ok, browser blocked at d_model ≥ 256 (ABI bug, task #66)
 - ✅ Speedup curve vs WASM SIMD: Small 2.6× / Medium 6.8× / Large 9.3× / XL 12.1×
+- ✅ **WebNN active probe** (`webnn_probe.ts`, builds a tiny MLGraph and verifies it computes, drives the `+WebNN (gpu/npu)` pill state — 2026-06-02 in `86433c3`). Full transformer-as-MLGraph follow-up unblocked.
 
-## WebGPU kernels (in `webgpu/train.wgsl` + `train_sg.wgsl`)
+## WebGPU kernels (in `webgpu/train*.wgsl`)
 
 - ✅ Naive scalar matmul
 - ✅ Blocked 4×4 matmul (`matmul_blocked_vec4`)
@@ -144,9 +157,17 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, all gated through `
 - ✅ Cross-entropy subgroup variant
 - ✅ Bias-grad subgroup variant
 - ✅ FA2 forward in WGSL (flash attention in browser)
-- ✅ f16 storage (gated)
+- ✅ f16-storage matmul (gated by `verifyF16Storage`)
+- ✅ **f16-compute matmul forward + backward** (`train_f16_compute.wgsl`, gated by `verifyShaderF16Compute` — 2026-06-02 in `1ddf6ba` / `2cdedac`)
+- ✅ **Coop-matrix matmul** (`train_coopmat.wgsl`, gated by `verifyCoopMatrix` — 2026-06-02 in `86433c3`)
 - ✅ OPFS persistence
 - ✅ Patch kernels (`patch_zero` + `patch_replace` — 2026-06-02)
+- ✅ Subgroup matmul kernel (`matmul_sg` / `matmul_abt_sg` — gate currently fails on M5 Pro, falls back to vec4)
+
+**Numerics-gate framework** — every fast path (f16-storage, f16-compute,
+coop-matrix, subgroup) carries its own gate that compares against a f32
+reference with a magnitude-aware tolerance. Gate-fail → silent fallback,
+zero regression risk. See `docs/precision.md`.
 
 ## Datasets + data pipelines
 
@@ -291,16 +312,16 @@ Until A1 lands, every optimization is theoretical.
 - ⬜ **B8. Multilingual specialist (Sarvam-Edge / Airavata base)** — 1-2 weeks; depends on A7
 - ⬜ **B9. Energy J/token measurement (needs sudo for `powermetrics`)** — ~1 day
 
-## Tier C — POLISH (pick up when blocked)
+## Tier C — POLISH (mostly shipped this session)
 
-- ⬜ **C1. CLI cosmetic fixes** — `tinygpt validate --help`, `hf-inspect --help`, `score-bench`, `prune-structured` arg-parsing quirks (~1 hr total)
-- ⬜ **C2. Roll up pre-switch CLI shims into main switch** (`score-bench`, `pruning`, `agent`, `cloud-merge`, `hf-datasets-merge`, `github-data-merge`) — ~half day
+- ✅ **C1. CLI cosmetic fixes** — 27 subcommands now `exit(0)` on `--help`; `bench-train --help` shows correct name. Shipped 2026-06-02 in `49dead5`.
+- ✅ **C2. Roll up pre-switch CLI shims into main switch** — 17 shims absorbed; TinyGPT.swift -170 LoC. Shipped in `49dead5`.
 - ⬜ **C3. DoRA on-disk adapter format** — ~1 day (today DoRA is in-session only)
 - ⬜ **C4. Tool-call extractor: BPE tokenizer support** — ~2 days
-- ⬜ **C5. Decode jitter under thermal load** — ~1 day
-- ⬜ **C6. ChatML template: detect inline `system:` prefix and split** — ~half day (footgun in hermes-function-calling-v1)
-- ⬜ **C7. Save+reload XCTest for LoRA adapters** — ~2 hr (regression coverage for the A0 bug)
-- ⬜ **C8. Install-path discipline (no more `/tmp` for caches)** — ~1 hr (default to `~/.cache/tinygpt/`)
+- ⬜ **C5. Decode jitter under thermal load** — ~1 day (needs sustained workload measurement)
+- ✅ **C6. ChatML template inline-system split** — `splitChatmlSystem` helper + 6 unit tests. Shipped in `49dead5`.
+- ✅ **C7. Save+reload XCTest for LoRA adapters** — roundtrip + arch-mismatch coverage. Shipped in `49dead5`.
+- ✅ **C8. Install-path discipline** — `~/.cache/tinygpt/` for adapters + corpus discovery; off `/tmp`. Shipped in `49dead5`.
 
 ## Tier 5 — RESEARCH FRONTIER (2026 stretch goals)
 
@@ -312,43 +333,58 @@ Pauses the "training at 2024 fundamentals" cadence; deliverable is a paper-shape
 - ⬜ **5.4 Diffusion LM micro-implementation** — 1-2 weeks; new paradigm via masked denoising loss.
 - ⬜ **5.5 Real sparse MoE kernels** — 2-3 weeks; custom Metal kernel + measure FLOP reduction.
 
-## Unshipped techniques (technique-inventory residue)
+## Unshipped techniques — after applying the value-add filter (and re-auditing)
 
-These were in the original roadmap categories but never built; none currently blocked, all low-priority unless triggered by a specific use case.
+Most items in the original roadmap-categories list either ship today
+(third-audit corrections below) or were dropped under the user's
+"don't list a technique unless it adds genuinely new capability" filter.
+What's left:
 
-**Post-training**
-- ⬜ IPO (DPO variant for small ~1K-pair datasets)
-- ⬜ Prefix tuning / soft prompts (~1 day)
-- ⬜ ReLoRA (periodic merge + restart, ~2 days)
+**Genuinely new value-adds, not yet built**
 
-**Data techniques**
-- ⬜ Curriculum learning · DoReMi (data-domain mixing ratios) · Data quality filtering (PPL-based)
-- ⬜ Deduplication (matters mainly for raw web scrapes) · Hard example mining
-- ⬜ Importance sampling · Self-instruct · Evol-instruct
-- ⬜ Sample packing (cross-source, different from sequence packing)
+- ⬜ **Sparse autoencoders (SAE)** — Anthropic-style feature decomposition. Different mechanism from logit/tuned lens / linear probe. Multi-day build.
+- ⬜ **ROME / MEMIT** — surgical fact editing in MLP weights. ~1-2 days each. Reuses our donor-swap activation patching for fact-location.
+- ⬜ **GGUF safetensors reader** — loads llama.cpp-format quantized models that AWQ + GPTQ readers don't. ~2 days.
+- ⬜ **Deduplication for raw corpora** — hash-based duplicate removal. Easy (~30 min), matters mainly for raw web scrapes.
+- ⬜ **Sample packing (cross-source)** — combine examples from *different* sources into one batch (distinct from intra-source sequence packing, which ships).
+- ⬜ **Vocab trimming** — drop unused BPE tokens to shrink embedding matrix. Niche.
 
-**Tokenization**
-- ⬜ BPE-dropout · Train own BPE on our corpus · Vocabulary trimming · tiktoken adoption · Subword regularization
+**Stale ⬜ markers caught + corrected this session — now ✅:**
 
-**Training stability**
-- ⬜ Embedding RMSNorm · Layer-wise LR decay · Cosine / exp warmup · DeepNorm (matters past ~50 layers)
+| Item | Where it ships |
+|---|---|
+| Embedding RMSNorm | `--embedding-rmsnorm` flag, `RMSNorm` module on token-embed |
+| DeepNorm | `--deep-norm` flag, `cfg.useDeepNorm`/`deepNormAlpha`/`deepNormBeta` |
+| Layer-wise LR decay | `cfg.lrLayerDecay` |
+| Cosine warmup | `--lr-schedule cosine --warmup 500` (the curated default) |
+| BPE-dropout | `BPEDropout.swift` |
+| Real CI | `.github/workflows/ci.yml` + `deploy.yml` |
+| Persistent tokenized cache | `TokenCache.swift` wired into Train+Eval+Distill+Finetune |
+| Linear probes | `tinygpt linear-probe` (this session, `6dbe15c`) |
+| YOCO cross-layer KV | `--yoco` flag, `CrossAttention.swift`, `docs/yoco_results.md` |
+| GPTQ safetensors reader | `GPTQReader.swift` (72 tensors quantised in 31s) |
 
-**Inference**
-- ⬜ Token elimination · Tree decoding
+**Dropped under value-add filter (duplicate / inferior / niche):**
 
-**Interpretability**
-- ⬜ Linear probes · Sparse autoencoders (substantial build) · Knowledge editing (ROME / MEMIT)
-
-**Architecture**
-- ⬜ BigBird / Longformer sparse attention (Tier 4 unless we go past ctx=8192)
-- ⬜ Linear attention (Performer / Linformer / Reformer)
-- ⬜ Hybrid attention/SSM (Jamba / Samba)
-- ⬜ Pre-norm vs post-norm toggle
-
-**Infra**
-- ⬜ TinyGPT-as-library API (surface `forward_backward`, `optim_step`, `sample`, `save_state`)
-- ⬜ Real CI (GitHub Actions: build + test on every PR)
-- ⬜ Persistent tokenized cache (saves the 30-min BPE-encode cost on every run)
+| Dropped | Why |
+|---|---|
+| ReLoRA | GaLore already gives "full fine-tune at LoRA memory cost" |
+| Prefix tuning / soft prompts | LoRA covers the practical case |
+| IPO | DPO with high β covers tiny-pair regularization |
+| Token elimination | StreamingLLM + KIVI cover positional + per-entry-bits axes |
+| Tree decoding | Speculative decode (vanilla + Medusa + EAGLE-2) covers the niche |
+| Curriculum learning | Modest gains, scale-dependent; needs a difficulty metric we don't have |
+| Self-instruct / Evol-instruct | Magpie subsumes (uses model's own distribution, no seed needed) |
+| Hard example mining / Importance sampling | Marginal at our scale |
+| Data quality filtering | PPL-filtering needs a ref model; basic dedup covers most of the value |
+| BigBird / Longformer sparse attention | Only matters past ctx=8192 (we don't train at that length) |
+| Linear attention (Performer / Linformer / Reformer) | Quality usually worse than flash attention |
+| Hybrid attention/SSM (Jamba, Samba) | Different family; side-project |
+| Pre-norm vs post-norm toggle | Config knob, not a feature |
+| Tiktoken adoption | swift-transformers handles BPE-family tokenizers already |
+| Subword regularization | Marginal vs BPE-dropout |
+| Train own BPE on corpus | Modest gain (~5% PPL); blocked on Rust-FFI for speed |
+| TinyGPT-as-library API | User explicitly deferred until specialists beat a baseline |
 
 ---
 
