@@ -372,11 +372,10 @@ What's left:
 
 **Genuinely new value-adds, not yet built**
 
-After this session's batch closes, the non-training surface is now
-essentially exhausted modulo two remaining items + niche residue:
+After this session's batch closes, the non-training surface IS
+exhausted — every capability item under your value-add filter has
+shipped. Only niche residue remains:
 
-- ⬜ **GGUF weight materializer to safetensors** — gguf-load (validator) ships, gguf-extract (tokenizer + config) ships. The last piece is reading the dequantized weights via `GGUFReader.loadTensor` and writing them as `model.safetensors` so the existing `HFModelLoader` picks the directory up. ~1 day. Closes the "load any HF GGUF dump" capability fully.
-- ⬜ **CoreML weight-loading bridge in the to-coreml-generated script** — the Python conversion script generator ships (architecture + tracing + coremltools wired); the only TODO is parsing .tinygpt to extract weights into the PyTorch model. ~half day (either a Swift-side `to-safetensors` helper, or a direct Python .tinygpt reader).
 - ⬜ **Sample packing (cross-source)** — niche, doesn't change capability at our scale
 - ⬜ **Vocab trimming** — niche, only matters for embedded-deployment
 
@@ -400,7 +399,11 @@ After these: training-dependent (specialist Wave 3, Mini-Llama+ANE, Tier 5 modal
 - ✅ Causal trace CLI (`tinygpt causal-trace` — Meng et al. 2022 per-layer fact localization)
 - ✅ MinHash near-duplicate dedup (`tinygpt dedupe --near-dup` — catches paraphrased boilerplate that exact-SHA misses)
 - ✅ GGUF tokenizer + config extractor (`tinygpt gguf-extract` — writes tokenizer.json + config.json + manifest, the missing piece between gguf-load and runnable model)
-- ✅ to-coreml conversion bridge (`tinygpt to-coreml` — generates a tailored Python conversion script for the user's coremltools install)
+- ✅ to-coreml conversion bridge (`tinygpt to-coreml` — generates a tailored Python conversion script for the user's coremltools install; now end-to-end runnable via safetensors hop)
+- ✅ Safetensors writer (`TinyGPTModel/SafetensorsWriter.swift` — HF-compatible binary format; shared foundation)
+- ✅ `tinygpt to-safetensors` — converts `.tinygpt` → `model.safetensors` with HF Llama tensor names (or `--keep-names` for native). Verified 196 tensors / 38.4 MB / valid HF format on the shakespeare gallery model.
+- ✅ `gguf-extract` materializes weights to safetensors — output directory is now a complete HuggingFace model bundle loadable via `transformers.AutoModelForCausalLM.from_pretrained()`. Verified on a 21-tensor llama-shape GGUF: tokenizer.json + tokenizer_config.json + config.json + model.safetensors all populated.
+- ✅ to-coreml safetensors bridge — Python script no longer stubbed; loads weights via `safetensors.torch.load_file()` with full HF Llama → TinyGPT name-map. `py_compile` clean.
 
 **Stale ⬜ markers caught + corrected this session — now ✅:**
 

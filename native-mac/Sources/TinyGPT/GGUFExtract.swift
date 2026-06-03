@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import TinyGPTModel
 
 /// `tinygpt gguf-extract` — extract the tokenizer + arch config from a
@@ -178,28 +179,96 @@ enum GGUFExtract {
         ]
         try? writeJSON(manifest, to: outURL.appendingPathComponent("gguf_manifest.json"))
 
+        // ---- model.safetensors: dequant every tensor + write ----
+        // Map GGUF names to HF Llama convention, dequantize via
+        // GGUFReader.loadTensor (covers F32/F16/Q4_0/Q8_0/Q4_K/Q5_K/Q6_K/Q8_K),
+        // and stream out as a single safetensors file. This is the
+        // missing piece that turns the validator (gguf-load) into a
+        // runnable model directory.
+        var weightEntries: [SafetensorsWriter.Entry] = []
+        var skipped: [String] = []
+        for t in parsed.tensors {
+            let hfName = mapGGUFToHF(t.name)
+            do {
+                let arr = try GGUFReader.loadTensor(t, from: parsed)
+                MLX.eval(arr)
+                let floats = arr.asArray(Float.self)
+                weightEntries.append(SafetensorsWriter.Entry(
+                    name: hfName, data: floats, shape: t.shape
+                ))
+            } catch {
+                skipped.append("\(t.name): \(error)")
+            }
+        }
+        let safetensorsURL = outURL.appendingPathComponent("model.safetensors")
+        do {
+            try SafetensorsWriter.write(entries: weightEntries, to: safetensorsURL)
+        } catch {
+            fputs("safetensors write failed: \(error)\n", stderr)
+        }
+        if !skipped.isEmpty {
+            fputs("\nNOTE: \(skipped.count) tensor(s) skipped (unsupported dtype or read error):\n", stderr)
+            for s in skipped.prefix(5) { fputs("  \(s)\n", stderr) }
+            if skipped.count > 5 { fputs("  … +\(skipped.count - 5) more\n", stderr) }
+        }
+        var totalBytes = 0
+        for e in weightEntries { totalBytes += e.data.count * 4 }
+
         print("""
 
         TinyGPT — GGUF extract
         ----------------------
         source:           \(inputPath)
         out:              \(outDir)
-        wrote:            tokenizer.json (\(tokens.count) tokens, \(merges.count) merges)
+        wrote:            tokenizer.json       (\(tokens.count) tokens, \(merges.count) merges)
                           tokenizer_config.json
                           config.json
-                          gguf_manifest.json (\(parsed.tensors.count) tensors)
+                          gguf_manifest.json   (\(parsed.tensors.count) tensors)
+                          model.safetensors    (\(weightEntries.count) weights, \(formatBytes(totalBytes)))
 
-        Tokenizer + config are now in HF format; can be consumed by
-        swift-transformers / HFModelLoader.
-
-        Next step for end-to-end runnable model: convert the dequant'd
-        weights to safetensors so the HF loader picks them up. The
-        gguf_manifest.json points at the source GGUF + offsets; a
-        weight-materializer reads via GGUFReader.loadTensor, applies
-        the standard llama tensor-name → HF param mapping (see
-        `tinygpt gguf-load` for the canonical list), and writes
-        model.safetensors. ~1 day focused.
+        Output dir is a complete HuggingFace model bundle. Load via:
+          import transformers
+          model = transformers.AutoModelForCausalLM.from_pretrained(\"\(outDir)\")
+          tok   = transformers.AutoTokenizer.from_pretrained(\"\(outDir)\")
         """)
+    }
+
+    /// Map GGUF tensor names → HuggingFace Llama-family conventions.
+    /// Mirrors the dequant + weight-load conventions documented in
+    /// `tinygpt gguf-load`'s validator.
+    private static func mapGGUFToHF(_ name: String) -> String {
+        // Top-level renames.
+        if name == "token_embd.weight" { return "model.embed_tokens.weight" }
+        if name == "output_norm.weight" { return "model.norm.weight" }
+        if name == "output.weight" { return "lm_head.weight" }
+        // Block-prefixed renames.  blk.N. → model.layers.N.
+        guard name.hasPrefix("blk.") else { return name }
+        let stripped = name.dropFirst(4) // remove "blk."
+        // Find the layer index up to the next '.'
+        guard let dot = stripped.firstIndex(of: ".") else { return name }
+        let layerIdx = String(stripped[..<dot])
+        let rest = String(stripped[stripped.index(after: dot)...])
+        let suffix: String
+        switch rest {
+        case "attn_norm.weight":   suffix = "input_layernorm.weight"
+        case "ffn_norm.weight":    suffix = "post_attention_layernorm.weight"
+        case "attn_q.weight":      suffix = "self_attn.q_proj.weight"
+        case "attn_k.weight":      suffix = "self_attn.k_proj.weight"
+        case "attn_v.weight":      suffix = "self_attn.v_proj.weight"
+        case "attn_output.weight": suffix = "self_attn.o_proj.weight"
+        case "ffn_gate.weight":    suffix = "mlp.gate_proj.weight"
+        case "ffn_up.weight":      suffix = "mlp.up_proj.weight"
+        case "ffn_down.weight":    suffix = "mlp.down_proj.weight"
+        default:                   suffix = rest  // pass-through for arch-specific extras
+        }
+        return "model.layers.\(layerIdx).\(suffix)"
+    }
+
+    private static func formatBytes(_ n: Int) -> String {
+        if n >= 1_000_000_000 { return String(format: "%.2f GB", Double(n) / 1e9) }
+        if n >= 1_000_000     { return String(format: "%.2f MB", Double(n) / 1e6) }
+        if n >= 1_000         { return String(format: "%.1f KB", Double(n) / 1e3) }
+        return "\(n) B"
     }
 
     private static func intOrNil(_ v: Any?) -> Int? {

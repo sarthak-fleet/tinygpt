@@ -109,6 +109,8 @@ struct TinyGPT {
             GGUFExtract.run(args: Array(args.dropFirst()))
         case "to-coreml":
             ToCoreML.run(args: Array(args.dropFirst()))
+        case "to-safetensors":
+            ToSafetensors.run(args: Array(args.dropFirst()))
         case "train-heads":
             TrainHeads.run(args: Array(args.dropFirst()))
         case "compare":
