@@ -335,6 +335,33 @@ Pauses the "training at 2024 fundamentals" cadence; deliverable is a paper-shape
 - ⬜ **5.3 Vision-language toy** — ~2 weeks; ViT + projector + LLaVA-style. Smallest from-scratch VL model on consumer hardware.
 - ⬜ **5.4 Diffusion LM micro-implementation** — 1-2 weeks; new paradigm via masked denoising loss.
 - ⬜ **5.5 Real sparse MoE kernels** — 2-3 weeks; custom Metal kernel + measure FLOP reduction.
+- ⬜ **5.6 TTS toy (text-to-speech via audio-token GPT)** — ~2-4 weeks; integrate EnCodec, train an autoregressive decoder over discrete audio tokens (VALL-E / MusicGen shape). The transformer side already exists in TinyGPT; the new pieces are codec integration, text→audio conditioning, vocoder decode, and an audio data pipeline. **Scoping note (2026-06-03): comes AFTER the Wave 3 specialist track (A1-B8) AND after 5.3 vision-language toy** — both higher-priority research arcs ahead of it.
+
+### 5.6 TTS toy — detailed scoping
+
+What carries over from current TinyGPT:
+
+| Piece | Reuse |
+|---|---|
+| Transformer decoder, KV cache, sampling, MTP heads (for K-codebook prediction) | direct |
+| Training loop (`tinygpt train`) + PEFT bundle for downstream fine-tunes | direct |
+| `CrossAttention.swift` (currently used for YOCO) | adapt to text-encoder K/V source for conditioning |
+
+New code surface (~2 weeks of focused engineering + 3-7 days training):
+
+| Piece | Effort |
+|---|---|
+| EnCodec encode/decode integration (Swift port of the HF EnCodec weights) | ~3-5 days |
+| Text → conditioning surface (text encoder + cross-attention into decoder, OR text-as-prefix-tokens) | ~2-3 days |
+| Audio data pipeline (LJSpeech / LibriTTS pre-tokenization to codec ids) | ~2-3 days |
+| Eval (WER via Whisper transcription, MOS estimator) | ~2 days |
+| First training run on LJSpeech single-speaker → intelligible speech | 2-4 days wall-clock |
+
+**Realistic outcome at this scale:** smallest-published audio-token GPT (MusicGen-small) is ~300M; from-scratch on LJSpeech you get recognizable but not natural-sounding speech. The publishable artifact is the same shape as 5.3 — "smallest from-scratch ___ on consumer hardware."
+
+**Why ordered after specialist + VL:**
+- Specialist track validates the north-star thesis (Wave 3 work the project is actually about). Until at least one specialist beats a baseline, modality experiments are noise on top of unproven foundations.
+- 5.3 vision-language toy is ahead because (a) it's the older Tier-5 item and (b) it stress-tests the same "external pretrained encoder + cross-attention into our decoder" pattern that TTS would reuse. Shipping VL first means TTS inherits a validated pattern instead of a speculative one.
 
 ## Unshipped techniques — after applying the value-add filter (and re-auditing)
 
