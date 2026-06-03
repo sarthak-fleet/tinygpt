@@ -372,14 +372,15 @@ What's left:
 
 **Genuinely new value-adds, not yet built**
 
-After exhaustive audit + shipping, the remaining un-built non-training items are:
+After this session's batch closes, the non-training surface is now
+essentially exhausted modulo two remaining items + niche residue:
 
-- ⬜ **GGUF end-to-end loader** — `gguf-load` validator ships; missing piece is **tokenizer extraction from inline GGUF vocab** (`tokenizer.ggml.tokens` + `tokenizer.ggml.merges` → swift-transformers Tokenizer adapter). After that, a real HF-style runnable model loads from any common GGUF dump.
-- ⬜ **`tinygpt to-coreml` exporter** — reusable for any future model, prereq for the ANE-routing experiment. Even without Mini-Llama, the exporter is a 1-2 day standalone deliverable.
-- ⬜ **Sample packing (cross-source)** — combine examples from *different* sources into one batch (distinct from intra-source sequence packing, which ships). Niche.
-- ⬜ **Vocab trimming** — drop unused BPE tokens to shrink embedding matrix. Niche.
+- ⬜ **GGUF weight materializer to safetensors** — gguf-load (validator) ships, gguf-extract (tokenizer + config) ships. The last piece is reading the dequantized weights via `GGUFReader.loadTensor` and writing them as `model.safetensors` so the existing `HFModelLoader` picks the directory up. ~1 day. Closes the "load any HF GGUF dump" capability fully.
+- ⬜ **CoreML weight-loading bridge in the to-coreml-generated script** — the Python conversion script generator ships (architecture + tracing + coremltools wired); the only TODO is parsing .tinygpt to extract weights into the PyTorch model. ~half day (either a Swift-side `to-safetensors` helper, or a direct Python .tinygpt reader).
+- ⬜ **Sample packing (cross-source)** — niche, doesn't change capability at our scale
+- ⬜ **Vocab trimming** — niche, only matters for embedded-deployment
 
-After these: it's training-dependent (specialist Wave 3, Mini-Llama+ANE, Tier 5 modality arcs) or upstream-blocked (sparse MoE hard routing on `scatter_add`, real QLoRA on quantized-gradient flow).
+After these: training-dependent (specialist Wave 3, Mini-Llama+ANE, Tier 5 modality arcs) or upstream-blocked (sparse MoE hard routing on `scatter_add`, real QLoRA on quantized-gradient flow).
 
 **Shipped this session (third → fourth audit pass corrections):**
 
@@ -395,6 +396,11 @@ After these: it's training-dependent (specialist Wave 3, Mini-Llama+ANE, Tier 5 
 - ✅ `bon --verifier corpus-ppl` (corpus-anchored PPL as scoring signal — distinct from self-likelihood)
 - ✅ Sparse autoencoders (`tinygpt sae` — Bricken et al. 2023; encoder + decoder + L1, .sae sidecar)
 - ✅ SAE feature explorer (`tinygpt sae-explore` — load .sae, scan corpus, surface top-K activating windows per feature)
+- ✅ Activation patching CLI (`tinygpt patch` — Mac CLI for zero + donor-swap; reuses shipped `forwardWithPatch`)
+- ✅ Causal trace CLI (`tinygpt causal-trace` — Meng et al. 2022 per-layer fact localization)
+- ✅ MinHash near-duplicate dedup (`tinygpt dedupe --near-dup` — catches paraphrased boilerplate that exact-SHA misses)
+- ✅ GGUF tokenizer + config extractor (`tinygpt gguf-extract` — writes tokenizer.json + config.json + manifest, the missing piece between gguf-load and runnable model)
+- ✅ to-coreml conversion bridge (`tinygpt to-coreml` — generates a tailored Python conversion script for the user's coremltools install)
 
 **Stale ⬜ markers caught + corrected this session — now ✅:**
 

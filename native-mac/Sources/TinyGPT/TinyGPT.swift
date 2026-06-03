@@ -97,10 +97,18 @@ struct TinyGPT {
             SAE.run(args: Array(args.dropFirst()))
         case "sae-explore":
             SaeExplore.run(args: Array(args.dropFirst()))
+        case "patch":
+            Patch.run(args: Array(args.dropFirst()))
+        case "causal-trace":
+            CausalTrace.run(args: Array(args.dropFirst()))
         case "gguf-inspect":
             GGUFInspect.run(args: Array(args.dropFirst()))
         case "gguf-load":
             GGUFLoad.run(args: Array(args.dropFirst()))
+        case "gguf-extract":
+            GGUFExtract.run(args: Array(args.dropFirst()))
+        case "to-coreml":
+            ToCoreML.run(args: Array(args.dropFirst()))
         case "train-heads":
             TrainHeads.run(args: Array(args.dropFirst()))
         case "compare":

@@ -171,6 +171,50 @@ public final class TinyGPTModel: Module {
         return lnFinal(x)
     }
 
+    /// Activation-patched forward (Meng et al. 2022). Runs the standard
+    /// forward, but right after block `patchLayer`'s output, replaces
+    /// the residual at `[0, patchPosition, :]` with `donorHidden`
+    /// (shape [dModel]) before continuing through the remaining blocks.
+    /// `donorHidden == nil` ⇒ zero-patch (sets the slot to zeros, the
+    /// causal-tracing baseline). YOCO + this combine: the patch is
+    /// applied to the post-block residual stream, so the K/V anchor
+    /// captured at the anchor layer reflects the patch when relevant.
+    public func forwardWithPatch(_ idx: MLXArray,
+                                  donorHidden: MLXArray?,
+                                  patchLayer: Int,
+                                  patchPosition: Int) -> MLXArray {
+        precondition(patchLayer >= 0 && patchLayer < blocks.count,
+                     "patchLayer \(patchLayer) out of range")
+        let T = idx.shape[1]
+        precondition(patchPosition >= 0 && patchPosition < T,
+                     "patchPosition \(patchPosition) out of range for T=\(T)")
+        let positions = MLXArray((0..<T).map { Int32($0) })
+        let posEmb = positionEmbedding(positions).expandedDimensions(axis: 0)
+        var tokEmb = tokenEmbedding(idx)
+        if let en = embedNorm { tokEmb = en(tokEmb) }
+        var x = tokEmb + posEmb
+        for (i, block) in blocks.enumerated() {
+            x = block(x)
+            if i == patchLayer {
+                // Build a [1, T, dModel] replacement matching x.shape,
+                // with the chosen position swapped for donorHidden (or
+                // zeroed if no donor was supplied).
+                let donor: MLXArray
+                if let d = donorHidden {
+                    donor = d.reshaped([1, 1, config.dModel])
+                } else {
+                    donor = MLXArray.zeros([1, 1, config.dModel])
+                }
+                // Slice x into [pre, post] around patchPosition and
+                // concat back with the donor row in place.
+                let pre = x[0..., 0..<patchPosition, 0...]
+                let post = x[0..., (patchPosition + 1)..<T, 0...]
+                x = concatenated([pre, donor, post], axis: 1)
+            }
+        }
+        return projectLogits(lnFinal(x))
+    }
+
     /// Multi-Token-Prediction forward. Returns one logits tensor per
     /// horizon, all sharing the same final hidden state — the only
     /// difference between horizons is the output head's projection.
