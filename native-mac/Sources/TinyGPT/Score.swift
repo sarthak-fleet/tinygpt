@@ -30,8 +30,6 @@ import TinyGPTModel
 ///   convention: `null` = "ran but incompatible", absence = "not yet
 ///   scored", number = "actual score").
 ///
-/// Dispatch isn't wired into TinyGPT.swift's case-switch on purpose —
-/// see // TODO(score-bench-merge) below for the insertion point.
 enum Score {
 
     // MARK: - Benchmark descriptors (mirrors bench/benchmarks.json)
@@ -782,12 +780,3 @@ enum Score {
     }
 }
 
-// TODO(score-bench-merge): wire `tinygpt score-bench` into
-// `native-mac/Sources/TinyGPT/TinyGPT.swift`'s `switch cmd` near the
-// other `case "eval": …` lines. Suggested:
-//
-//     case "score-bench":
-//         Score.run(args: Array(args.dropFirst()))
-//
-// Left as a TODO per the worktree spec to keep dispatch changes
-// reviewable separately.

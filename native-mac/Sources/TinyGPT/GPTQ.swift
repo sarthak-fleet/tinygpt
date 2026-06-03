@@ -41,9 +41,6 @@ import TinyGPTModel
 /// same as HQQ today — see the doc note at the bottom for the
 /// inference-side gap).
 ///
-/// **TODO(gptq-cli): wire `case "gptq":` into TinyGPT.swift after this
-/// patch lands. Worker stays under the `--help` of the binary via the
-/// `gptq` subcommand once dispatched.**
 enum GPTQWorker {
     static func run(args: [String]) {
         var inPath: String? = nil

@@ -150,8 +150,8 @@ enum ToSafetensors {
           from safetensors.torch import load_file
           weights = load_file("model.safetensors")
 
-        Or with the to-coreml-generated convert.py script (drops the
-        NotImplementedError stub for weight loading).
+        Or feed into the to-coreml-generated convert.py script — it
+        loads weights via safetensors.torch.load_file directly.
         """)
         exit(code)
     }

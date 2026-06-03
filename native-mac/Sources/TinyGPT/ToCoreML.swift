@@ -289,11 +289,13 @@ enum ToCoreML {
 
         Generates a Python script that converts a .tinygpt model to a
         CoreML .mlpackage via coremltools. Architecture, shape, and
-        conversion driver are baked in from the .tinygpt header;
-        weight loading is left as a TODO in the script (since the
-        .tinygpt format reader is non-trivial — the cleanest path is
-        a separate `to-safetensors` helper first, then a stock
-        safetensors loader in the script).
+        conversion driver are baked in from the .tinygpt header.
+        Weights are loaded via safetensors — pipe through
+        `tinygpt to-safetensors` first.
+
+        Two-step:
+          tinygpt to-safetensors model.tinygpt --out model.safetensors
+          python convert.py --input model.safetensors --output model.mlpackage
 
         After running the script you get a .mlpackage that can be
         profiled in Xcode's Instruments → Core ML template to see
