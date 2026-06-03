@@ -56,17 +56,19 @@ enum MEMIT {
         var outPath: String? = nil
         var scale: Float = 1.0
         var lambdaArg: Float? = nil
+        var weighting: String = "equal"   // "equal" | "key-norm"
 
         var i = 0
         while i < args.count {
             switch args[i] {
-            case "--facts":      factsPath = args[i+1]; i += 2
-            case "--layer":      layerSpec = args[i+1]; i += 2
-            case "--layers":     layerSpec = args[i+1]; i += 2
-            case "--out":        outPath = args[i+1]; i += 2
-            case "--scale":      scale = Float(args[i+1]) ?? 1.0; i += 2
-            case "--lambda":     lambdaArg = Float(args[i+1]); i += 2
-            case "-h", "--help": exitUsage(0)
+            case "--facts":           factsPath = args[i+1]; i += 2
+            case "--layer":           layerSpec = args[i+1]; i += 2
+            case "--layers":          layerSpec = args[i+1]; i += 2
+            case "--out":             outPath = args[i+1]; i += 2
+            case "--scale":           scale = Float(args[i+1]) ?? 1.0; i += 2
+            case "--lambda":          lambdaArg = Float(args[i+1]); i += 2
+            case "--layer-weighting": weighting = args[i+1]; i += 2
+            case "-h", "--help":      exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 modelPath = args[i]; i += 1
@@ -112,10 +114,6 @@ enum MEMIT {
         guard !layers.isEmpty else {
             fputs("--layer/--layers spec '\(layerSpec)' produced no valid layers\n", stderr); exit(2)
         }
-        // Per-layer share of the residual. Equal weighting is the
-        // simplest distribution; Meng 2023 weights by causal-trace
-        // influence per layer — the weights sum to 1 either way.
-        let perLayerScale = scale / Float(layers.count)
         for L in layers {
             guard model.blocks[L].mlp != nil else {
                 fputs("layer \(L) has no dense MLP (MoE expert layer? edit not applicable).\n", stderr); exit(2)
@@ -155,18 +153,65 @@ enum MEMIT {
         }
         precondition(targets.count == N && allLayerwise.count == N, "fact count mismatch")
 
+        // ---- per-layer weight distribution ----
+        // "equal" splits R evenly. "key-norm" weights each layer by
+        // the mean ||k|| of facts' keys at that layer — a data-driven
+        // proxy for Meng 2023's causal-trace influence weighting.
+        // Layers where the fact's residual stream has larger key
+        // magnitude (more "engaged" in that fact's representation)
+        // get a larger share of the residual. Cheap to compute: one
+        // forward pass per layer (which we already do for key capture).
+        var layerWeights = [Float](repeating: 1.0 / Float(layers.count), count: layers.count)
+        if weighting == "key-norm" {
+            var rawWeights = [Float](repeating: 0, count: layers.count)
+            for (li, L) in layers.enumerated() {
+                let block = model.blocks[L]
+                guard let mlp = block.mlp else { continue }
+                var sumNorm: Float = 0
+                for j in 0..<N {
+                    let inputResidual: MLXArray
+                    if L == 0 { inputResidual = allTokEmb[j] }
+                    else      { inputResidual = allLayerwise[j][L - 1] }
+                    let attnOut = block.attn(block.ln1(inputResidual))
+                    let mlpInput = inputResidual + attnOut
+                    let kAll = gelu(mlp.fcIn(block.ln2(mlpInput)))
+                    let lastT = promptLastT[j]
+                    let k = kAll[0, lastT, 0...]
+                    MLX.eval(k)
+                    let kVec = k.asArray(Float.self)
+                    var nrm: Float = 0
+                    for x: Float in kVec { nrm += x * x }
+                    sumNorm += Foundation.sqrt(nrm)
+                }
+                rawWeights[li] = sumNorm / Float(N)
+            }
+            let total = rawWeights.reduce(Float(0), +)
+            if total > 1e-9 {
+                for li in 0..<layers.count { layerWeights[li] = rawWeights[li] / total }
+            }
+        } else if weighting != "equal" {
+            fputs("--layer-weighting must be 'equal' or 'key-norm' (got '\(weighting)')\n", stderr); exit(2)
+        }
+
         // Edit loop — one rank-K update per layer in `layers`. Each
         // layer's keys are captured against THAT layer's MLP input;
-        // each layer's residual share is R/|layers|.
-        print("editing \(layers.count) layer(s): \(layers.map(String.init).joined(separator: ","))")
+        // each layer's residual share is scale × layerWeights[i].
+        print("editing \(layers.count) layer(s): \(layers.map(String.init).joined(separator: ","))" +
+              "  (weighting=\(weighting))")
+        if weighting == "key-norm" {
+            let summary = zip(layers, layerWeights).map { String(format: "L%d=%.3f", $0, $1) }
+                .joined(separator: " ")
+            print("  per-layer share: \(summary)")
+        }
         var totalDeltaFro: Float = 0
         var worstResidualAcrossLayers: Float = 0
         var maxRelSize: Float = 0
         var autoLambda: Float = 0
 
-        for L in layers {
+        for (li, L) in layers.enumerated() {
             let block = model.blocks[L]
             guard let mlp = block.mlp else { continue }   // guarded above
+            let perLayerScale = scale * layerWeights[li]
             // Per-fact key at layer L: gelu(fcIn(ln2(layer-L input)))
             // at the last token. Reuses cached layerwise / tok-emb so
             // we never re-run the forward pass.
@@ -299,16 +344,17 @@ enum MEMIT {
                           L, sqrt(dFro), rel * 100, worstHere))
         }
 
+        let meanShare = layerWeights.reduce(Float(0), +) / Float(layers.count)
         print(String(format: """
         memit summary
           facts:                \(N)
-          layers:               \(layers.count)
-          per-layer scale:      %.4f  (total scale \(scale))
+          layers:               \(layers.count)  (weighting=\(weighting))
+          mean per-layer share: %.4f  (total scale \(scale))
           λ:                    %.4e (auto)
           aggregate ‖ΔW‖_F:     %.4e (sum across layers)
           worst per-layer rel:  %.4f%%
           worst residual:       %.4e
-        """, perLayerScale, autoLambda, sqrt(totalDeltaFro),
+        """, meanShare, autoLambda, sqrt(totalDeltaFro),
             maxRelSize * 100, worstResidualAcrossLayers))
 
         do {

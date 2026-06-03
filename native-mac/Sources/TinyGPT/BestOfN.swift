@@ -39,6 +39,8 @@ enum BestOfN {
         var scanSpec: String? = nil
         var seed: UInt64 = 42
         var outPath: String? = nil
+        var verifier: String = "self"      // "self" | "corpus-ppl"
+        var corpusPath: String? = nil
 
         var i = 0
         while i < args.count {
@@ -51,6 +53,8 @@ enum BestOfN {
             case "--scan":        scanSpec = args[i+1]; i += 2
             case "--seed":        seed = UInt64(args[i+1]) ?? seed; i += 2
             case "--out":         outPath = args[i+1]; i += 2
+            case "--verifier":    verifier = args[i+1]; i += 2
+            case "--corpus":      corpusPath = args[i+1]; i += 2
             case "-h", "--help":  exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
@@ -80,6 +84,32 @@ enum BestOfN {
         let promptBytes: [Int32] = prompt.utf8.prefix(cfg.contextLength).map { Int32($0) }
         guard !promptBytes.isEmpty else { fputs("--prompt empty after byte encoding\n", stderr); exit(2) }
 
+        // Corpus-PPL verifier prep: read the held-out text upfront.
+        // Score = -PPL_change_when_completion_replaces_a_window, where
+        // we measure how well the COMPLETION continues a sliding-window
+        // baseline. Approximation: for each completion, prefix the
+        // first 32 bytes of the corpus, then score the prompt+completion
+        // tail. Higher = the completion's "shape" matches the corpus's
+        // distribution. Distinct from self-likelihood because the
+        // verifier model never saw the COMPLETION during sampling.
+        var corpusPrefix: [Int32] = []
+        if verifier == "corpus-ppl" {
+            guard let cp = corpusPath else {
+                fputs("--verifier corpus-ppl requires --corpus <text.txt>\n", stderr); exit(2)
+            }
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: cp)) else {
+                fputs("could not read --corpus \(cp)\n", stderr); exit(1)
+            }
+            // Take the first up-to-64 bytes of the corpus as a
+            // distribution anchor. The PPL of (anchor || prompt ||
+            // completion) under the model is the score; lower PPL =
+            // better. Negated so higher = better matches self-mode.
+            let anchor = data.prefix(64)
+            corpusPrefix = anchor.map { Int32($0) }
+        } else if verifier != "self" {
+            fputs("--verifier must be 'self' or 'corpus-ppl' (got '\(verifier)')\n", stderr); exit(2)
+        }
+
         struct ScanRow: Codable {
             let n: Int
             let bestScore: Float
@@ -102,9 +132,17 @@ enum BestOfN {
                                        promptBytes: promptBytes,
                                        maxTokens: maxTokens,
                                        temperature: temperature)
-            let score = scoreSelfLikelihood(model: model, cfg: cfg,
+            let score: Float
+            if verifier == "corpus-ppl" {
+                score = scoreCorpusPPL(model: model, cfg: cfg,
+                                        anchorBytes: corpusPrefix,
+                                        promptBytes: promptBytes,
+                                        completion: bytes)
+            } else {
+                score = scoreSelfLikelihood(model: model, cfg: cfg,
                                              promptBytes: promptBytes,
                                              completion: bytes)
+            }
             let text = String(bytes: bytes.map { UInt8($0) },
                                encoding: .utf8) ?? "<non-utf8>"
             candidates.append((text: text, score: score))
@@ -194,6 +232,44 @@ enum BestOfN {
             if target >= 0 && target < vocab {
                 let lp = logitsFlat[base + target] - logZ
                 sumLogProb += lp
+                count += 1
+            }
+        }
+        return count > 0 ? sumLogProb / Float(count) : -Float.infinity
+    }
+
+    /// Corpus-PPL verifier: score = -mean PPL of (anchor || prompt ||
+    /// completion) under the model, restricted to the COMPLETION
+    /// positions. The anchor (a held-out corpus prefix) sits ahead of
+    /// the prompt as a distribution conditioner — by feeding the
+    /// completion through a context that includes a clean piece of
+    /// corpus, we get a score that's less self-referential than pure
+    /// self-likelihood. Distinct verifier signal at the cost of one
+    /// extra forward pass per candidate.
+    private static func scoreCorpusPPL(model: TinyGPTModel, cfg: ModelConfig,
+                                         anchorBytes: [Int32],
+                                         promptBytes: [Int32],
+                                         completion: [Int32]) -> Float {
+        let full = anchorBytes + promptBytes + completion
+        let T = min(full.count, cfg.contextLength)
+        let idx = MLXArray(Array(full.prefix(T)), [1, T])
+        let logits = model(idx)
+        MLX.eval(logits)
+        let vocab = cfg.vocabSize
+        let logitsFlat = logits.asArray(Float.self)
+        let scoredStart = anchorBytes.count + promptBytes.count
+        var sumLogProb: Float = 0
+        var count = 0
+        for p in (scoredStart - 1)..<(T - 1) where p >= 0 {
+            let base = p * vocab
+            var maxLogit: Float = -Float.greatestFiniteMagnitude
+            for v in 0..<vocab { if logitsFlat[base + v] > maxLogit { maxLogit = logitsFlat[base + v] } }
+            var sumExp: Float = 0
+            for v in 0..<vocab { sumExp += expf(logitsFlat[base + v] - maxLogit) }
+            let logZ = maxLogit + logf(sumExp)
+            let target = Int(full[p + 1])
+            if target >= 0 && target < vocab {
+                sumLogProb += logitsFlat[base + target] - logZ
                 count += 1
             }
         }

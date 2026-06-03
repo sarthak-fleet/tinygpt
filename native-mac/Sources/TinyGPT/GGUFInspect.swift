@@ -74,6 +74,9 @@ enum GGUFInspect {
         case .q4_0: return "Q4_0"
         case .q8_0: return "Q8_0"
         case .q4_K: return "Q4_K"
+        case .q5_K: return "Q5_K"
+        case .q6_K: return "Q6_K"
+        case .q8_K: return "Q8_K"
         case nil:   return "unsupported(\(t))"
         }
     }

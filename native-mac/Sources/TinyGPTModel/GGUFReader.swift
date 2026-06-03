@@ -59,6 +59,9 @@ public enum GGUFReader {
         case q4_0 = 2
         case q8_0 = 8
         case q4_K = 12
+        case q5_K = 13
+        case q6_K = 14
+        case q8_K = 15
     }
 
     public struct TensorInfo {
@@ -277,6 +280,162 @@ public enum GGUFReader {
                         qsOff += 32
                         outBase += 64
                         sbIdx += 2
+                    }
+                }
+            }
+            return MLXArray(out, info.shape)
+        case .q5_K:
+            // K-quant: 256-element super-blocks, 176 bytes each.
+            //   2 bytes  d     — fp16 outer scale for the 8 sub-block scales
+            //   2 bytes  dmin  — fp16 outer scale for the 8 sub-block mins
+            //  12 bytes  packed 6-bit (same get_scale_min_k4 layout as Q4_K)
+            //  32 bytes  qh    — 256 high-bits (1 per element, 8 per byte)
+            // 128 bytes  qs    — 256 low-4-bits (2 per byte)
+            //
+            // Per element: 5-bit value = (qh_bit << 4) | low4, then
+            // x = d · sc · value - dmin · m  (same form as Q4_K).
+            precondition(nElems % 256 == 0, "Q5_K expects multiple-of-256 element count (got \(nElems))")
+            let blockBytes = 2 + 2 + 12 + 32 + 128
+            let nBlocks = nElems / 256
+            guard raw.count >= base + nBlocks * blockBytes else {
+                throw GGUFError.truncated("q5_K tensor \(info.name)")
+            }
+            var out = [Float](repeating: 0, count: nElems)
+            raw.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
+                let bytesBase = ptr.baseAddress!.advanced(by: base)
+                for b in 0..<nBlocks {
+                    let blockStart = bytesBase.advanced(by: b * blockBytes)
+                    let d = halfToFloat(blockStart.load(as: UInt16.self))
+                    let dmin = halfToFloat(blockStart.advanced(by: 2).load(as: UInt16.self))
+                    let scales = blockStart.advanced(by: 4).assumingMemoryBound(to: UInt8.self)
+                    let qh = blockStart.advanced(by: 16).assumingMemoryBound(to: UInt8.self)
+                    let qs = blockStart.advanced(by: 16 + 32).assumingMemoryBound(to: UInt8.self)
+                    var scArr = [UInt8](repeating: 0, count: 8)
+                    var mArr  = [UInt8](repeating: 0, count: 8)
+                    for j in 0..<4 {
+                        scArr[j] = scales[j] & 0x3f
+                        mArr[j]  = scales[j + 4] & 0x3f
+                    }
+                    for j in 4..<8 {
+                        scArr[j] = (scales[j + 4] & 0x0f) | ((scales[j - 4] >> 6) << 4)
+                        mArr[j]  = (scales[j + 4] >> 4)   | ((scales[j]     >> 6) << 4)
+                    }
+                    // Walk in 32-byte qs chunks (low-4-bits) + take 1 bit
+                    // per element from qh. Same iteration structure as
+                    // Q4_K but with the extra high-bit shifted in.
+                    var qsOff = 0
+                    var outBase = b * 256
+                    var sbIdx = 0
+                    while sbIdx < 8 {
+                        let sc1 = Float(scArr[sbIdx])
+                        let m1  = Float(mArr[sbIdx])
+                        let sc2 = Float(scArr[sbIdx + 1])
+                        let m2  = Float(mArr[sbIdx + 1])
+                        let d1 = d * sc1; let mm1 = dmin * m1
+                        let d2 = d * sc2; let mm2 = dmin * m2
+                        let qhMask: UInt8 = UInt8(1 << (sbIdx))           // bit for sub-block 2i (low half)
+                        let qhMask2: UInt8 = UInt8(1 << (sbIdx + 1))      // bit for sub-block 2i+1
+                        for l in 0..<32 {
+                            let lowByte = qs[qsOff + l]
+                            let lo4 = lowByte & 0x0f
+                            let hi4 = lowByte >> 4
+                            let hbit1: UInt8 = (qh[l] & qhMask)  != 0 ? 1 : 0
+                            let hbit2: UInt8 = (qh[l] & qhMask2) != 0 ? 1 : 0
+                            let v1 = UInt8(lo4) | (hbit1 << 4)
+                            let v2 = UInt8(hi4) | (hbit2 << 4)
+                            out[outBase + l]      = d1 * Float(v1) - mm1
+                            out[outBase + 32 + l] = d2 * Float(v2) - mm2
+                        }
+                        qsOff += 32
+                        outBase += 64
+                        sbIdx += 2
+                    }
+                }
+            }
+            return MLXArray(out, info.shape)
+        case .q6_K:
+            // K-quant: 256-element super-blocks, 210 bytes each.
+            // 128 bytes  ql      — 256 low-4-bits (2 per byte)
+            //  64 bytes  qh      — 256 high-2-bits (4 per byte)
+            //  16 bytes  scales  — int8 per 16-element sub-block (16 sub-blocks)
+            //   2 bytes  d       — fp16 super-block scale
+            //
+            // No min component — Q6_K is centered. Per element:
+            //   value_raw = (qh_2b << 4) | low_4_bits        ∈ [0, 63]
+            //   value     = value_raw - 32                    ∈ [-32, 31]
+            //   x         = d · int8_scale · value
+            precondition(nElems % 256 == 0, "Q6_K expects multiple-of-256 element count (got \(nElems))")
+            let blockBytes = 128 + 64 + 16 + 2
+            let nBlocks = nElems / 256
+            guard raw.count >= base + nBlocks * blockBytes else {
+                throw GGUFError.truncated("q6_K tensor \(info.name)")
+            }
+            var out = [Float](repeating: 0, count: nElems)
+            raw.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
+                let bytesBase = ptr.baseAddress!.advanced(by: base)
+                for b in 0..<nBlocks {
+                    let blockStart = bytesBase.advanced(by: b * blockBytes)
+                    let qlAll = blockStart.assumingMemoryBound(to: UInt8.self)
+                    let qhAll = blockStart.advanced(by: 128).assumingMemoryBound(to: UInt8.self)
+                    let scAll = blockStart.advanced(by: 128 + 64).assumingMemoryBound(to: Int8.self)
+                    let d = halfToFloat(blockStart.advanced(by: 128 + 64 + 16).load(as: UInt16.self))
+                    // Direct translation of dequantize_row_q6_K from
+                    // llama.cpp/ggml-quants.c. Two outer chunks of 128
+                    // elements; each chunk uses 32 ql bytes (offset by
+                    // 32 between the "row 1" and "row 3" halves), 16
+                    // qh bytes, and 8 scales.
+                    var outBase = b * 256
+                    var qlOff = 0
+                    var qhOff = 0
+                    var scOff = 0
+                    for _ in 0..<2 {  // n in {0, 128}
+                        for l in 0..<32 {
+                            let isub = l / 16
+                            let qhB = qhAll[qhOff + l]
+                            let qlL  = qlAll[qlOff + l]
+                            let qlH  = qlAll[qlOff + l + 32]
+                            let v0 = Int(qlL & 0x0f) | ((Int(qhB >> 0) & 0x3) << 4)
+                            let v1 = Int(qlH & 0x0f) | ((Int(qhB >> 2) & 0x3) << 4)
+                            let v2 = Int(qlL >> 4)   | ((Int(qhB >> 4) & 0x3) << 4)
+                            let v3 = Int(qlH >> 4)   | ((Int(qhB >> 6) & 0x3) << 4)
+                            out[outBase + l + 0]  = d * Float(scAll[scOff + isub + 0]) * Float(v0 - 32)
+                            out[outBase + l + 32] = d * Float(scAll[scOff + isub + 2]) * Float(v1 - 32)
+                            out[outBase + l + 64] = d * Float(scAll[scOff + isub + 4]) * Float(v2 - 32)
+                            out[outBase + l + 96] = d * Float(scAll[scOff + isub + 6]) * Float(v3 - 32)
+                        }
+                        outBase += 128
+                        qlOff   += 64
+                        qhOff   += 32
+                        scOff   += 8
+                    }
+                }
+            }
+            return MLXArray(out, info.shape)
+        case .q8_K:
+            // K-quant: 256-element super-blocks, 292 bytes each.
+            //   4 bytes  d        — fp32 super-block scale (not fp16!)
+            // 256 bytes  qs       — 256 int8 values
+            //  32 bytes  bsums    — 16 int16 partial-sums per sub-block
+            //                       (matmul accelerator — ignored for
+            //                        plain dequant)
+            //
+            // Trivially: x = d * qs[i]. Q8_K is primarily a matmul
+            // intermediate format; rare in distributed dumps.
+            precondition(nElems % 256 == 0, "Q8_K expects multiple-of-256 element count (got \(nElems))")
+            let blockBytes = 4 + 256 + 32
+            let nBlocks = nElems / 256
+            guard raw.count >= base + nBlocks * blockBytes else {
+                throw GGUFError.truncated("q8_K tensor \(info.name)")
+            }
+            var out = [Float](repeating: 0, count: nElems)
+            raw.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) in
+                let bytesBase = ptr.baseAddress!.advanced(by: base)
+                for b in 0..<nBlocks {
+                    let blockStart = bytesBase.advanced(by: b * blockBytes)
+                    let d = blockStart.load(as: Float.self)  // fp32, little-endian
+                    let qs = blockStart.advanced(by: 4).assumingMemoryBound(to: Int8.self)
+                    for i in 0..<256 {
+                        out[b * 256 + i] = d * Float(qs[i])
                     }
                 }
             }

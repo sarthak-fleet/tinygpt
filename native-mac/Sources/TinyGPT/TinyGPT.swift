@@ -95,8 +95,12 @@ struct TinyGPT {
             BestOfN.run(args: Array(args.dropFirst()))
         case "sae":
             SAE.run(args: Array(args.dropFirst()))
+        case "sae-explore":
+            SaeExplore.run(args: Array(args.dropFirst()))
         case "gguf-inspect":
             GGUFInspect.run(args: Array(args.dropFirst()))
+        case "gguf-load":
+            GGUFLoad.run(args: Array(args.dropFirst()))
         case "train-heads":
             TrainHeads.run(args: Array(args.dropFirst()))
         case "compare":
