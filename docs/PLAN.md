@@ -372,7 +372,7 @@ What's left:
 
 **Genuinely new value-adds, not yet built**
 
-- ⬜ **Sparse autoencoders (SAE)** — Anthropic-style feature decomposition. Different mechanism from logit/tuned lens / linear probe. Multi-day build.
+- ✅ **Sparse autoencoders (SAE)** — `tinygpt sae` ships. Bricken et al. 2023 formulation: encoder (W_enc·(h - b_dec) + b_enc through ReLU) + decoder (W_dec·enc + b_dec), MSE reconstruction + L1 sparsity penalty. Per-layer feature dictionary at d_features = 4-8× d_model. Verified on shakespeare.tinygpt at layer 6 with 1024 features: 200 steps → MSE 2.46e-2, L0 sparsity ~21% (clean overcomplete dictionary). `.sae` sidecar format.
 - ⬜ **Multi-layer MEMIT** — single-layer MEMIT ships; the proper Meng 2023 algorithm distributes the rank-K update across 5-7 mid-network layers (residual partitioned by causal-trace influence weights). Cleaner sampling visibility without per-layer overcommit. Same math per-layer.
 - ⬜ **GGUF k-quant types** (Q4_K, Q6_K, Q8_K, …) — extends the existing GGUFReader. ~1 day per type once block layout is decoded.
 - ⬜ **Sample packing (cross-source)** — combine examples from *different* sources into one batch (distinct from intra-source sequence packing, which ships).
@@ -384,7 +384,10 @@ What's left:
 - ✅ Deduplication (`tinygpt dedupe`, line + doc modes)
 - ✅ ROME (`tinygpt rome`, identity-Hessian first cut)
 - ✅ MEMIT (`tinygpt memit`, single-layer least-squares, exact per-fact residual at scale=1)
-- ✅ GGUF reader (`GGUFReader.swift` + `tinygpt gguf-inspect`)
+- ✅ Multi-layer MEMIT (`--layers SPEC`, residual partitioned across N layers; 8-14% per-layer rel vs 41-72% single-layer)
+- ✅ GGUF reader (`GGUFReader.swift` + `tinygpt gguf-inspect` — F32/F16/Q4_0/Q8_0/Q4_K)
+- ✅ Best-of-N + Snell-style scaling curve (`tinygpt bon --scan`)
+- ✅ Sparse autoencoders (`tinygpt sae` — Bricken et al. 2023; encoder + decoder + L1, .sae sidecar)
 
 **Stale ⬜ markers caught + corrected this session — now ✅:**
 

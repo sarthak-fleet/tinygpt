@@ -93,6 +93,8 @@ struct TinyGPT {
             MEMIT.run(args: Array(args.dropFirst()))
         case "bon":
             BestOfN.run(args: Array(args.dropFirst()))
+        case "sae":
+            SAE.run(args: Array(args.dropFirst()))
         case "gguf-inspect":
             GGUFInspect.run(args: Array(args.dropFirst()))
         case "train-heads":
