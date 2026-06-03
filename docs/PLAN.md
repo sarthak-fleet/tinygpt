@@ -398,6 +398,147 @@ What's left:
 
 ---
 
+# Queued findings — ANE routing + Mac-vs-browser sampling
+
+Triggered by the question "how do we get to 170× instead of 17×?" The
+17.2× number is at Huge *training* — small bandwidth-bound model where
+kernel-launch overhead dominates. Several legitimate paths to a much
+larger ratio; each is queued with its honest cost.
+
+## 1. Browser sampling tok/s harness — CHEAP, ~30 min
+
+Closes a real missing measurement. We have Mac sampling tok/s
+(293-696 by model size) but no analogous browser-side number. The
+playground worker generates via `GpuModel.generate` already; we just
+don't time it.
+
+**What:** in `browser/src/worker.ts`, log per-token wall-clock in the
+generate loop, post a `sampling_perf` message, display tok/s next to
+the playground output.
+
+**Expected ratio**: Mac-vs-browser sampling probably **30-80×** at
+Huge based on shape priors (Mac is much less kernel-launch-overhead
+sensitive during decode than during training). That alone changes the
+headline from "17× training" to "30-80× sampling, 17× training."
+
+**Why queued**: tiny work, just hasn't been done. No blockers.
+
+## 2. ANE-routed inference via Mini-Llama TinyGPT — MEDIUM, 1-2 weeks
+
+Apple Neural Engine routes only when the graph hits its preferred
+shapes. The published numbers (ANEMLL, perf-quest memory) are 2-3×
+sampling over the same model on Apple GPU when ANE engages cleanly,
+not 100×+ end-to-end. The big win is the *combined* ratio: bigger
+ANE-friendly model × ANE-routing × already-unfit-for-browser size.
+
+### Why TinyGPT doesn't route today
+
+ANE prefers `head_dim ∈ {64, 128}`, tensor dims multiples of 64,
+fp16, RoPE-style attention, bias-free linears, RMSNorm. Our Huge
+default is the opposite of all of these:
+
+| Dimension | TinyGPT Huge | Llama 3.1 8B | ANE impact |
+|---|---|---|---|
+| `head_dim` | 32 | 128 | falls off ANE matrix engine |
+| `d_model` | 256 | 4,096 | tiny matmuls under-utilize ANE tiles |
+| `vocab` | 256 (byte) | 128,256 (BPE) | LM-head matmul too small to matter |
+| Norm | LayerNorm | RMSNorm | RMSNorm has better ANE op coverage |
+| Positional | learned absolute | RoPE | ANE's fused-attention paths assume RoPE |
+| MLP activation | GELU | SwiGLU | SwiGLU is the ANE-tuned default |
+| Linear bias | yes | no | bias-free fuses cleaner into matmul-add |
+
+### What to build
+
+A new ModelConfig preset — `mini-llama` — using only existing config
+flags (every one of the above is already a knob):
+
+```swift
+ModelConfig(
+    vocabSize: 32768,        // small BPE, multiple of 64
+    contextLength: 2048,
+    nLayers: 24,
+    nHeads: 16,              // head_dim = 128
+    nKvHeads: 4,             // GQA
+    dModel: 2048,
+    dMlp: 8192,
+    useRoPE: true,
+    useRMSNorm: true,
+    useSwiGLU: true,
+    tieEmbeddings: false,
+)
+// ~600M params; scale down to (1280, 16) for ~200M first cut
+```
+
+Plus `tinygpt to-coreml` exporter (~1-2 days): maps our transformer
+ops to CoreML's op set, produces a `.mlpackage` that Instruments can
+profile to see whether ANE actually engages.
+
+### Realistic speedup expectations
+
+| Path | Realistic tok/s |
+|---|---|
+| Current Huge on Mac GPU | 293-696 |
+| Mini-Llama (~600M) on Mac GPU | ~150-400 |
+| Mini-Llama on Mac ANE if it routes | ~400-1200 (~2-3× over its own GPU) |
+| Mini-Llama in browser | ~5-20 (probably can't load; 600M near browser ceiling) |
+| **Mac-ANE vs browser ratio** | **30-200×** depending on routing cleanliness |
+
+### Probability analysis
+
+Test 1 (ANEMLL works on Llama 3.1 on your machine) → confirms the
+environment but NOT that our model routes. Independent reasons it
+could still fail:
+
+```
+ANEMLL on Llama works?
+├─ No  → done, environment broken
+└─ Yes → environment confirmed
+         └─ Build tinygpt to-coreml exporter
+            └─ Convert + profile Mini-Llama
+               ├─ All ops on ANE     → 🎉 ~30-50% chance, you win
+               ├─ Partial split      → 🟡 ~40% chance, measure if net speedup
+               └─ Nothing on ANE     → 😐 ~10-20% chance, GPU is the ceiling
+```
+
+### Cost-benefit (honest)
+
+| Item | Cost | Outcome regardless of ANE result |
+|---|---|---|
+| Train Mini-Llama (200-600M) | 3-7 days mostly-background | Real Llama-architecture gallery model. Useful independently. |
+| `tinygpt to-coreml` exporter | 1-2 days focused | Reusable for any future model. Useful independently. |
+| Profile + iterate | 1-3 days unpredictable | Empirical learning either way. |
+
+**Total**: 1-2 weeks calendar; dominated by training wall-clock.
+
+### Why queued
+
+- Requires lifting the current "no training" goal constraint
+- The trained Mini-Llama IS a valuable artifact independent of ANE,
+  so the conditional EV is positive — but only if you're willing to
+  train.
+- Doesn't deliver 10× on Mac-alone (realistic 2-3× ANE-over-GPU);
+  delivers 30-200× only via the Mac-ANE-vs-browser combined ratio.
+- The cheaper browser-sampling-benchmark (item 1 above) is a
+  prerequisite to even know the current sampling ratio — should do
+  that first.
+
+### Apple's actual ANE landscape (for posterity)
+
+- **CoreML** (public) — convert to `.mlpackage`, Apple's runtime
+  decides per-op CPU/GPU/ANE dispatch. Heuristics are opaque. No way
+  to force ANE.
+- **ANEMLL** (community, github.com/Anemll/Anemll) — uses private
+  CoreML internals to coerce more ops to ANE. Works on macOS
+  Sequoia. **Historically breaks on every macOS update.** Hand-tuned
+  for Llama-family.
+- **"Stateful Models API"** (rumored late 2026) — would make ANE
+  routing first-class. Not shipped.
+
+There is no Apple-sanctioned "private beta" for ANE inference; that
+phrasing was loose. The real options are the three above.
+
+---
+
 # Appendix — index of source docs absorbed by this file
 
 This doc replaces the multi-file roadmap split. The source docs are kept for context but should be treated as historical; **edit this file**, not them.
