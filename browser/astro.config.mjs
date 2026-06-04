@@ -27,7 +27,12 @@ export default defineConfig({
   // dist/roadmap/index.html, matching the legacy Vite output shape so the
   // existing audit scripts (which hit /roadmap.html) and any external
   // links/social cards keep resolving.
-  build: { format: "file" },
+  // inlineStylesheets: "always" pushes per-page CSS into <style> tags inside
+  // the HTML envelope, eliminating the index.<hash>.css render-blocker
+  // psi-swarm flagged (~284ms desktop / ~1.6s mobile-slow). The h1 hero
+  // (LCP element) lands in the first byte instead of waiting on a second
+  // network round-trip for the stylesheet.
+  build: { format: "file", inlineStylesheets: "always" },
 
   // Redirect docs that moved to docs/archive/ so the original URLs keep
   // working. Same for the doc that was split into a sub-folder.
