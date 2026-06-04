@@ -9,6 +9,8 @@ A fresh-context agent should read this first, then `docs/PLAN.md`.
 **Most recent commits** (newest first — confirm via `git log --oneline -10`):
 
 ```
+<sha> train + sae: interp-on-checkpoints v1 (B13)
+<sha> docs: HANDOFF.md — refresh for 2026-06-04 session-end state
 <sha> train: --seed flag for deterministic model init (C9 v1)
 <sha> browser: training-run dashboard viewer (C10 frontend)
 <sha> deps: bump mlx-swift 0.31.3 → 0.31.4 (B16)
@@ -30,6 +32,7 @@ In commit order, oldest → newest:
 6. **B16 mlx-swift 0.31.3 → 0.31.4** — bumped, bench at small preset showed no signal (workload too small to be compute-bound). Real M5 NA verification deferred until a Mega/Huge checkpoint exists.
 7. **C10 training-run dashboard** — `--log-jsonl <path>` appends JSON-lines stream (meta/step/val/done events). Viewer at `/training-dashboard.astro` (zero-dep, multi-run overlay, drag-drop).
 8. **C9 v1 determinism** — `--seed UInt64` seeds MLXRandom before model construction. Init reproducible; batch sampling still uses non-seedable `Int.random` (v2 follow-up). See `docs/determinism.md`.
+9. **B13 v1 interp-on-checkpoints** — `tinygpt train --save-history` writes per-step `<stem>.step-N.tinygpt` copies; `tinygpt sae --checkpoint-dir <dir> --timeline-out <jsonl>` trains an SAE per checkpoint and emits a JSONL timeline. Smoke: tiny preset · 5 ckpts · MSE 0.019→0.013 trajectory + L0 24%→37% — feature emergence visible. v2 = same pattern for memit/patch + browser viewer.
 
 **Files touched this session** (use `git diff 5143366..HEAD --stat`):
 
@@ -52,9 +55,9 @@ The durable env limitation still applies: **`swift test` doesn't work outside Xc
 
 | Task | Effort | Files to touch |
 |---|---|---|
-| **B13 Interp-on-checkpoints infra** | ~half-day | New multi-checkpoint loader for `tinygpt sae`, `tinygpt memit`, `tinygpt patch`. Save-every (already exists) + a glob loader. |
-| **B17 SAELens / Neuronpedia format export** | ~2 days | Read our SAE artifact → write SAELens-compatible safetensors + config. Look at `decoderesearch/SAELens` for the schema. |
-| **B19 Group-SAE** | ~2-3 days | Layer-group variant of existing SAE trainer. See arxiv 2410.21508. |
+| ~~**B13 Interp-on-checkpoints infra**~~ | ~~half-day~~ | **SHIPPED** — `tinygpt train --save-history` + `tinygpt sae --checkpoint-dir`. v2 = same pattern for memit/patch + browser viewer. |
+| **B17 SAELens / Neuronpedia format export** | ~2 days | Read our SAE artifact → write SAELens-compatible safetensors + config. Look at `decoderesearch/SAELens` for the schema. Existing reader: `SaeWriter` / `SaeHeader` in `Sources/TinyGPT/SAE.swift`. |
+| **B19 Group-SAE** | ~2-3 days | Layer-group variant of existing SAE trainer. See arxiv 2410.21508. The single-checkpoint path in `SAE.trainOne` is now factored out (B13) — good seam to add a `--layer-group A,B,C` mode. |
 | **B10 Quality classifier** | ~2 days build + ~1 hr classifier training | FineWeb-Edu-style fastText scorer; tiny scaffold first, the corpus filter use is a separate ~days job. |
 
 ### Tier 2 — light training (~30 min to a few hrs)
@@ -62,7 +65,8 @@ The durable env limitation still applies: **`swift test` doesn't work outside Xc
 | Task | Training cost | Notes |
 |---|---|---|
 | **B14 Speculative decoding** infra | 0 to build | Algorithm in inference path. Needs two trained models — tiny + small smoke is fine for a demo. |
-| **B13 demo** (after Tier 1 infra) | ~10 min training (huge, 500 steps, save-every 50) | Produces 10 checkpoints to run SAE/MEMIT/patch across. |
+| ~~B13 demo~~ | DONE | Already smoke-tested at 5 ckpts. Larger-scale demo = bigger preset + more checkpoints; mechanically straightforward. |
+| **B13 v2 — same pattern for memit + patch + browser viewer** | ~2-3 days | Repeat the `--checkpoint-dir` flag on `tinygpt memit` and `tinygpt patch`; add `/sae-timeline.astro` viewer page (mirror of `/training-dashboard.astro`); investigate SAE feature alignment across checkpoints. |
 
 ### Tier 3 — serious training (the A-track gate)
 
