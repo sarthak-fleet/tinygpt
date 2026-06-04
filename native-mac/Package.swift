@@ -40,7 +40,7 @@ let package = Package(
     dependencies: [
         // MLX-Swift — Apple ML primitives for Apple Silicon. Pinned to a
         // recent stable; bump the lower bound as the API stabilises.
-        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.25.0"),
+        .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.31.4"),
         // HuggingFace's canonical Swift tokenizer library. Supports BPE,
         // SentencePiece, tiktoken-style; used by mlx-swift-examples and
         // every production Swift LLM project. We use it for the HF model
