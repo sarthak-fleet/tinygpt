@@ -12,9 +12,18 @@ import TinyGPTModel
 ///   --save-every N              Atomic checkpoint every N steps. A crash
 ///                               leaves the last successful checkpoint
 ///                               intact (write-to-.tmp then rename).
-///   --lr-schedule cosine        Linear warmup + cosine decay (default).
+///   --depth N                   nanochat-style single-knob override:
+///                               derives nLayers=N, dModel=64·N, nHeads=N,
+///                               dMlp=4·dModel. Takes precedence over the
+///                               preset's L/d/h/MLP fields; preset still
+///                               supplies ctx, vocab, dtype.
+///   --lr-schedule cosine|wsd|constant  Default cosine. `wsd` is
+///                               warmup-stable-decay: linear warmup →
+///                               constant maxLR → 1−√(t) decay over the
+///                               last `--decay-steps` steps.
 ///   --warmup N                  Warmup steps (default 500 — standard).
-///   --max-lr / --min-lr         Cosine endpoints (defaults 3e-4 / 3e-5).
+///   --max-lr / --min-lr         Schedule endpoints (defaults 3e-4 / 3e-5).
+///   --decay-steps N             WSD decay window (default: 10% of steps).
 ///   --val-split 0.0-0.2         Hold out last fraction of corpus for val.
 ///   --val-every N               Eval val loss every N steps (default 200).
 ///
@@ -44,6 +53,11 @@ enum Train {
             TrainSupport.bumpQoSToUserInteractive()
         }
         var preset = "tiny"
+        // nanochat-style single-knob depth override: when set, derives
+        // (nLayers, dModel, nHeads, dMlp) from N via the standard
+        // GPT-2-shaped rules below. Preset still supplies ctx, vocab,
+        // tokenizer, and dtype.
+        var depthOverride: Int? = nil
         var steps = 500
         var corpusPath: String? = nil
         var outPath: String? = nil
@@ -59,10 +73,23 @@ enum Train {
         var saveEvery: Int? = nil
         // Curated-recipe default: cosine + warmup 500. Standard transformer
         // schedule; constant LR is rarely the right choice past a smoke test.
+        // `wsd` (warmup-stable-decay) is the MiniCPM/SmolLM alternative — the
+        // decay phase doubles as the annealing window.
         var lrSchedule = "cosine"
         var warmupSteps: Int = 500
         var maxLR: Float = 3e-4
         var minLR: Float = 3e-5
+        // -1 sentinel = auto-derive to 10% of `steps` at run time.
+        var decaySteps: Int = -1
+        // Loss-spike detector — observe-only v1. Logs a warning when a
+        // step's loss exceeds `spikeFactor × moving-average over
+        // spikeWindow steps`. Off-switch is `--no-spike-detect`.
+        var spikeDetectEnabled: Bool = true
+        var spikeWindow: Int = 50
+        var spikeFactor: Float = 3.0
+        // JSONL log emitter (C10 training dashboard). One JSON object per
+        // step appended to the file; consumed by browser/src/pages/training-dashboard.
+        var logJsonlPath: String? = nil
         var valSplit: Double = 0
         var valEvery: Int = 200
         var tokenizerDir: String? = nil
@@ -153,6 +180,7 @@ enum Train {
         while i < args.count {
             switch args[i] {
             case "--preset":      preset = args[i+1]; i += 2
+            case "--depth":       depthOverride = Int(args[i+1]); i += 2
             case "--steps":       steps = Int(args[i+1]) ?? steps; i += 2
             case "--corpus":      corpusPath = args[i+1]; i += 2
             case "--out":         outPath = args[i+1]; i += 2
@@ -165,6 +193,11 @@ enum Train {
             case "--warmup":      warmupSteps = Int(args[i+1]) ?? warmupSteps; i += 2
             case "--max-lr":      maxLR = Float(args[i+1]) ?? maxLR; i += 2
             case "--min-lr":      minLR = Float(args[i+1]) ?? minLR; i += 2
+            case "--decay-steps": decaySteps = Int(args[i+1]) ?? decaySteps; i += 2
+            case "--no-spike-detect": spikeDetectEnabled = false; i += 1
+            case "--spike-window": spikeWindow = max(2, Int(args[i+1]) ?? spikeWindow); i += 2
+            case "--spike-factor": spikeFactor = max(1.01, Float(args[i+1]) ?? spikeFactor); i += 2
+            case "--log-jsonl":   logJsonlPath = args[i+1]; i += 2
             case "--val-split":   valSplit = Double(args[i+1]) ?? valSplit; i += 2
             case "--val-every":   valEvery = Int(args[i+1]) ?? valEvery; i += 2
             case "--tokenizer":   tokenizerDir = args[i+1]; i += 2
@@ -284,6 +317,26 @@ enum Train {
             print("resuming from \(r) at step \(startStep) (Adam state restarts)")
         } else {
             cfg = configFor(preset)
+            // nanochat-style single-knob: --depth N derives the GPT-2-shaped
+            // (nLayers=N, dModel=64N, nHeads=N, dMlp=4·dModel) tuple,
+            // overriding whatever the preset specified. Preset still
+            // supplies ctx, vocab, dtype. Heads/layers must divide d_model;
+            // the rule guarantees this by construction (dModel = 64·N,
+            // nHeads = N → headDim = 64, the GPT-2 / Llama / nanochat
+            // standard).
+            //
+            // Also force `nKvHeads = nHeads`: the preset may have set
+            // nKvHeads independently for GQA, but nanochat's shape is
+            // full multi-head, no GQA. Without this the
+            // `nHeads % nKvHeads == 0` precondition fires when the
+            // preset's nKvHeads doesn't divide our new nHeads.
+            if let d = depthOverride, d >= 1 {
+                cfg.nLayers = d
+                cfg.dModel = 64 * d
+                cfg.nHeads = d
+                cfg.nKvHeads = d
+                cfg.dMlp = 4 * cfg.dModel
+            }
             cfg.dtype = dtype
             // Apply tokenizer override BEFORE building the model — vocabSize
             // determines the token-embedding shape.
@@ -540,11 +593,28 @@ enum Train {
         // behaviour is preserved verbatim for non-AdamW optimisers and
         // for the GaLore path, both of which fall through to the
         // existing host-loop code below.
-        let useSchedule = (lrSchedule == "cosine" || warmupSteps > 0)
-        let initialLR: Float = useSchedule ? TrainSupport.lrAt(
-            step: startStep, total: steps, warmup: warmupSteps,
-            maxLR: maxLR, minLR: minLR
-        ) : maxLR
+        let useSchedule = (lrSchedule == "cosine" || lrSchedule == "wsd" || warmupSteps > 0)
+        // WSD: auto-default to 10% of total steps if --decay-steps wasn't passed.
+        let effectiveDecaySteps: Int = decaySteps > 0 ? decaySteps : max(1, steps / 10)
+        // Single dispatch point for the LR schedule. Used at init and per-step.
+        let lrAtStep: (Int) -> Float = { step in
+            switch lrSchedule {
+            case "wsd":
+                return lrAtWSD(
+                    step: step, total: steps, warmup: warmupSteps,
+                    decaySteps: effectiveDecaySteps,
+                    maxLR: maxLR, minLR: minLR
+                )
+            case "constant":
+                return maxLR
+            default:  // cosine
+                return TrainSupport.lrAt(
+                    step: step, total: steps, warmup: warmupSteps,
+                    maxLR: maxLR, minLR: minLR
+                )
+            }
+        }
+        let initialLR: Float = useSchedule ? lrAtStep(startStep) : maxLR
         let B = batchSize ?? defaultBatch(cfg)
         let galoreActive = (cfg.galoreRank ?? 0) > 0
         // Pure constant-LR + no-accum: original compile path.
@@ -588,7 +658,7 @@ enum Train {
         steps:         \(startStep) → \(steps)
         corpus:        \(corpusSummary)
         train/val:     \(trainSummary) / \(valSummary)
-        lr schedule:   \(lrSchedule)\(useSchedule ? " (warmup \(warmupSteps), max \(maxLR), min \(minLR))" : " @ \(maxLR)")
+        lr schedule:   \(lrSchedule)\(useSchedule ? " (warmup \(warmupSteps), max \(maxLR), min \(minLR)\(lrSchedule == "wsd" ? ", decay \(effectiveDecaySteps)" : ""))" : " @ \(maxLR)")
         optimizer:     \(optimizerKind.rawValue)
         grad clip:     \(effectiveClip.map { "global L2 ≤ \($0)" } ?? "off")
         grad ckpt:     \(cfg.useGradCheckpoint ? "on (per-block VJP recompute · ~30% slower, ~√L activation mem)" : "off")
@@ -605,6 +675,24 @@ enum Train {
 
         """)
         fflush(stdout)
+
+        // C10 training dashboard log emitter. Append-only JSONL stream
+        // consumed by browser/src/pages/training-dashboard. Off unless
+        // --log-jsonl <path> is passed. Best-effort — failure to open
+        // logs to stderr but does not abort the run.
+        let trainLog: TrainLog? = logJsonlPath.flatMap { p in
+            if let log = TrainLog(path: p) {
+                log.meta(preset: preset, depth: depthOverride,
+                         lrSchedule: lrSchedule, warmup: warmupSteps,
+                         maxLR: maxLR, minLR: minLR,
+                         decaySteps: lrSchedule == "wsd" ? effectiveDecaySteps : nil,
+                         totalSteps: steps, params: model.numParameters(),
+                         batch: B, ctx: cfg.contextLength)
+                return log
+            }
+            fputs("[log-jsonl] failed to open \(p) — proceeding without log\n", stderr)
+            return nil
+        }
 
         // Install SIGINT handler so Ctrl-C flushes a final checkpoint
         // instead of dying mid-step.
@@ -655,6 +743,11 @@ enum Train {
         // to bail on thermal noise).
         let powerPauseEnabled = ProcessInfo.processInfo.environment["TINYGPT_NO_POWER_PAUSE"] != "1"
         _ = pauseCfg  // suppresses warning until cfg flags wire up
+        // Loss-spike detector instance — used only when --no-spike-detect
+        // isn't set. Warms up silently for the first `spikeWindow` steps.
+        var spikeDetector = LossSpikeDetector(
+            window: spikeWindow, factor: spikeFactor
+        )
         for step in startStep..<steps {
             // LR schedule update. When `useCompiledLR` is on (AdamW +
             // schedule), this still works: `optimizer.learningRate =`
@@ -662,10 +755,7 @@ enum Train {
             // `_updateInternal`s the underlying MLXArray in place — the
             // compiled trace keeps using the same scalar object.
             if useSchedule {
-                trainer.optimizer.learningRate = TrainSupport.lrAt(
-                    step: step, total: steps, warmup: warmupSteps,
-                    maxLR: maxLR, minLR: minLR
-                )
+                trainer.optimizer.learningRate = lrAtStep(step)
             }
 
             // Cooperative power/thermal pause check. Every 50 steps to
@@ -697,6 +787,41 @@ enum Train {
                 lastLoss = trainer.accumulatedStep(microBatches: micros)
             }
             lastStep = step + 1
+
+            // Loss-spike detector (observe-only v1). Logs a warning when
+            // the new loss exceeds `spikeFactor × moving-average` over the
+            // last `spikeWindow` steps. v2 will add rollback; v1 just
+            // surfaces the spike so the operator can investigate.
+            var lastSpikeMA: Float? = nil
+            var lastSpikeWasFiring: Bool? = nil
+            if spikeDetectEnabled {
+                let (spike, ma) = spikeDetector.observe(loss: lastLoss, step: step)
+                lastSpikeMA = ma > 0 ? ma : nil
+                lastSpikeWasFiring = spike
+                if spike {
+                    fputs(String(format:
+                        "\n[spike] step %d: loss %.3f > %.1f × moving-avg %.3f over last %d steps. Investigate or --resume from the latest checkpoint with a lower LR.\n",
+                        step + 1, lastLoss, spikeFactor, ma, spikeWindow), stderr)
+                }
+            }
+
+            // Append-only training log (C10). One JSON object per step.
+            // The viewer treats `step_per_s` and `peak_rss_mb` as optional
+            // — we only attach them on the same 50-step cadence as the
+            // stdout status line to avoid IO churn on every step.
+            if let log = trainLog {
+                let isStatusStep = (step == 0 || (step + 1) % 50 == 0 || step == steps - 1)
+                let elapsedNow = -t0.timeIntervalSinceNow
+                let doneNow = step - startStep + 1
+                let sps: Double? = isStatusStep && elapsedNow > 0
+                    ? Double(doneNow) / elapsedNow : nil
+                let peakMB: Double? = isStatusStep
+                    ? Double(MLX.Memory.peakMemory) / (1024 * 1024) : nil
+                log.step(step: step + 1, loss: lastLoss,
+                         lr: trainer.optimizer.learningRate,
+                         stepPerSec: sps, peakRssMB: peakMB,
+                         ma: lastSpikeMA, spike: lastSpikeWasFiring)
+            }
 
             if step == 0 || (step + 1) % 50 == 0 || step == steps - 1 {
                 let elapsed = -t0.timeIntervalSinceNow
@@ -739,6 +864,7 @@ enum Train {
                 }
                 lastValLoss = total / Float(n)
                 fputs(String(format: "    val loss %.3f\n", lastValLoss!), stderr)
+                trainLog?.val(step: step + 1, valLoss: lastValLoss!)
             }
             // Atomic checkpoint
             if let n = saveEvery, let out = outPath, (step + 1) % n == 0 {
@@ -771,6 +897,10 @@ enum Train {
             ? "interrupted at step \(lastStep) of \(steps) after \(String(format: "%.1f", elapsed))s · loss \(String(format: "%.3f", lastLoss))"
             : "done — \(stepsDone) steps in \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", stepsPerSec)) step/s) · final loss \(String(format: "%.3f", lastLoss))"
         print("\n\(summary)")
+        // Flush + close the JSONL log. Idempotent — safe even if the run
+        // was interrupted (the loop's per-step writes already captured
+        // everything up to the last completed step).
+        trainLog?.done(finalStep: lastStep, finalLoss: lastLoss, totalSeconds: elapsed)
 
         // Peak GPU-memory report. Always-on at end of training since the
         // counter was reset at start anyway; the line is one of the most
@@ -1002,6 +1132,10 @@ enum Train {
 
         Core:
           --preset tiny|small|huge|mega|behemoth|titan   (default: tiny)
+          --depth N                       nanochat-style single-knob override.
+                                           Sets nLayers=N, dModel=64·N, nHeads=N,
+                                           dMlp=4·dModel. Preset still supplies
+                                           ctx, vocab, dtype.
           --steps N                       Training steps (default: 500)
           --corpus path.txt               UTF-8 text file (default: random bytes)
           --out path.tinygpt              Where to save the trained checkpoint
@@ -1097,9 +1231,22 @@ enum Train {
           --resume <path.tinygpt>         Continue from a saved checkpoint
                                            (Adam state restarts — 100-step warmup)
           --save-every N                  Atomic checkpoint every N steps
-          --lr-schedule constant|cosine   (default: cosine — standard recipe)
-          --warmup N                      Warmup steps (default: 500 when cosine)
-          --max-lr / --min-lr             Cosine endpoints (defaults: 3e-4 / 3e-5)
+          --lr-schedule constant|cosine|wsd
+                                          (default: cosine. `wsd` = warmup-stable-decay,
+                                           MiniCPM/SmolLM-style; decay phase doubles as
+                                           an annealing window.)
+          --warmup N                      Warmup steps (default: 500 when cosine/wsd)
+          --max-lr / --min-lr             Schedule endpoints (defaults: 3e-4 / 3e-5)
+          --decay-steps N                 WSD decay window in steps (default: 10% of --steps).
+                                           Ignored unless --lr-schedule wsd.
+          --no-spike-detect               Disable loss-spike detector (default: on).
+          --spike-window N                Moving-average window for the spike detector
+                                           (default: 50 steps; min 2).
+          --spike-factor F                Trigger when loss > F × moving-avg (default: 3.0).
+          --log-jsonl <path.jsonl>        Append-only JSON-lines log of the training run
+                                           (one record per step + val + done event).
+                                           Off by default; consumed by the in-house
+                                           training dashboard at /training-dashboard.
           --val-split 0.0-0.2             Hold out last fraction of corpus for val
           --val-every N                   Eval val loss every N steps (default: 200)
 

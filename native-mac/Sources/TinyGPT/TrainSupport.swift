@@ -32,6 +32,12 @@ enum TrainSupport {
         return minLR + (maxLR - minLR) * Float(cos)
     }
 
+    // MARK: - WSD scheduler + loss-spike detector
+    //
+    // `lrAtWSD` and `LossSpikeDetector` were hoisted to `TinyGPTModel/
+    // TrainSchedHelpers.swift` so the unit tests in `TinyGPTModelTests`
+    // can reach them. Train.swift calls them directly (no qualifier).
+
     // MARK: - Atomic checkpoint write
 
     /// Write the file to `<path>.tmp`, fsync, then rename to `<path>`.
