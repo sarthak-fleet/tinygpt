@@ -60,6 +60,10 @@ export default defineConfig({
   },
 
   vite: {
+    // Fleet standard (VoidZero ecosystem) — Lightning CSS as the CSS
+    // transformer + minifier. Already bundled in Vite, just needs opting in.
+    css: { transformer: "lightningcss" },
+    build: { cssMinify: "lightningcss" },
     // Astro defaults Vite's envPrefix to "PUBLIC_" only. Our analytics
     // shim reads VITE_POSTHOG_KEY (the Vite-standard prefix), and the
     // GitHub Actions secret is named accordingly. Without this override,
