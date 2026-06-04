@@ -1,138 +1,122 @@
 # Session handoff — pick this up cleanly
 
-A fresh-context agent should read this first, then `docs/single_machine_roadmap.md`.
+A fresh-context agent should read this first, then `docs/PLAN.md`.
 
-## What's running right now
+## Snapshot (top of session-end 2026-06-04 PM)
 
-**Background training (do NOT kill — user explicitly wants it running):**
+**Branch:** `main` · **Working tree:** clean save for `.claude/` (session state) and `default.profraw` (test artifact, gitignore-eligible).
 
-- **PID 95977** — `tinygpt train --preset huge --tokenizer /tmp/smollm2 --corpus /tmp/fineweb-edu-500M.txt --dtype bfloat16 --batch 4 --accum 4 --ctx 512 --steps 5000 --save-every 100 ...`
-- Output: `/tmp/huge-fineweb.log` (currently empty — still in BPE encode phase, ~30-60 min before first step)
-- Checkpoint: `/tmp/huge-fineweb.tinygpt` (atomic save every 100 steps once training proper begins)
-- Wrapped under `caffeinate -di` to prevent display+idle sleep
+**Most recent commits** (newest first — confirm via `git log --oneline -10`):
 
-**Background process inventory at handoff time** (`pgrep -fl 'tinygpt train'`):
 ```
-95977  tinygpt train --preset huge ...
-95978  caffeinate -di tinygpt train ...
+<sha> train: --seed flag for deterministic model init (C9 v1)
+<sha> browser: training-run dashboard viewer (C10 frontend)
+<sha> deps: bump mlx-swift 0.31.3 → 0.31.4 (B16)
+<sha> train: WSD scheduler + --depth + spike detector + JSONL log
+<sha> docs: PLAN.md — roadmap + 2026-06-04 competitor sweep
 ```
 
-## Why we're on Huge not Mega
+**Nothing is running.** No background `tinygpt train` process, no pending shell jobs. `pgrep -fl 'tinygpt train'` should return nothing.
 
-The Mega-bf16 attempt (100M params, ctx=1024, B=4×accum=4) **died at step 1** with no error message in the log. Almost certainly OOM during the first backward — 8 GB allocated, mostly compressed by macOS. The crash happened **before** save-every-1000 fired, so nothing was saved.
+## What just shipped (this session)
 
-The current Huge run cuts the activation memory ~4× (preset is 9.6M body params, ctx=512 vs Mega's 24L/d=512/ctx=1024) and saves every 100 steps for crash-resilience. This is the de-risked retry.
+In commit order, oldest → newest:
 
-## Source of truth: the roadmap doc
+1. **PLAN.md sweep** — pretrain + runtime quality lane (B10–B20, C9, C10) + 2026-06-04 competitor sweep (nanochat, mlx-lm, Ollama+MLX, EXO, SAELens, Apple M5 NA, modded-nanogpt, Group-SAE). Docs only.
+2. **B11 WSD scheduler** — `--lr-schedule wsd` + `--decay-steps N`. MiniCPM/SmolLM-style warmup-stable-decay. Decay phase doubles as annealing window.
+3. **B18 nanochat `--depth N`** — single-knob HP override. Sets nLayers=N, dModel=64·N, nHeads=N (nKvHeads=N — full multi-head, no GQA), dMlp=4·dModel. Preset still supplies ctx/vocab/dtype.
+4. **B12 v1 loss-spike detector** — observe-only; logs `[spike]` to stderr when loss > F × moving-average. Flags: `--no-spike-detect`, `--spike-window N`, `--spike-factor F`. v2 (auto-rollback) deferred.
+5. **B20 cross-stream attention** — research only, folded into PLAN.md §4. Verdict: speedrun-empirical, modest 5ms gain, not worth porting at our scale.
+6. **B16 mlx-swift 0.31.3 → 0.31.4** — bumped, bench at small preset showed no signal (workload too small to be compute-bound). Real M5 NA verification deferred until a Mega/Huge checkpoint exists.
+7. **C10 training-run dashboard** — `--log-jsonl <path>` appends JSON-lines stream (meta/step/val/done events). Viewer at `/training-dashboard.astro` (zero-dep, multi-run overlay, drag-drop).
+8. **C9 v1 determinism** — `--seed UInt64` seeds MLXRandom before model construction. Init reproducible; batch sampling still uses non-seedable `Int.random` (v2 follow-up). See `docs/determinism.md`.
 
-**`docs/single_machine_roadmap.md`** (1435 lines, 7 parts) is the master plan for what to build. Don't reinvent — read it first.
+**Files touched this session** (use `git diff 5143366..HEAD --stat`):
 
-Quick TOC:
-- **Part 1** — Tier 1-4 ROI ranking
-- **Part 2** — orthogonal categories (optimizers, training stability, data, tokenization, interpretability, inference, browser perf, architecture, PEFT, infra)
-- **Part 3** — top-10 recommended order
-- **Part 4** — open-source datasets (with verified URLs + licenses)
-- **Part 5** — recent research, 2024-2026, web-verified with arxiv links
-- **Part 6** — **the phased roadmap** (10 phases × ~1 week each)
-- **Part 7** — what we can't add right now (categorized blockers)
+- New: `Sources/TinyGPT/TrainLog.swift`, `Sources/TinyGPTModel/TrainSchedHelpers.swift`, `Tests/TinyGPTModelTests/TrainSchedHelpersTests.swift`, `browser/src/pages/training-dashboard.astro`, `docs/determinism.md`
+- Modified: `Sources/TinyGPT/Train.swift` (many flags + plumbing), `Sources/TinyGPT/TrainSupport.swift` (refactor: helpers moved to TinyGPTModel), `Package.swift` (mlx-swift bump), `docs/PLAN.md`
 
-## What was just decided + interrupted
+## Tests
 
-The user kicked off goal: *"phase one, phase two, phase three, phase four are small things that you can do right away"* — meaning execute Phases 1-4 of Part 6. Then halted the session before any code shipped.
+The durable env limitation still applies: **`swift test` doesn't work outside Xcode** (no Testing.framework + no MLX default.metallib in SPM build). All tests written this session compile but aren't run.
 
-**Tasks marked `in_progress` but with zero code written:**
+16 new unit tests added in `Tests/TinyGPTModelTests/TrainSchedHelpersTests.swift` cover the WSD scheduler math (warmup, stable, 1−√(t) decay, endpoints, clamps) and the loss-spike detector (warmup never-fires, threshold, debounce, NaN safety). Run them via Xcode (Product → Test) before merging anything that touches the helpers.
 
-| Task | Status at interrupt | Files to touch |
+`swift build -c release` is the build verifier in this env. All commits this session pass.
+
+## Where to pick up
+
+`docs/PLAN.md` §3 is the source of truth for what's next. The current pending TODO items, ranked roughly by ROI:
+
+### Tier 1 — no training required (ship today)
+
+| Task | Effort | Files to touch |
 |---|---|---|
-| #149 P1: NEFTune | reads only, no edits | `Sources/TinyGPT/SFT.swift`, `Sources/TinyGPT/DPO.swift` — add small uniform noise to embedding output during forward (alpha=5 typical) |
-| #150 P1: Gradient clipping | reads only, no edits | `Sources/TinyGPTModel/Trainer.swift`, `Sources/TinyGPTModel/TrainerHF.swift` — clip total grad norm (~1.0) before optimizer step |
-| #151 P1: LoRA+ | reads only, no edits | `Sources/TinyGPTModel/Lora.swift` (`LoraLinear`) — add `loraBLrMultiplier` field (default 16); thread through trainer via per-param LR group or override in optimizer call |
+| **B13 Interp-on-checkpoints infra** | ~half-day | New multi-checkpoint loader for `tinygpt sae`, `tinygpt memit`, `tinygpt patch`. Save-every (already exists) + a glob loader. |
+| **B17 SAELens / Neuronpedia format export** | ~2 days | Read our SAE artifact → write SAELens-compatible safetensors + config. Look at `decoderesearch/SAELens` for the schema. |
+| **B19 Group-SAE** | ~2-3 days | Layer-group variant of existing SAE trainer. See arxiv 2410.21508. |
+| **B10 Quality classifier** | ~2 days build + ~1 hr classifier training | FineWeb-Edu-style fastText scorer; tiny scaffold first, the corpus filter use is a separate ~days job. |
 
-**Other Phase 1-4 tasks (pending, untouched):** #152 through #160. Full descriptions in `TaskList`.
+### Tier 2 — light training (~30 min to a few hrs)
 
-**No code was modified in this session-tail**, so nothing is in a half-shipped state. Last successful build was after the documentation work — repo should `xcodebuild` cleanly.
+| Task | Training cost | Notes |
+|---|---|---|
+| **B14 Speculative decoding** infra | 0 to build | Algorithm in inference path. Needs two trained models — tiny + small smoke is fine for a demo. |
+| **B13 demo** (after Tier 1 infra) | ~10 min training (huge, 500 steps, save-every 50) | Produces 10 checkpoints to run SAE/MEMIT/patch across. |
 
-## What shipped earlier this session (already on disk)
+### Tier 3 — serious training (the A-track gate)
 
-These ARE on disk and merged — do not redo:
+- **A2-A6 dataset pulls** (~3-4 hrs wall, mostly network). Then **A1 specialist** (3-5 days wall) unblocks #193 ANE experiment, B6 Mac app, B7 routing. See PLAN.md §3 Tier A.
 
-**Mac CLI new commands / features:**
-- `tinygpt sft` — SFT with response-only loss masking + ChatML/Alpaca/Llama/plain templates
-- `tinygpt dpo` — DPO trainer (policy + frozen reference, beta param, log-sigmoid loss)
-- `tinygpt train --dtype bfloat16` — bf16 training, parity-verified
-- `tinygpt train --accum N` — gradient accumulation
-- `tinygpt train --tokenizer <hf-dir>` — BPE training for from-scratch path
-- `tinygpt train --ctx N` — context length override
-- `tinygpt train --resume <path>` + `--save-every N` (atomic) + cooperative Ctrl-C + cosine LR + val loss tracking
-- `tinygpt sample --quantize int4|int8` — MLX `quantize` integration
-- Multi-LoRA composition for HF models (`LoraCompositionHF.swift`)
-- HF KV cache (RoPE offset + GQA correct)
-- HF-tokenized fine-tune path
-- SwiftUI Fine-tune tab
+### Deferred
 
-**Browser:**
-- Auto-save URL param (`?autoSave=NAME`) — fires download as soon as training completes; fixes the Sea Tales failure mode
-- `train_gallery_one.mjs` reordered: save checkpoint FIRST, sample after (sample failure no longer loses model)
-- `score_gallery.mjs` + `score_gallery_tasks.mjs` — Node + WASM scorers for the three launch benchmarks
-- Leaderboard page at `/leaderboard.html` — 3 tabs (TinyStories PPL, Sort-6, Reverse-16), 5 scored entries
-- Manifest schema extended with `submission`, `benchmarks`, `featured` fields
-- Benchmark engine types: `browser/src/benchmarks/{types,registry,tinystories-ppl,sort-6,reverse-16}.ts`
+- **B12 v2 auto-rollback** — needs full Adam-state persistence first (currently restart-only on `--resume`)
+- **B15 layer-wise LR for SFT** — pretrain has it; SFT uses a different optimizer path (LoRA-tagged params); LoRA-aware port is bigger than half-day
+- **B16 v2 M5 NA verification** — meaningful only with a Mega/Huge checkpoint
+- **C9 v2 full bit-exact replay** — replace stdlib `Int.random` in `sampleBatchRaw` with a seeded host RNG (see `docs/determinism.md` for the plan)
 
-**Docs:**
-- `docs/single_machine_roadmap.md` (1435 lines, source of truth)
-- `docs/training_phases.md` (pretrain → SFT → DPO tutorial)
-- `docs/memory_tradeoffs.md` (bf16, grad accum, grad checkpointing)
-- `docs/leaderboard.md` (benchmark framework)
-- `python_ref/fetch_hf_corpus.py` (HF dataset streaming importer)
-- README.md updated to link the new docs
+## How to verify nothing's broken before claiming a phase done
 
-**Tests:** 14/14 still passing as of the latest test run.
+1. `cd native-mac && swift build -c release` — must complete with `ok (build complete)`
+2. **For training paths**: run a smoke train, e.g.
+   ```bash
+   ./native-mac/.build/arm64-apple-macosx/release/tinygpt train \
+     --preset small --steps 30 --warmup 5 --lr-schedule wsd --decay-steps 10 \
+     --val-split 0.1 --val-every 10 --seed 42 \
+     --corpus data/examples/tiny-corpus.txt --out /tmp/smoke.tinygpt \
+     --log-jsonl /tmp/smoke.jsonl --sample-every 100
+   ```
+   Should finish in <5 s, write a valid `.tinygpt`, and emit a 35-ish-line JSONL.
+3. **For browser changes**: `cd browser && npm run build` — must complete with `[build] Complete!`. Then `npm run dev` and visually check the affected page.
+4. **For new helpers in TinyGPTModel**: add an XCTest to `Tests/TinyGPTModelTests/`. It won't run here (Xcode-only) but compiles into the test target on a developer machine.
 
-## Where to start next
+## Files NOT to touch without asking
 
-**Smallest valuable next move (if you've got ~3 hours):** finish Phase 1 — ship NEFTune, gradient clipping, LoRA+, persistent tokenized cache, browser-side benchmark runner. ~5 small changes, all independent.
+- Any trained checkpoint: `/tmp/*.tinygpt`, `data/gallery/*.tinygpt`, `browser/public/gallery/**/*.bin`
+- Tokenizers under `/tmp/smollm2/`, `/tmp/*-tokenized/`
+- Secrets / env files / cloud configs (per global CLAUDE.md)
+- `Package.resolved` — let SPM regenerate it on `swift package update`
+- `browser/src/content/docs/` — regenerated from `docs/**/*.md` by `browser/scripts/copy_docs.mjs` at build time
 
-**Per-item kickoff hints:**
+## User constraints (from CLAUDE.md + auto-memory)
 
-1. **NEFTune (#149)** — In `SFT.swift` and `DPO.swift`, after embedding lookup but before block layers, add: `embed = embed + uniformNoise(scale = alpha / sqrt(embed_dim * seq_len))` with `alpha = 5.0` typical. Off by default; enable via `--neftune-alpha 5.0` flag.
-
-2. **Gradient clipping (#150)** — In `Trainer.step` and `Trainer.accumulatedStep`, after `gradFn(...)` returns `grads` and before `optimizer.update(...)`, clip the gradient by global L2 norm. MLX-Swift exposes `MLX.clipNorm` (check `MLX/Optimizers.swift` or use a manual `g * (max_norm / norm).clipped(0, 1)` pattern). Same for `TrainerHF`.
-
-3. **LoRA+ (#151)** — In `LoraLinear.init`, add `loraBLrMultiplier: Float = 16.0`. To thread it through the optimizer, either (a) give B its own AdamW instance, (b) scale B's gradient by 16× in a custom step, or (c) split the model's parameter dict into two groups and pass two LRs. Option (b) is least invasive: in the trainer, walk grads, multiply any param whose path ends in `loraB` by 16 before applying. Test that loss is still decreasing.
-
-4. **Persistent token cache (#152)** — In `Train.swift`'s BPE branch and `SFT.swift`'s example builder, before calling `tok.encode(text)`, check for a `.tokens` file with matching hash of (corpus_path, tokenizer_dir, text_hash). If present, load Int32 array directly. Else, encode + write cache. Saves the 10-30 min BPE step on every Mega run.
-
-5. **Browser benchmark runner** — In `browser/src/main.ts` worker code, add a `runBenchmark(id)` action handler that loads `browser/src/benchmarks/<id>.ts`, invokes its `run(model)` against the currently-loaded model, returns the score. Wire a "Run benchmark" button in the gallery dialog or on the loaded-model UI.
-
-After Phase 1, Phase 2 alignment variants (SimPO, ORPO, KTO) are all loss-function changes to the existing `DPO.swift` — they share the same trainer skeleton.
-
-Phase 4's distillation trainer is the headliner — most worth shipping for both the educational story and the leaderboard play.
-
-## Files that are NOT to be touched without asking
-
-- `data/gallery/*.tinygpt` — trained gallery checkpoints
-- `browser/public/gallery/*.bin` — fp16-packed published gallery
-- `browser/public/gallery/manifest.json` — leaderboard manifest (re-generate via `finalize_gallery.mjs` + `score_gallery.mjs`, don't hand-edit)
-- `/tmp/fineweb-edu-500M.txt` — the 2 GB pretraining corpus (took ~30 min to download)
-- `/tmp/smollm2/` — downloaded HF model + tokenizer (used by all BPE paths)
-- `/tmp/huge-fineweb.tinygpt` — will be the output of the currently-running training
-
-## User constraints (from CLAUDE.md + memory)
-
-- Ask before installing packages, large downloads, deployments
+- Ask before install / migration / network-heavy commands
 - Prefer small reviewable diffs
 - Never use `--no-verify` on git hooks
 - Don't edit secrets / env files / cloud configs
-- The user is shipping solo, budget-constrained — Tinker etc. are ruled out
-- "No quality regression" rule — perf paths need a parity gate
-- "Opportunistic edge" — best perf for latest-Chrome users, graceful degradation
+- Solo dev, budget-constrained — Tinker / cloud-training off the table
+- **No quality regression** — every perf path needs an automated numerics gate
+- **Opportunistic edge** — best perf for latest-Chrome users, graceful degradation
+- **PLAN.md is canonical** — older planning docs stub-link to it
+- **No launch optics** — recent guidance: "there is no launch; just a good product." Optimize for users-of-the-thing, not narrative.
 
-## What to verify before claiming any phase done
+## Where to read more
 
-The doc's bottom checklist applies to code shipping too:
-1. Code compiles (`xcodebuild -scheme tinygpt` + `xcodebuild -scheme TinyGPTApp`)
-2. 14/14 unit tests pass (`xcodebuild test -scheme TinyGPT-Package`)
-3. For new training paths: parity-test against the fp32 / pre-change version (loss curve within ~2% drift)
-4. For new sample paths: greedy output identical to the pre-change version
+- `docs/PLAN.md` — canonical roadmap (§1 shipped, §2 skipped, §3 TODO, §4 research catalogue, §5 appendix)
+- `docs/MAP.md` — old-path → new-path index, canonical-home list for shared concepts (LoRA, MoE, quantization, etc.)
+- `docs/determinism.md` — C9 contract + v2 roadmap (new this session)
+- `docs/training/{pretrain,sft,dpo}.md` — phase-specific guides
+- `docs/interpretability.md` — SAE / MEMIT / patch / logit lens canonical home
+- `CLAUDE.md` and `AGENTS.md` at project root — global agent instructions
 
-Good luck. The roadmap doc is the plan; this file just gets you oriented.
+Good luck. Read PLAN.md before doing anything substantive; this file just gets you oriented.
