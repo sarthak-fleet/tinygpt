@@ -20,7 +20,7 @@ the original lives at exactly one of the new paths:
 | `docs/single_machine_roadmap.md` (Part 2, categories) | [`docs/roadmap/categories.md`](roadmap/categories.md) |
 | `docs/single_machine_roadmap.md` (Part 3, top-10 order) | [`docs/roadmap/recommended_order.md`](roadmap/recommended_order.md) |
 | `docs/single_machine_roadmap.md` (Part 4, datasets) | [`docs/roadmap/datasets.md`](roadmap/datasets.md) |
-| `docs/single_machine_roadmap.md` (Part 5, recent research) | [`docs/roadmap/recent_research.md`](roadmap/recent_research.md) |
+| `docs/single_machine_roadmap.md` (Part 5, recent research) | absorbed into [`docs/PLAN.md`](PLAN.md) §4; archived at [`docs/archive/recent_research.md`](archive/recent_research.md) |
 | `docs/single_machine_roadmap.md` (Part 6, phased plan) | [`docs/roadmap/phased_plan.md`](roadmap/phased_plan.md) |
 | `docs/single_machine_roadmap.md` (Part 7, blockers) | [`docs/roadmap/blockers.md`](roadmap/blockers.md) |
 | `docs/single_machine_roadmap.md` (honest summary) | [`docs/roadmap/honest_summary.md`](roadmap/honest_summary.md) |

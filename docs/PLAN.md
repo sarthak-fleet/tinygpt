@@ -1,12 +1,12 @@
 ---
 title: TinyGPT — master plan (shipped / skipped / TODO)
-description: Single source of truth for what's shipped, skipped, and still to build. Consolidated from docs/roadmap/*, docs/progress.md, docs/backlog.md, docs/feature_audit_2026_05_31.md. Replaces them as the canonical reference; the older docs are now pointer stubs to this file.
+description: Single source of truth for what's shipped, skipped, and still to build. Consolidated from docs/roadmap/*, docs/progress.md, docs/backlog.md, docs/feature_audit_2026_05_31.md, and docs/roadmap/recent_research.md (paper catalogue). Replaces them as the canonical reference; the older docs are now pointer stubs or archived under docs/archive/.
 ---
 
 # TinyGPT — master plan
 
 **Last verified against codebase**: 2026-06-02 (third pass — multiple re-audits this session caught additional stale ⬜ markers)
-**Sources merged**: `docs/roadmap/*` · `docs/progress.md` · `docs/backlog.md` · `docs/feature_audit_2026_05_31.md`
+**Sources merged**: `docs/roadmap/*` · `docs/progress.md` · `docs/backlog.md` · `docs/feature_audit_2026_05_31.md` · `docs/roadmap/recent_research.md` (paper catalogue → §4)
 
 Three sections — **shipped**, **skipped**, **TODO**. Every claim verified
 against the code. The first audit caught Lion/Sophia/Muon/PEFT-bundle/
@@ -60,7 +60,7 @@ all shipped, all previously marked ⬜.
 - ✅ Mini-router trainer (`tinygpt train-extractor`)
 - ✅ Magpie synthetic-instruction generator (`tinygpt magpie`)
 - ✅ Sequence packing for SFT
-- ✅ NEFTune (noisy embeddings)
+- ✅ NEFTune (noisy embeddings) — `--neftune-alpha` in `sft` + `dpo` (matches the paper's "Noisy Embeddings Improve **Instruction Finetuning**" scope; not in the pretrain path)
 - ✅ Gradient clipping (`--grad-clip F`, default 1.0, on train + sft + dpo)
 - ✅ z-loss auxiliary (`--z-loss-weight F`)
 - ✅ Embedding tying (`tieEmbeddings` config flag)
@@ -585,6 +585,184 @@ phrasing was loose. The real options are the three above.
 
 ---
 
+# 4. Research absorbed — paper × verdict
+
+External-paper catalogue (was `docs/roadmap/recent_research.md`, now
+archived at `docs/archive/recent_research.md`). Each row: technique →
+one-line source → verdict pointing at where it lives in this codebase,
+or why it doesn't.
+
+## 4.1 Implemented (techniques we ship)
+
+### Alignment / preference
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| DPO | [Rafailov et al., NeurIPS 2023](https://arxiv.org/abs/2305.18290) | `tinygpt dpo` |
+| KTO | [Ethayarajh et al., 2024](https://arxiv.org/abs/2402.01306) | `tinygpt dpo --variant kto` |
+| ORPO | [Hong et al., 2024](https://arxiv.org/abs/2403.07691) | `tinygpt dpo --variant orpo` |
+| SimPO | [Meng et al., 2024](https://arxiv.org/abs/2405.14734) | `tinygpt dpo --variant simpo` |
+| NEFTune | [Jain et al., NeurIPS 2023](https://arxiv.org/abs/2310.05914) | `--neftune` |
+
+### PEFT
+
+All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, surfaced via `tinygpt sft`.
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| DoRA | [Liu et al., 2024](https://arxiv.org/abs/2402.09353) | default in `sft` |
+| GaLore | [Zhao et al., 2024](https://arxiv.org/abs/2403.03507) | `Optimizers.swift` |
+| LoftQ | [Li et al., ICLR 2024](https://arxiv.org/abs/2310.08659) | `PeftVariants.swift` |
+| VeRA | [Kopiczko et al., ICLR 2024](https://arxiv.org/abs/2310.11454) | `PeftVariants.swift` |
+| PISSA | [Meng et al., 2024](https://arxiv.org/abs/2404.02948) | `PeftVariants.swift` |
+| LoRA+ | [Hayou et al., ICML 2024](https://arxiv.org/abs/2402.12354) | `PeftVariants.swift` |
+| rsLoRA | [Kalajdzievski, 2023](https://arxiv.org/abs/2312.03732) | `PeftVariants.swift` |
+
+### Quantization
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| GPTQ | [Frantar et al., ICLR 2023](https://arxiv.org/abs/2210.17323) | `tinygpt gptq` + `GPTQReader.swift` |
+| AWQ | [Lin et al., MLSys 2024](https://arxiv.org/abs/2306.00978) | AWQ safetensors reader |
+| HQQ | [Badri & Shaji, 2024](https://mobiusml.github.io/hqq_blog/) | `tinygpt hqq` |
+| KIVI | [Liu et al., 2024](https://arxiv.org/abs/2402.02750) | KV cache quantization path |
+
+### Inference / efficiency
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| Speculative decoding | [Leviathan et al., ICML 2023](https://arxiv.org/abs/2211.17192) | `tinygpt train-heads --type medusa\|eagle` + decode loop |
+| Medusa | [Cai et al., 2024](https://arxiv.org/abs/2401.10774) | same path, head type |
+| EAGLE-2 | [Li et al., 2024](https://arxiv.org/abs/2406.16858) | same path, head type |
+| StreamingLLM | [Xiao et al., ICLR 2024](https://arxiv.org/abs/2309.17453) | attention-sink path |
+
+### Architecture variants
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| MTP | [Gloeckle et al., ICML 2024](https://arxiv.org/abs/2404.19737) | `Train.swift`, `docs/mtp.md` |
+| Differential Transformer | [Microsoft 2024](https://arxiv.org/abs/2410.05258) | `DifferentialAttention.swift`, `--diff-attn` |
+| Mixture of Depths | [Raposo et al., 2024](https://arxiv.org/abs/2404.02258) | soft sigmoid gate (hard top-K upstream-blocked) |
+| LASER | [Sharma et al., ICLR 2024](https://arxiv.org/abs/2312.13558) | `tinygpt laser` |
+
+### Optimizers
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| Sophia | [Liu et al., 2023](https://arxiv.org/abs/2305.14342) | `Optimizers.swift` |
+| Lion | [Chen et al., NeurIPS 2023](https://arxiv.org/abs/2302.06675) | `Optimizers.swift` |
+| Muon | [Jordan, 2024](https://kellerjordan.github.io/posts/muon/) | `Optimizers.swift` |
+| GaLore | (see PEFT) | `Optimizers.swift` |
+
+### Distillation
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| Soft-targets distillation | Hinton et al., 2015 | `tinygpt distill` |
+
+### Synthetic data
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| Magpie | [Xu et al., ICLR 2025](https://arxiv.org/abs/2406.08464) | `tinygpt magpie` |
+| TinyStories | [Eldan & Li, 2023](https://arxiv.org/abs/2305.07759) | dataset source |
+
+### Test-time compute
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| Best-of-N | [Snell et al., 2024](https://arxiv.org/abs/2408.03314) | `tinygpt bon --scan` |
+
+### Evolution Strategies
+
+| Technique | Source | Where it lives |
+|---|---|---|
+| ES at scale | [Qiu et al., Sept 2025](https://arxiv.org/abs/2509.24372) | `tinygpt es`, `docs/evolution_strategies.md` |
+
+## 4.2 Cannot — blocked, parked, or skipped
+
+### 🚧 Blocked by hardware
+
+| Technique | Source | Why parked |
+|---|---|---|
+| BitNet b1.58 | [Ma et al., 2024](https://arxiv.org/abs/2402.17764) | Ternary from-scratch needs 100B+ tokens to validate; not differentiating at <1B params on our hardware. Park; revisit if a clear gallery-model use case appears. |
+| FP4 training (NVFP4 / Quartet) | [Wang Jan 2025](https://arxiv.org/abs/2501.17116) · [Quartet II Jan 2026](https://arxiv.org/abs/2601.22813) | Apple M-series has no native FP4 ops |
+| FP8 training | — | Needs H100 / Blackwell |
+
+### 🚧 Blocked upstream
+
+| Technique | Source | Why parked |
+|---|---|---|
+| Hard sparse MoE routing | DeepSeek-V3 family | MLX-Swift no `scatter_add`; soft (dense) routing ships |
+| Real QLoRA | [Dettmers et al., 2023](https://arxiv.org/abs/2305.14314) | MLX-Swift quantized arrays don't autograd through; manual fake-quant shipped (pedagogical, no memory win) |
+
+### ❌ Skipped — different family / not worth the seat
+
+| Technique | Source | Why skipped |
+|---|---|---|
+| Mamba / Mamba-2 | [Gu & Dao, 2023/2024](https://arxiv.org/abs/2312.00752) | Linear-time SSM, different family; better as side-project |
+
+### ❌ Dropped — value-add filter (subsumed by what ships)
+
+| Technique | Source | Subsumed by |
+|---|---|---|
+| IPO | [Azar et al., 2023](https://arxiv.org/abs/2310.12036) | DPO with high β regularizes equivalently |
+| CPO | [Xu et al., 2024](https://arxiv.org/abs/2401.08417) | DPO + BC term marginal over SimPO at our scale |
+| Self-Instruct | [Wang et al., 2023](https://arxiv.org/abs/2212.10560) | Magpie (model's own distribution; no seed needed) |
+| Evol-Instruct | [Xu et al., 2024 (WizardLM)](https://arxiv.org/abs/2304.12244) | Magpie subsumes |
+| MiniPLM | [Gu et al., NeurIPS 2024](https://openreview.net/forum?id=tJHDw8XfeC) | Distill-for-pretraining — needs a teacher-student pair we don't have |
+| Distillation with Training Wheels | [Feb 2025](https://arxiv.org/abs/2502.17717) | `cloud-escalate` already provides the analogous "student asks teacher" deployment shape |
+| DEITA | [Liu et al., 2024](https://arxiv.org/abs/2312.15685) | Instruction-data quality framework — only matters once SFT corpus > 1M samples |
+
+## 4.3 Planned — queued for a future training run
+
+| Item | Source | Where in §3 |
+|---|---|---|
+| GRPO / DAPO (RLVR pipeline) | [DeepSeek-R1, Jan 2025](https://arxiv.org/abs/2501.12948) · [DAPO, March 2025](https://arxiv.org/abs/2503.14476) | **Tier 5 §5.1** — Reasoning training on a 22M model. GRPO = mental model; DAPO = implementation. |
+| Reasoning-trace distillation | DeepSeek-R1-Distill series, OpenThoughts | Tier 5 §5.1 — SFT-on-traces is the first half of §5.1 before RLVR |
+| Snell test-time-compute scaling experiment | [Snell et al., 2024](https://arxiv.org/abs/2408.03314) | Tier 5 §5.2 — `bon` shipped; the scaling-curve experiment at 22M matches Snell methodology |
+| Vision-language toy | LLaVA family | Tier 5 §5.3 |
+| Diffusion LM micro | (multiple) | Tier 5 §5.4 |
+| Real sparse MoE kernels | DeepSeek-V3 style | Tier 5 §5.5 (also upstream-blocked on `scatter_add`) |
+| TTS toy | VALL-E / MusicGen family | Tier 5 §5.6 |
+
+**Small additions, no current owner — append when a slot opens:**
+
+| Item | Source | Effort |
+|---|---|---|
+| LISA optimizer | [Pan et al., 2024](https://arxiv.org/abs/2403.17919) | ~1 day; layerwise importance sampling, drop-in alongside Sophia/Muon |
+| MiniLLM KL variants | [Gu et al., ICLR 2024](https://arxiv.org/abs/2306.08543) | ~1-2 days; reverse-KL / skew-KL switches on top of existing `tinygpt distill` |
+| Distilling Step-by-Step | [Hsieh et al., ACL 2023](https://arxiv.org/abs/2305.02301) | ~1-2 days; rationale-distillation recipe on top of `tinygpt distill` |
+| DoReMi data-mixture optimization | [Xie et al., NeurIPS 2023](https://arxiv.org/abs/2305.10429) | Park until ≥3 distinct domains are mixed at non-trivial scale |
+
+## 4.4 Reference reads (no verdict — context only)
+
+For mental-model framing, not techniques to implement:
+
+- **State of GPT** (Karpathy, 2023) — pretrain → SFT → RM → PPO; we skip RM/PPO for DPO
+- **Tulu 3** ([Lambert et al., 2024](https://arxiv.org/abs/2411.15124)) — open RLVR recipe; informs §5.1
+- **SmolLM blog** ([HF, 2024](https://huggingface.co/blog/smollm)) — 135M/360M/1.7B small-model recipe
+- **HuggingFace Alignment Handbook** ([repo](https://github.com/huggingface/alignment-handbook)) — reference SFT/DPO recipes at 7B
+- **Survey of LLMs** ([Zhao et al., arXiv 2303.18223](https://arxiv.org/abs/2303.18223)) — broad survey, continuously updated
+- **On-Policy Distillation Survey** ([April 2026](https://arxiv.org/abs/2604.00626)) — confirms distillation dominates for shipping small models
+
+**2026 small-model peers** (for positioning, not adoption): SmolLM3-3B · Qwen3.5-0.8B · Phi-4-mini-instruct · Gemma-3n-E2B-IT. Implication: the niche is "browser-trainable + every byte of training code is here," not "perf-competitive with Phi-4."
+
+**Tools worth knowing**:
+- [Unsloth](https://github.com/unslothai/unsloth) — Triton-kernel fine-tune framework; not Mac/MLX but study for technique transfer
+- [Argilla Distilabel](https://github.com/argilla-io/distilabel) — Python pipeline for synthetic SFT/DPO (wraps Magpie/DEITA)
+
+**Proprietary / out of scope**: OpenAI o1 / o3 (closed-weights; reframed the field around test-time compute, no adoptable artifact). DeepSeek-V3 (671B-MoE, scale-blocked; informs MTP + MoE design). Qwen3 (model family, not a technique).
+
+## 4.5 Coverage cutoff
+
+The catalogue was hand-curated up to assistant knowledge cutoff
+**January 2026** plus best-effort web-search additions for Feb-May
+2026 (coverage spottier there). Today is **2026-06-04**. Future papers
+append row-by-row into §4.1 / §4.2 / §4.3.
+
+---
+
 # Appendix — index of source docs absorbed by this file
 
 This doc replaces the multi-file roadmap split. The source docs are kept for context but should be treated as historical; **edit this file**, not them.
@@ -603,10 +781,11 @@ This doc replaces the multi-file roadmap split. The source docs are kept for con
 | `docs/progress.md` | Mac+Web shipped dashboard | Absorbed into §1 |
 | `docs/backlog.md` | ROI-ordered "what's left" (Tier A/B/C/D) | Absorbed into §3 |
 | `docs/feature_audit_2026_05_31.md` | CLI smoke audit | Cross-referenced; was the verification baseline |
+| `docs/roadmap/recent_research.md` | Paper catalogue (2024-2026) | Absorbed into §4; archived at `docs/archive/recent_research.md` |
 
 **Still canonical (deep dives, not absorbed)**: `docs/roadmap/datasets.md`,
-`docs/roadmap/recent_research.md`, `docs/roadmap/north_star_refined.md`,
-and the per-technique docs (`distillation.md`, `interpretability.md`,
+`docs/roadmap/north_star_refined.md`, and the per-technique docs
+(`distillation.md`, `interpretability.md`,
 `moe.md`, `mtp.md`, `lora_guide.md`, `precision.md`, `memory_tradeoffs.md`,
 `perf_quest.md`, `decision_log.md`). Those don't duplicate planning — they
 explain *how* shipped pieces work.

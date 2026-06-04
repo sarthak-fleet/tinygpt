@@ -94,4 +94,4 @@ for now, eyeball samples.
   Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290)"),
   NeurIPS 2023. The closed-form derivation in §4 is the math we implement.
 - Other preference recipes — SimPO, ORPO, KTO, IPO — in
-  [`docs/roadmap/recent_research.md`](../roadmap/recent_research.md).
+  [`docs/PLAN.md`](../PLAN.md) §4.1 (Alignment / preference).
