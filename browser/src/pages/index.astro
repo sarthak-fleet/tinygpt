@@ -3,13 +3,17 @@ import Default from "../layouts/Default.astro";
 ---
 
 <Default
-  title="tinygpt — a transformer playground, in the browser and on your Mac"
+  title="TinyGPT — a transformer playground, in the browser and on your Mac"
   description="Train, fine-tune, distil, interpret. Every modern architectural idea has a clean one-file implementation here — runnable in your browser via WebGPU or on your Mac via MLX."
 >
   <main class="landing">
     <header class="hero">
-      <p class="eyebrow">tinygpt</p>
-      <h1>A transformer playground, in the browser <span class="and">and</span> on your Mac.</h1>
+      <div class="brand-lockup" aria-label="TinyGPT">
+        <span class="brand-mark">T</span>
+        <span class="brand-name">TinyGPT</span>
+      </div>
+      <p class="eyebrow">Open-source transformer lab</p>
+      <h1><span>TinyGPT</span> trains a real transformer in your browser, then scales up on your Mac.</h1>
       <p class="lede">
         Train an LLM from scratch in your browser via WebGPU, or run the
         same architecture natively on Apple Silicon via MLX. Every
@@ -276,33 +280,82 @@ import Default from "../layouts/Default.astro";
   }
 
   /* Hero ----------------------------------------------------------- */
-  .hero { margin-bottom: 80px; }
+  .hero {
+    position: relative;
+    margin-bottom: 80px;
+    padding: 30px 0 14px;
+  }
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: -38px -44px auto;
+    height: 360px;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 18% 10%, rgba(122, 167, 255, 0.22), transparent 30%),
+      linear-gradient(135deg, rgba(122, 167, 255, 0.08), rgba(255, 176, 114, 0.05) 48%, transparent 70%);
+    border: 1px solid rgba(122, 167, 255, 0.08);
+    border-radius: 28px;
+    opacity: 0.9;
+    z-index: -1;
+  }
+  .brand-lockup {
+    display: inline-flex;
+    align-items: center;
+    gap: 11px;
+    margin: 0 0 18px;
+  }
+  .brand-mark {
+    display: inline-grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border: 1px solid rgba(122, 167, 255, 0.5);
+    border-radius: 8px;
+    background: linear-gradient(145deg, rgba(122, 167, 255, 0.24), rgba(255, 176, 114, 0.1));
+    box-shadow: 0 0 32px rgba(122, 167, 255, 0.16);
+    color: var(--fg);
+    font: 600 20px/1 var(--font-mono);
+  }
+  .brand-name {
+    color: var(--fg);
+    font: 600 18px/1 var(--font-sans);
+    letter-spacing: 0;
+  }
   .hero .eyebrow {
-    font: 500 13px/1 var(--font-mono);
-    color: var(--accent);
-    letter-spacing: 0.06em;
-    text-transform: lowercase;
-    margin: 0 0 14px;
+    font: 500 12px/1 var(--font-mono);
+    color: var(--warm);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin: 0 0 16px;
   }
   .hero h1 {
-    font: 600 44px/1.18 var(--font-sans);
+    font: 700 56px/1.02 var(--font-sans);
     letter-spacing: -0.02em;
     color: var(--fg);
-    margin: 0 0 22px;
+    max-width: 830px;
+    margin: 0 0 24px;
   }
-  .hero h1 .and {
+  .hero h1 span {
     color: var(--accent);
-    font-style: italic;
-    font-weight: 500;
+    text-shadow: 0 0 30px rgba(122, 167, 255, 0.18);
   }
   @media (max-width: 600px) {
-    .hero h1 { font-size: 32px; }
+    .hero {
+      padding-top: 18px;
+    }
+    .hero::before {
+      inset: -24px -18px auto;
+      height: 340px;
+      border-radius: 18px;
+    }
+    .hero h1 { font-size: 38px; }
   }
   .hero .lede {
-    font-size: 17px; line-height: 1.6;
+    font-size: 18px; line-height: 1.62;
     color: var(--fg-soft);
     margin: 0 0 32px;
-    max-width: 740px;
+    max-width: 760px;
   }
   .hero .lede em {
     font-style: normal;
