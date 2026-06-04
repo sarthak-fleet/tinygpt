@@ -72,6 +72,12 @@ enum Train {
         // Tier 0 additions:
         var resumePath: String? = nil
         var saveEvery: Int? = nil
+        // B13 support: when set, every --save-every tick ALSO writes a
+        // step-numbered copy to `<out-stem>.step-N.tinygpt` alongside the
+        // overwriting atomic save. Enables `tinygpt sae --checkpoint-dir`
+        // (and future interp-on-checkpoints tools) to replay training
+        // dynamics. Disk-hungry on long runs; off by default.
+        var saveHistory: Bool = false
         // Curated-recipe default: cosine + warmup 500. Standard transformer
         // schedule; constant LR is rarely the right choice past a smoke test.
         // `wsd` (warmup-stable-decay) is the MiniCPM/SmolLM alternative — the
@@ -195,6 +201,7 @@ enum Train {
             case "--sample-every": sampleEvery = Int(args[i+1]) ?? sampleEvery; i += 2
             case "--resume":      resumePath = args[i+1]; i += 2
             case "--save-every":  saveEvery = Int(args[i+1]); i += 2
+            case "--save-history": saveHistory = true; i += 1
             case "--lr-schedule": lrSchedule = args[i+1]; i += 2
             case "--warmup":      warmupSteps = Int(args[i+1]) ?? warmupSteps; i += 2
             case "--max-lr":      maxLR = Float(args[i+1]) ?? maxLR; i += 2
@@ -896,6 +903,24 @@ enum Train {
                         to: URL(fileURLWithPath: out)
                     )
                     fputs("    ✓ checkpoint at step \(step + 1) → \(out)\n", stderr)
+                    // B13 history mode: also write `<out-stem>.step-N.tinygpt`.
+                    // Cheap copy from the just-saved atomic file; we don't
+                    // re-serialize the model. A copy failure is logged but
+                    // doesn't abort training.
+                    if saveHistory {
+                        let outURL = URL(fileURLWithPath: out)
+                        let stem = outURL.deletingPathExtension().path
+                        let histURL = URL(fileURLWithPath: "\(stem).step-\(step + 1).tinygpt")
+                        do {
+                            if FileManager.default.fileExists(atPath: histURL.path) {
+                                try FileManager.default.removeItem(at: histURL)
+                            }
+                            try FileManager.default.copyItem(at: outURL, to: histURL)
+                            fputs("    ↳ history → \(histURL.lastPathComponent)\n", stderr)
+                        } catch {
+                            fputs("    ⚠ history copy failed: \(error)\n", stderr)
+                        }
+                    }
                 } catch {
                     fputs("    ⚠ checkpoint save failed: \(error)\n", stderr)
                 }
@@ -1251,6 +1276,9 @@ enum Train {
           --resume <path.tinygpt>         Continue from a saved checkpoint
                                            (Adam state restarts — 100-step warmup)
           --save-every N                  Atomic checkpoint every N steps
+          --save-history                  Also copy each save-every checkpoint to
+                                           `<out-stem>.step-N.tinygpt` (B13
+                                           interp-on-checkpoints). Disk-hungry.
           --lr-schedule constant|cosine|wsd
                                           (default: cosine. `wsd` = warmup-stable-decay,
                                            MiniCPM/SmolLM-style; decay phase doubles as

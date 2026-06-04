@@ -3,6 +3,7 @@ import MLX
 import MLXNN
 import MLXOptimizers
 import MLXRandom
+import TinyGPTIO
 import TinyGPTModel
 
 /// `tinygpt sae` — train a sparse autoencoder on per-layer hidden
@@ -48,6 +49,14 @@ enum SAE {
         var l1Penalty: Float = 5e-3
         var batchSize = 32
         var ctxOverride: Int? = nil
+        // B13: interp-on-checkpoints. When --checkpoint-dir is set, glob
+        // *.tinygpt under it, sort by training step (read from header),
+        // run the SAE training body on each, emit a JSONL timeline row
+        // per checkpoint to --timeline-out. The positional <model> arg
+        // is ignored in this mode; outPath becomes a stem (each ckpt
+        // gets `<stem>.step-N.sae`).
+        var checkpointDir: String? = nil
+        var timelineOut: String? = nil
 
         var i = 0
         while i < args.count {
@@ -61,16 +70,49 @@ enum SAE {
             case "--l1":         l1Penalty = Float(args[i+1]) ?? l1Penalty; i += 2
             case "--batch":      batchSize = Int(args[i+1]) ?? batchSize; i += 2
             case "--ctx":        ctxOverride = Int(args[i+1]); i += 2
+            case "--checkpoint-dir": checkpointDir = args[i+1]; i += 2
+            case "--timeline-out":   timelineOut = args[i+1]; i += 2
             case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
                 modelPath = args[i]; i += 1
             }
         }
-        guard let modelPath = modelPath else { fputs("missing <model>\n", stderr); exitUsage() }
         guard let corpusPath = corpusPath else { fputs("--corpus required\n", stderr); exitUsage() }
         guard let outPath = outPath else { fputs("--out required\n", stderr); exitUsage() }
         guard let layer = layer else { fputs("--layer required\n", stderr); exitUsage() }
+
+        // B13 dispatch: --checkpoint-dir runs the SAE training loop across
+        // every .tinygpt file under <dir>, sorted by header step.
+        if let ckptDir = checkpointDir {
+            runTimeline(checkpointDir: ckptDir, corpusPath: corpusPath, layer: layer,
+                         outStem: outPath, timelineOut: timelineOut,
+                         dFeatures: dFeatures, steps: steps, lr: lr,
+                         l1Penalty: l1Penalty, batchSize: batchSize,
+                         ctxOverride: ctxOverride)
+            return
+        }
+
+        guard let modelPath = modelPath else { fputs("missing <model>\n", stderr); exitUsage() }
+
+        _ = trainOne(modelPath: modelPath, corpusPath: corpusPath, layer: layer,
+                      dFeatures: dFeatures, steps: steps, lr: lr,
+                      l1Penalty: l1Penalty, batchSize: batchSize,
+                      ctxOverride: ctxOverride, outPath: outPath)
+    }
+
+    /// Run the SAE training body for a single checkpoint. Returns the
+    /// final-batch diagnostic stats so the timeline driver can record
+    /// them. Exits the process on any error (mirrors the legacy single-
+    /// shot behaviour — a bad checkpoint in a timeline run aborts the
+    /// whole loop).
+    @discardableResult
+    private static func trainOne(
+        modelPath: String, corpusPath: String, layer: Int,
+        dFeatures: Int?, steps: Int, lr: Float, l1Penalty: Float,
+        batchSize: Int, ctxOverride: Int?, outPath: String
+    ) -> (mse: Float, l0PerSample: Float, l0Frac: Float,
+          dModel: Int, dFeatures: Int, sourceStep: Int) {
 
         print("loading model from \(modelPath)…")
         let load: ModelLoader.LoadResult
@@ -97,6 +139,10 @@ enum SAE {
         guard bytes.count > T + 1 else {
             fputs("corpus too small (\(bytes.count) bytes, need > \(T+1))\n", stderr); exit(1)
         }
+
+        // Surface the checkpoint's training step (read from header) so the
+        // timeline driver can emit a step column without re-parsing.
+        let sourceStep = (try? TinyGPTFileReader.read(URL(fileURLWithPath: modelPath)).step) ?? -1
 
         print("""
 
@@ -207,6 +253,128 @@ enum SAE {
         } catch {
             fputs("write failed: \(error)\n", stderr); exit(1)
         }
+
+        return (mse: mseDiag, l0PerSample: l0PerSample, l0Frac: l0Frac,
+                dModel: D, dFeatures: F, sourceStep: Int(sourceStep))
+    }
+
+    /// B13: run `trainOne` across every `.tinygpt` checkpoint in `checkpointDir`,
+    /// sorted by training step (read from each file's header). Emits one JSONL
+    /// line per checkpoint to `timelineOut` (or stdout if omitted) so a viewer
+    /// can plot SAE feature emergence over training time.
+    ///
+    /// Output paths: each checkpoint writes its `.sae` to `<outStem>.step-N.sae`.
+    /// The timeline file is append-safe — re-running with a longer list of
+    /// checkpoints rewrites it.
+    private static func runTimeline(
+        checkpointDir: String, corpusPath: String, layer: Int,
+        outStem: String, timelineOut: String?,
+        dFeatures: Int?, steps: Int, lr: Float, l1Penalty: Float,
+        batchSize: Int, ctxOverride: Int?
+    ) {
+        let dirURL = URL(fileURLWithPath: checkpointDir)
+        let fm = FileManager.default
+        let entries: [URL]
+        do {
+            entries = try fm.contentsOfDirectory(at: dirURL,
+                                                  includingPropertiesForKeys: nil)
+                              .filter { $0.pathExtension == "tinygpt" }
+        } catch {
+            fputs("could not list \(checkpointDir): \(error)\n", stderr); exit(1)
+        }
+        guard !entries.isEmpty else {
+            fputs("no .tinygpt files under \(checkpointDir)\n", stderr); exit(1)
+        }
+
+        // Pair each checkpoint with its training step (header), sort ascending.
+        struct CkPt { let url: URL; let step: Int }
+        var ckpts: [CkPt] = []
+        for url in entries {
+            // Best effort — checkpoints with unreadable headers are skipped
+            // with a stderr note, not aborted, so a partially-corrupt dir
+            // doesn't kill the whole timeline run.
+            guard let file = try? TinyGPTFileReader.read(url) else {
+                fputs("warning: could not read \(url.lastPathComponent), skipping\n", stderr)
+                continue
+            }
+            ckpts.append(CkPt(url: url, step: Int(file.step)))
+        }
+        ckpts.sort { $0.step < $1.step }
+        guard !ckpts.isEmpty else {
+            fputs("no readable .tinygpt files under \(checkpointDir)\n", stderr); exit(1)
+        }
+
+        print("""
+
+        TinyGPT — SAE timeline
+        ----------------------
+        checkpoints: \(ckpts.count) (steps \(ckpts.first!.step) → \(ckpts.last!.step))
+        corpus:      \(corpusPath)
+        layer:       \(layer)
+        steps/SAE:   \(steps)
+        out stem:    \(outStem)
+        timeline:    \(timelineOut ?? "(stdout)")
+        """)
+
+        // Open the timeline output. Use a file handle so each row is flushed
+        // immediately — a crash mid-loop preserves earlier rows.
+        let outFH: FileHandle?
+        if let p = timelineOut {
+            let url = URL(fileURLWithPath: p)
+            try? fm.createDirectory(at: url.deletingLastPathComponent(),
+                                     withIntermediateDirectories: true)
+            // Truncate any previous timeline; we don't want to append stale rows.
+            _ = fm.createFile(atPath: url.path, contents: nil)
+            outFH = try? FileHandle(forWritingTo: url)
+        } else {
+            outFH = nil
+        }
+
+        // outStem can be either a directory ("/tmp/saes") or a path stem
+        // ("/tmp/saes/probe"). Treat trailing-slash or existing-directory as
+        // the former: derive `<dir>/sae.step-N.sae`.
+        var isDir: ObjCBool = false
+        let stemIsDir = fm.fileExists(atPath: outStem, isDirectory: &isDir) && isDir.boolValue
+        let stemDir = stemIsDir ? outStem : URL(fileURLWithPath: outStem).deletingLastPathComponent().path
+        let stemBase = stemIsDir ? "sae" : URL(fileURLWithPath: outStem).deletingPathExtension().lastPathComponent
+        try? fm.createDirectory(atPath: stemDir, withIntermediateDirectories: true)
+
+        for (i, ckpt) in ckpts.enumerated() {
+            let perOut = "\(stemDir)/\(stemBase).step-\(ckpt.step).sae"
+            print("\n[\(i+1)/\(ckpts.count)] step \(ckpt.step) — training SAE on \(ckpt.url.lastPathComponent)")
+            let stats = trainOne(modelPath: ckpt.url.path, corpusPath: corpusPath,
+                                  layer: layer, dFeatures: dFeatures, steps: steps,
+                                  lr: lr, l1Penalty: l1Penalty, batchSize: batchSize,
+                                  ctxOverride: ctxOverride, outPath: perOut)
+            // Schema kept stable for the future browser viewer:
+            //   {"step":Int, "layer":Int, "d_model":Int, "d_features":Int,
+            //    "mse":Float, "l0_per_sample":Float, "l0_frac":Float,
+            //    "sae_path":String, "ckpt_path":String}
+            let row: [String: Any] = [
+                "step": ckpt.step,
+                "layer": layer,
+                "d_model": stats.dModel,
+                "d_features": stats.dFeatures,
+                "mse": stats.mse.isFinite ? stats.mse : 0,
+                "l0_per_sample": stats.l0PerSample.isFinite ? stats.l0PerSample : 0,
+                "l0_frac": stats.l0Frac.isFinite ? stats.l0Frac : 0,
+                "sae_path": perOut,
+                "ckpt_path": ckpt.url.path,
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: row,
+                                                      options: [.sortedKeys]) {
+                var payload = data
+                payload.append(0x0A)
+                if let fh = outFH {
+                    try? fh.write(contentsOf: payload)
+                    try? fh.synchronize()
+                } else if let s = String(data: payload, encoding: .utf8) {
+                    print(s, terminator: "")
+                }
+            }
+        }
+        try? outFH?.close()
+        print("\ntimeline complete — \(ckpts.count) checkpoints")
     }
 
     private static func exitUsage(_ code: Int32 = 2) -> Never {
@@ -230,6 +398,17 @@ enum SAE {
         --batch N             batch size (default 32; each window
                               contributes ctx × samples)
         --ctx N               override context length (default model's)
+
+        Timeline mode (B13 — interp-on-checkpoints):
+        --checkpoint-dir DIR  train an SAE per .tinygpt under DIR (sorted
+                              by header step). The positional <model> arg
+                              is ignored when this is set.
+        --timeline-out PATH   write one JSONL row per checkpoint (step +
+                              MSE + L0 + per-checkpoint .sae path) to
+                              PATH. Defaults to stdout when omitted.
+                              In timeline mode --out becomes a path stem
+                              (or directory); each checkpoint produces
+                              `<stem>.step-N.sae`.
         """)
         exit(code)
     }
