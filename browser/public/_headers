@@ -30,3 +30,16 @@
   Cache-Control: public, max-age=3600, s-maxage=86400, stale-while-revalidate=604800
 /gallery/manifest.json
   Cache-Control: public, max-age=60, s-maxage=300, stale-while-revalidate=3600
+
+# Per-page static HTML — hashed bundles in /_astro/ already cache forever;
+# the HTML envelope itself wasn't cached at all, costing one full origin
+# round-trip per visitor. s-maxage gives CF Edge a fresh-feeling 1-day
+# copy; stale-while-revalidate keeps it instant on a deploy.
+/
+  Cache-Control: public, s-maxage=86400, stale-while-revalidate=604800
+/*.html
+  Cache-Control: public, s-maxage=86400, stale-while-revalidate=604800
+
+# Immutable hashed Astro chunks.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
