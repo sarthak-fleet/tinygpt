@@ -70,10 +70,22 @@ const {
       <>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        {/* Non-blocking font load — psi-swarm flagged the Geist stylesheet as
+            the LCP render-blocker (1.6s wasted on mobile-slow). The
+            media=print + onload-swap trick fetches in parallel without
+            stalling first paint; system fonts render until Geist is ready. */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
           rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+          media="print"
+          onload="this.media='all'"
         />
+        <noscript>
+          <link
+            rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+          />
+        </noscript>
       </>
     )}
 
