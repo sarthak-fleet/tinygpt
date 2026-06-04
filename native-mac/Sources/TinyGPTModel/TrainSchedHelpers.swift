@@ -1,3 +1,6 @@
+// Pure helpers — scheduler math + sliding-window loss spike detector.
+// Hoisted out of `TrainSupport.swift` so the unit tests in
+// `TinyGPTModelTests` can reach them. Train.swift calls these directly.
 import Foundation
 
 // MARK: - Warmup-stable-decay (WSD) schedule

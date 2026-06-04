@@ -1,5 +1,6 @@
 import Foundation
 import MLX
+import MLXRandom
 import TinyGPTIO
 import TinyGPTModel
 
@@ -90,6 +91,11 @@ enum Train {
         // JSONL log emitter (C10 training dashboard). One JSON object per
         // step appended to the file; consumed by browser/src/pages/training-dashboard.
         var logJsonlPath: String? = nil
+        // C9 determinism: --seed N seeds MLXRandom early so model init +
+        // any GPU-side dropout/noise is reproducible. Batch sampling via
+        // Swift's stdlib `Int.random` is NOT covered yet — v2 will replace
+        // it with a seeded host RNG. See banner footer + docs/determinism.md.
+        var rngSeed: UInt64? = nil
         var valSplit: Double = 0
         var valEvery: Int = 200
         var tokenizerDir: String? = nil
@@ -198,6 +204,7 @@ enum Train {
             case "--spike-window": spikeWindow = max(2, Int(args[i+1]) ?? spikeWindow); i += 2
             case "--spike-factor": spikeFactor = max(1.01, Float(args[i+1]) ?? spikeFactor); i += 2
             case "--log-jsonl":   logJsonlPath = args[i+1]; i += 2
+            case "--seed":        rngSeed = UInt64(args[i+1]); i += 2
             case "--val-split":   valSplit = Double(args[i+1]) ?? valSplit; i += 2
             case "--val-every":   valEvery = Int(args[i+1]) ?? valEvery; i += 2
             case "--tokenizer":   tokenizerDir = args[i+1]; i += 2
@@ -249,6 +256,17 @@ enum Train {
             default:
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
             }
+        }
+
+        // C9: seed MLXRandom BEFORE any model construction or weight init.
+        // Model parameter initialization (e.g., He/Xavier init) draws from
+        // MLXRandom, so seeding here makes init reproducible across runs.
+        // Documented limitation: batch sampling still uses Swift stdlib
+        // `Int.random`, which is non-deterministic — full determinism is a
+        // v2 follow-up (replace stdlib RNG in sampleBatchRaw with a seeded
+        // host generator).
+        if let s = rngSeed {
+            MLXRandom.seed(s)
         }
 
         // Model + config — either fresh from preset, or resumed from .tinygpt.
@@ -659,6 +677,7 @@ enum Train {
         corpus:        \(corpusSummary)
         train/val:     \(trainSummary) / \(valSummary)
         lr schedule:   \(lrSchedule)\(useSchedule ? " (warmup \(warmupSteps), max \(maxLR), min \(minLR)\(lrSchedule == "wsd" ? ", decay \(effectiveDecaySteps)" : ""))" : " @ \(maxLR)")
+        seed:          \(rngSeed.map { "\($0) (deterministic init; batch sampling NOT yet covered — see docs/determinism.md)" } ?? "random (non-deterministic)")
         optimizer:     \(optimizerKind.rawValue)
         grad clip:     \(effectiveClip.map { "global L2 ≤ \($0)" } ?? "off")
         grad ckpt:     \(cfg.useGradCheckpoint ? "on (per-block VJP recompute · ~30% slower, ~√L activation mem)" : "off")
@@ -687,7 +706,8 @@ enum Train {
                          maxLR: maxLR, minLR: minLR,
                          decaySteps: lrSchedule == "wsd" ? effectiveDecaySteps : nil,
                          totalSteps: steps, params: model.numParameters(),
-                         batch: B, ctx: cfg.contextLength)
+                         batch: B, ctx: cfg.contextLength,
+                         seed: rngSeed)
                 return log
             }
             fputs("[log-jsonl] failed to open \(p) — proceeding without log\n", stderr)
@@ -1247,6 +1267,11 @@ enum Train {
                                            (one record per step + val + done event).
                                            Off by default; consumed by the in-house
                                            training dashboard at /training-dashboard.
+          --seed N                        Seed MLXRandom for reproducible model init +
+                                           GPU-side dropout/noise. Two runs with the same
+                                           seed produce identical INIT loss. Batch sampling
+                                           (Swift stdlib `Int.random`) is NOT seeded in v1
+                                           — full bit-exact replay is a v2 follow-up.
           --val-split 0.0-0.2             Hold out last fraction of corpus for val
           --val-every N                   Eval val loss every N steps (default: 200)
 

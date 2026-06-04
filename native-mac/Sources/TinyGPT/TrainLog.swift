@@ -93,7 +93,8 @@ final class TrainLog {
 
     func meta(preset: String, depth: Int?, lrSchedule: String, warmup: Int,
               maxLR: Float, minLR: Float, decaySteps: Int?,
-              totalSteps: Int, params: Int, batch: Int, ctx: Int) {
+              totalSteps: Int, params: Int, batch: Int, ctx: Int,
+              seed: UInt64? = nil) {
         var d: [String: Any] = [
             "t": Date().timeIntervalSince1970,
             "type": "meta",
@@ -109,6 +110,7 @@ final class TrainLog {
         ]
         if let depth { d["depth"] = depth }
         if let decaySteps { d["decay_steps"] = decaySteps }
+        if let seed { d["seed"] = "\(seed)" }  // string-encode UInt64 (JSON max safe int is 2^53-1)
         writeLine(d)
     }
 
