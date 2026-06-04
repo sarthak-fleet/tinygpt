@@ -315,6 +315,23 @@ Until A1 lands, every optimization is theoretical.
 - ⬜ **B8. Multilingual specialist (Sarvam-Edge / Airavata base)** — 1-2 weeks; depends on A7
 - ⬜ **B9. Energy J/token measurement (needs sudo for `powermetrics`)** — ~1 day
 
+**Pretrain + runtime quality (added 2026-06-04 — "good product" lens, not launch optics):**
+
+- ⬜ **B10. Quality classifier on pretrain data (FineWeb-Edu-style)** — tiny fastText classifier on educational-quality labels, score corpus, keep top X%. Highest direct quality lift per dev-day. ~2 days. See §4.3.
+- ⬜ **B11. WSD schedule (warmup-stable-decay)** — replaces cosine; the decay phase IS the annealing knob, unifying two adds. SmolLM/MiniCPM-validated. ~half-day. See §4.3.
+- ⬜ **B12. Loss-spike recovery + replay** — grad-norm tracker triggers auto-rollback N steps + LR drop on spike. Saves hours of wasted compute on long runs. ~1 day.
+- ⬜ **B13. Interp-on-checkpoints** — replay SAE / MEMIT / `tinygpt patch` across the multi-checkpoint timeline. No competitor ships this combination at small scale. Needs save-every-N flag + checkpoint-batch loader. ~1-2 days infra + ongoing analysis. See §4.3.
+- ⬜ **B14. Speculative decoding (Mini-Llama draft for Mega)** — 2× runner throughput; natural fit with our model zoo. Needs numerics gate per the no-quality-regression rule. ~2-3 days. See §4.3.
+- ⬜ **B15. Layer-wise LR decay for SFT** — lower layers stay stable; ULMFiT-era trick, still relevant. Flag-level add on existing optimizer. ~half-day. See §4.3.
+
+**Competitor-aware additions (added 2026-06-04 — surfaced by web sweep, not Jan-2026 cutoff knowledge):**
+
+- ⬜ **B16. M5 Neural Accelerator prefill benchmark + bump** — verify the claimed 3.5×–4× M5-vs-M4 prefill speedup is materializing on TinyGPT's MLX path. Current pin: `mlx-swift 0.31.3` on macOS 26.5 / M5 Pro (well past the 26.2 floor). Bump to latest (0.31.4) and benchmark. ~half-day. Free win if it's already on; bump is reversible. See §4.3.
+- ⬜ **B17. SAE Lens interop / Neuronpedia format export** — compare our SAE to [SAELens](https://github.com/decoderesearch/SAELens). Decide: (a) keep ours, (b) port to theirs, (c) export our SAEs in their format so Neuronpedia consumes them. Option (c) is the cheapest interop win. ~2 days for (c). See §4.3.
+- ⬜ **B18. nanochat-style `--depth` single-knob HP derivation** — one knob auto-derives width, heads, LR, batch, steps from depth via compute-optimal scaling laws. UX win. Pairs with µ-Transfer (deferred). ~1 day. See §4.3.
+- ⬜ **B19. Group-SAE (layer-group SAE training)** — train one SAE per layer-group instead of per-layer; cuts SAE training cost meaningfully. Layered onto existing SAE infra. ~2-3 days. See §4.3.
+- ⬜ **B20. Investigate learnable cross-stream attention** — modded-nanogpt speedrun trick; not yet a paper but on the GPT-2-quality speedrun playbook. Read-and-evaluate before adoption. ~half-day investigation, build cost TBD. See §4.3.
+
 ## Tier C — POLISH (mostly shipped this session)
 
 - ✅ **C1. CLI cosmetic fixes** — 27 subcommands now `exit(0)` on `--help`; `bench-train --help` shows correct name. Shipped 2026-06-02 in `49dead5`.
@@ -325,6 +342,8 @@ Until A1 lands, every optimization is theoretical.
 - ✅ **C6. ChatML template inline-system split** — `splitChatmlSystem` helper + 6 unit tests. Shipped in `49dead5`.
 - ✅ **C7. Save+reload XCTest for LoRA adapters** — roundtrip + arch-mismatch coverage. Shipped in `49dead5`.
 - ✅ **C8. Install-path discipline** — `~/.cache/tinygpt/` for adapters + corpus discovery; off `/tmp`. Shipped in `49dead5`.
+- ⬜ **C9. Determinism harness** — bit-exact replay of step N for debugging spikes, drift, and grad-flow oddities. Pairs with B12. ~2 days.
+- ⬜ **C10. Training-run dashboard** — W&B / TensorBoard or in-house; live visibility instead of guessing during long runs. ~1 day.
 
 ## Tier 5 — RESEARCH FRONTIER (2026 stretch goals)
 
@@ -734,6 +753,16 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, surfaced via `tinyg
 | MiniLLM KL variants | [Gu et al., ICLR 2024](https://arxiv.org/abs/2306.08543) | ~1-2 days; reverse-KL / skew-KL switches on top of existing `tinygpt distill` |
 | Distilling Step-by-Step | [Hsieh et al., ACL 2023](https://arxiv.org/abs/2305.02301) | ~1-2 days; rationale-distillation recipe on top of `tinygpt distill` |
 | DoReMi data-mixture optimization | [Xie et al., NeurIPS 2023](https://arxiv.org/abs/2305.10429) | Park until ≥3 distinct domains are mixed at non-trivial scale |
+| Quality classifier (FineWeb-Edu-style) | [Penedo et al., 2024 — FineWeb / FineWeb-Edu](https://arxiv.org/abs/2406.17557) | §3 B10 — ~2 days; tiny fastText scorer + top-X% filter |
+| WSD schedule (warmup-stable-decay) | [MiniCPM, Hu et al., 2024](https://arxiv.org/abs/2404.06395) · [SmolLM blog](https://huggingface.co/blog/smollm) | §3 B11 — ~half-day; decay phase doubles as annealing |
+| Interp-on-checkpoints methodology | [Pythia, Biderman et al., 2023](https://arxiv.org/abs/2304.01373) · [OLMo, Groeneveld et al., 2024](https://arxiv.org/abs/2402.00838) | §3 B13 — 1-2 days infra + ongoing analysis; replay SAE / MEMIT across the checkpoint timeline |
+| Speculative decoding | [Leviathan et al., ICML 2023](https://arxiv.org/abs/2211.17192) · [Chen et al., 2023](https://arxiv.org/abs/2302.01318) | §3 B14 — 2-3 days; Mini-Llama draft for Mega; numerics gate required |
+| Layer-wise LR decay (SFT) | [ULMFiT, Howard & Ruder, 2018](https://arxiv.org/abs/1801.06146) | §3 B15 — ~half-day flag add on existing optimizer |
+| M5 GPU Neural Accelerator prefill benchmark | [Apple ML Research, 2026](https://machinelearning.apple.com/research/exploring-llms-mlx-m5) | §3 B16 — ~half-day; verify the claimed 3.5× M5-vs-M4 prefill speedup is materializing on our path |
+| SAE Lens interop / Neuronpedia format export | [decoderesearch/SAELens](https://github.com/decoderesearch/SAELens) | §3 B17 — ~2 days for format-export option; compare-and-decide before building |
+| nanochat-style `--depth` single-knob HP derivation | [karpathy/nanochat](https://github.com/karpathy/nanochat) | §3 B18 — ~1 day; one knob auto-derives width / heads / LR / batch / steps; UX win |
+| Group-SAE (layer-group SAE training) | [Wang et al., 2024](https://arxiv.org/abs/2410.21508) | §3 B19 — 2-3 days; trains SAEs once per layer-group instead of per-layer; cuts SAE training cost |
+| Learnable cross-stream attention (modded-nanogpt speedrun trick) | [KellerJordan/modded-nanogpt](https://github.com/KellerJordan/modded-nanogpt) | §3 B20 — read-and-evaluate; speedrun-specific, not yet a paper |
 
 ## 4.4 Reference reads (no verdict — context only)
 
@@ -746,11 +775,27 @@ For mental-model framing, not techniques to implement:
 - **Survey of LLMs** ([Zhao et al., arXiv 2303.18223](https://arxiv.org/abs/2303.18223)) — broad survey, continuously updated
 - **On-Policy Distillation Survey** ([April 2026](https://arxiv.org/abs/2604.00626)) — confirms distillation dominates for shipping small models
 
-**2026 small-model peers** (for positioning, not adoption): SmolLM3-3B · Qwen3.5-0.8B · Phi-4-mini-instruct · Gemma-3n-E2B-IT. Implication: the niche is "browser-trainable + every byte of training code is here," not "perf-competitive with Phi-4."
+**2026 small-model peers** (for positioning, not adoption): SmolLM3-3B · Qwen3.5-0.8B · Phi-4-mini-instruct · Gemma-3n-E2B-IT · [Gemma-4-12B Unified](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF) (encoder-free multimodal, 256K ctx, MLX variants exist). Implication: the niche is "browser-trainable + every byte of training code is here," not "perf-competitive with Phi-4."
+
+**Direct from-scratch peers (full pipeline, not just pretrain):**
+- [karpathy/nanochat](https://github.com/karpathy/nanochat) — tokenizer → pretrain → SFT → RL → CLI/web chat in one repo. $48/2h on 8×H100. Apple Silicon mode exists via `runs/runcpu.sh` (degraded scale). **No interpretability story.** Single `--depth` knob auto-derives all HPs. Closest head-on competitor; differentiation = Mac-first + interp lab.
+- [KellerJordan/modded-nanogpt](https://github.com/KellerJordan/modded-nanogpt) — speedrun fork; April 2026 record 1.35 min to GPT-2 quality on 8×H100. Playbook: Muon (we have) · FA3 · FP8 head (HW-blocked) · learnable cross-stream attention · MTP (queued).
 
 **Tools worth knowing**:
-- [Unsloth](https://github.com/unslothai/unsloth) — Triton-kernel fine-tune framework; not Mac/MLX but study for technique transfer
+- [Unsloth](https://github.com/unslothai/unsloth) — Triton-kernel fine-tune framework; not Mac/MLX but study for technique transfer. **Feb 2026**: 12× faster MoE training + embedding model support + ultra-long-context RL.
+- [Axolotl](https://github.com/axolotl-ai-cloud/axolotl) — config-driven multi-GPU production fine-tuner; multimodal support landed 2026
+- [LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory) — web-UI fine-tuner (LlamaBoard); zero-config entry point
+- [TorchTune](https://github.com/pytorch/torchtune) — Meta's PyTorch-native fine-tuner; ~20-24% speedup via PyTorch 2.5 compile
 - [Argilla Distilabel](https://github.com/argilla-io/distilabel) — Python pipeline for synthetic SFT/DPO (wraps Magpie/DEITA)
+
+**Apple Silicon ecosystem (direct peers on our platform):**
+- [mlx-lm](https://github.com/ml-explore/mlx-lm) — Apple's official MLX inference + LoRA / DoRA / QLoRA / full fine-tune + OpenAI-compatible server. Direct overlap with our SFT/DPO LoRA path; differentiation = pretrain + interp + GGUF/CoreML export.
+- [Ollama + MLX backend (v0.19, March 2026)](https://markaicode.com/run-fine-tune-llms-mac-mlx-lm/) — prefill 1154→1810 tok/s, decode 58→112 tok/s on Apple Silicon. Direct competition for our GGUF runner.
+- [exo-explore/exo](https://github.com/exo-explore/exo) — multi-Mac P2P distributed inference. JACCL collectives over RDMA-on-Thunderbolt-5 on macOS 26.2 → 1.8×/3.2× speedup on 2/4 devices. Out of single-machine scope, but the infra is new.
+
+**Interpretability ecosystem (overlap with our interp lab):**
+- [SAELens](https://github.com/decoderesearch/SAELens) — established SAE training/analysis library; integrates with TransformerLens + HF + nnsight + [Neuronpedia](https://www.neuronpedia.org/). Our SAE may be reinventing; B18 task = compare + decide on interop format.
+- [TransformerLens](https://github.com/TransformerLensOrg/TransformerLens) · [nnsight (NDIF)](https://nnsight.net/) — PyTorch interp infra; complementary to SAELens. We have native Swift/MLX equivalents.
 
 **Proprietary / out of scope**: OpenAI o1 / o3 (closed-weights; reframed the field around test-time compute, no adoptable artifact). DeepSeek-V3 (671B-MoE, scale-blocked; informs MTP + MoE design). Qwen3 (model family, not a technique).
 
@@ -758,8 +803,19 @@ For mental-model framing, not techniques to implement:
 
 The catalogue was hand-curated up to assistant knowledge cutoff
 **January 2026** plus best-effort web-search additions for Feb-May
-2026 (coverage spottier there). Today is **2026-06-04**. Future papers
-append row-by-row into §4.1 / §4.2 / §4.3.
+2026 (coverage spottier there). Today is **2026-06-04**.
+
+**2026-06-04 web sweep folded in** — five surfaces were checked
+(Apple Silicon training, nanoGPT successors, Mac inference runtimes,
+interpretability libraries, fine-tune frameworks). Results: nanochat
++ modded-nanogpt added as direct from-scratch peers; mlx-lm +
+Ollama-MLX + EXO added as Apple Silicon ecosystem peers; SAELens
+added as interp peer; B16-B20 queued in §3 from surfaced gaps;
+Unsloth Feb-2026 release notes folded into tools row. Coverage of
+Feb-Jun 2026 papers is now meaningfully better but still not
+exhaustive.
+
+Future papers append row-by-row into §4.1 / §4.2 / §4.3.
 
 ---
 
