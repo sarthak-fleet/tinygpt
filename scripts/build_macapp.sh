@@ -76,6 +76,17 @@ for b in "$BUILD_DIR"/*.bundle; do
     cp -R "$b" "$APP/Contents/Resources/"
 done
 
+# App icon. Regenerated from browser/public/favicon.svg via
+# scripts/make_icon.sh if missing.
+ICON_SRC="$PKG/Resources/TinyGPT.icns"
+if [[ ! -f "$ICON_SRC" ]]; then
+    echo "== generating icon (scripts/make_icon.sh)"
+    "$REPO_ROOT/scripts/make_icon.sh"
+fi
+if [[ -f "$ICON_SRC" ]]; then
+    cp "$ICON_SRC" "$APP/Contents/Resources/TinyGPT.icns"
+fi
+
 # Info.plist — the minimum LaunchServices wants.
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -93,6 +104,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleShortVersionString</key>
     <string>0.1</string>
     <key>CFBundleExecutable</key>
+    <string>TinyGPT</string>
+    <key>CFBundleIconFile</key>
     <string>TinyGPT</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
