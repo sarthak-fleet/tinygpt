@@ -107,6 +107,22 @@ HF model browser (cloud-icon button in sidebar):
   (needs ModelController to learn `TinyGPTModelHF` alongside the
   existing `TinyGPTModel`).
 
+Server tab (5th tab, OpenAI-compatible HTTP endpoint):
+- Wraps `tinygpt-cli serve <model> --host 127.0.0.1 --port N` as a
+  subprocess. Model picker accepts files OR HF dirs. Start/Stop
+  toggle with live status. Endpoint card shows the URL + the three
+  OpenAI routes (/v1/chat/completions, /v1/completions, /v1/models).
+- Live log tail of the server's stdout/stderr. Request count parses
+  "POST /v1/" lines from the log.
+- Bound to 127.0.0.1 unconditionally — LAN exposure is a one-line
+  change but deferred pending a security decision. Cmd-Q reaps the
+  subprocess via OS process tree cleanup; explicit
+  applicationWillTerminate hook is queued.
+
+The app now hits every table-stakes item from the LM Studio / Ollama /
+Jan comparison + ships two things they don't have (live training,
+interp).
+
 App bundle: ~380 MB (mostly the MLX metallib + a CLI binary copy).
 Launch: `open build/TinyGPT.app` or `cp -r build/TinyGPT.app /Applications/`.
 Both binaries verified by smoke-launching the .app + invoking the
