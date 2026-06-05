@@ -52,28 +52,53 @@ supplies positive/negative for their quality dimension. .tgfq format
 accept on word-shuffled text after 5 epochs on a 1000-doc training
 set.
 
-**Mac app — "decent standard" sprint** (2026-06-05 PM session 2)
-- `.app` bundle build via `scripts/build_macapp.sh` — proper
-  Contents/{MacOS,Resources} layout, Info.plist, ad-hoc codesigned,
-  smoke-launches via `open build/TinyGPT.app`
-- Branded icon via `scripts/make_icon.sh` — pipes
-  `browser/public/favicon.svg` through qlmanage → sips → iconutil →
-  `native-mac/Resources/TinyGPT.icns` (also wired into the bundle)
-- Sampler inspector in Sample tab: temperature + top-K + repetition
+**Mac app — full sprint** (2026-06-05 PM session 2, "decent standard" + "exceptional")
+
+Sample tab:
+- Sampler inspector (right rail): temperature + top-K + repetition
   penalty + max-tokens, all persisted via @AppStorage; toggleable
   show/hide
-- Session-scoped completion history: each Generate run appends a
-  card (timestamp, prompt, output, sampler recipe, perf, Copy button)
+- Completion history: each Generate run appends a card (timestamp,
+  prompt, output, sampler recipe, perf, Copy button). **Persisted to
+  UserDefaults** — relaunch the app and your last 200 generations
+  are still there.
 - "+" button in sidebar — `NSOpenPanel` for opening arbitrary
   `.tinygpt`/`.bin` files outside the gallery search paths
+
+Train tab (unique vs LM Studio/Ollama — they don't train):
+- LR-schedule picker: cosine / **wsd** / constant (calls the same
+  `lrAtWSD` primitive `tinygpt train` uses)
+- `--seed` text field (UInt64; blank = random) — `MLXRandom.seed`
+  before model construction
+- Spike-detector toggle (uses `LossSpikeDetector` from TinyGPTModel)
+- Sticky spike-alert banner with the offending step + MA + threshold
+
+Interp tab (unique — no other local-AI Mac app has this):
+- Pickers for model + corpus + output sidecar
+- Steppers for layer / d_features / steps / batch / ctx
+- "Train SAE" runs `tinygpt-cli sae …` as a subprocess; stdout
+  streams live into the right pane; MSE + L0 pills update inline
+  while the run is in flight
+- Reveal-in-Finder on the saved sidecar
+
+App-wide:
+- `.app` bundle via `scripts/build_macapp.sh` — proper
+  Contents/{MacOS,Resources} layout, Info.plist, ad-hoc codesigned,
+  bundled `tinygpt-cli` next to the app binary so Interp works
+  regardless of where the .app is installed
+- Branded icon via `scripts/make_icon.sh` — pipes
+  `browser/public/favicon.svg` through qlmanage → sips → iconutil →
+  `native-mac/Resources/TinyGPT.icns`
+- Welcome pane with Sample/Train/Fine-tune/Interp three-feature pitch
 - Gallery discovery walks `data/gallery/` (added), `browser/public/
   gallery/`, `public/gallery/`, plus the system Application Support
   fallback. Empty-state lists the paths + has a Reload button.
-- Welcome pane replaces the old `←` placeholder with a three-feature
-  pitch (Sample / Train / Fine-tune)
-- `File → New` menu item dropped (no document model to instantiate)
+- `File → New` dropped (no document model to instantiate)
 
+App bundle: ~380 MB (mostly the MLX metallib + a CLI binary copy).
 Launch: `open build/TinyGPT.app` or `cp -r build/TinyGPT.app /Applications/`.
+Both binaries verified by smoke-launching the .app + invoking the
+bundled CLI to produce a real `.sae` sidecar (MSE 5.52e-02, L0 34.45%).
 
 ## What's deferred (with reasons)
 
