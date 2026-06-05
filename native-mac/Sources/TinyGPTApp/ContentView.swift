@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum AppTab: Hashable { case sample, train, finetune }
+enum AppTab: Hashable { case sample, train, finetune, interp }
 
 struct ContentView: View {
     @StateObject private var controller = ModelController()
@@ -32,9 +32,10 @@ struct ContentView: View {
                     Divider().background(Theme.line)
                     Group {
                         switch tab {
-                        case .sample: mainPane
-                        case .train: TrainView()
+                        case .sample:   mainPane
+                        case .train:    TrainView()
                         case .finetune: FinetuneView()
+                        case .interp:   InterpView()
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,6 +86,7 @@ struct ContentView: View {
             tabButton(.sample, label: "Sample")
             tabButton(.train, label: "Train")
             tabButton(.finetune, label: "Fine-tune")
+            tabButton(.interp, label: "Interp")
             Spacer()
         }
         .padding(.horizontal, 20)

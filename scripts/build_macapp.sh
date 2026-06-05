@@ -59,6 +59,15 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BUILD_DIR/TinyGPTApp" "$APP/Contents/MacOS/TinyGPT"
 chmod +x "$APP/Contents/MacOS/TinyGPT"
 
+# Also build + bundle the CLI binary. The Interp tab shells out to it
+# for SAE / MEMIT / patch training so the app doesn't have to duplicate
+# the CLI's training paths in-process.
+( cd "$PKG" && swift build -c "$CONFIG" --product tinygpt )
+if [[ -x "$BUILD_DIR/tinygpt" ]]; then
+    cp "$BUILD_DIR/tinygpt" "$APP/Contents/MacOS/tinygpt-cli"
+    chmod +x "$APP/Contents/MacOS/tinygpt-cli"
+fi
+
 # MLX needs its compiled Metal shader library at runtime. SwiftPM drops
 # it next to the binary; the .app needs it in Resources so the binary's
 # search path (which Foundation rewrites to the bundle when launched as
