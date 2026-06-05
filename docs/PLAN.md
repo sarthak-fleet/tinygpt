@@ -331,6 +331,14 @@ Until A1 lands, every optimization is theoretical.
 - ⬜ **B18. nanochat-style `--depth` single-knob HP derivation** — one knob auto-derives width, heads, LR, batch, steps from depth via compute-optimal scaling laws. UX win. Pairs with µ-Transfer (deferred). ~1 day. See §4.3.
 - ⬜ **B19. Group-SAE (layer-group SAE training)** — train one SAE per layer-group instead of per-layer; cuts SAE training cost meaningfully. Layered onto existing SAE infra. ~2-3 days. See §4.3.
 - ⬜ **B20. Investigate learnable cross-stream attention** — modded-nanogpt speedrun trick; not yet a paper but on the GPT-2-quality speedrun playbook. Read-and-evaluate before adoption. ~half-day investigation, build cost TBD. See §4.3.
+- ⬜ **B21. Micro-AutoMixer for specialist data mixes** — Poolside-style data mixture optimization, scaled down: train 6-12 proxy runs across code/math/tool/web ratios, score on fixed capability evals, fit a simple surrogate, then propose the next mix. Do this before expensive specialist training so data ratios stop being hand-wavy. ~2-3 days plus small proxy runs. See §4.3.
+- ⬜ **B22. Token-preserving agent trajectory recorder** — store `input_ids`, sampled `output_ids`, tool calls, tool results, rewards, and checkpoint hash for every agent rollout. Poolside calls out token-in/token-out trajectories to avoid retokenization mismatch in off-policy RL; the same invariant helps TinyGPT SFT/DPO/RLVR even before full RL. ~2 days.
+- ⬜ **B23. Agent eval protocol hardening** — Poolside reports pass@1 averaged over repeated runs with fixed step limits, sandbox resources, and sampling params. Mirror that discipline for BFCL/τ-bench/SWE-mini/Terminal-mini: fixed max steps, fixed sandbox budget, repeated seeds, and infra-patch notes. ~1 day.
+- ⬜ **B24. Muon re-benchmark at 1B+ or skip** — Poolside reports Muon giving a large-step efficiency win at scale with distributed overhead below 1%; TinyGPT's current Muon smoke loses badly at small scale. Do not promote it until a ≥1B-ish run or a proxy matmul-dominated benchmark shows the overhead is amortized. ~half-day once a large run exists.
+
+**External-leaderboard arc (added 2026-06-05 — first public competitive submission target):**
+
+- ⬜ **B25. ScaleDown Challenge specialist — extractive context compression** — train a task-specific SLM that takes `(query, long_context)` and returns the subset of sentences relevant to the query. Token-level relevance classifier head on the residual stream → sentence-level aggregation → threshold-keep. Training data: MS-MARCO + Natural Questions + similar (query, doc, answer) triplets with teacher-labeled per-sentence relevance scores; teacher can be a local Qwen/SmolLM. Eval via [ScaleBench](https://tinyml.substack.com/p/benchmarking-scaledowns-summarization) (their open-source harness, downstream F1/EM after compression). Submit to the [ScaleDown Challenge leaderboard](https://main.d3hbeukddvrxcc.amplifyapp.com/leaderboard). **~3-5 days end-to-end**: dataset pulls (~1 hr, reuse `tinygpt download-dataset`), teacher-labeling pipeline (~half-day), classification-head module in `Sources/TinyGPTModel/` (~half-day), new `tinygpt compress` subcommand with token-level BCE loss (~1 day), ScaleBench integration + submission (~half-day). Pairs naturally with A1 (different domain, same A-track shape) and gives TinyGPT a public proof-point — "competitive task SLM trained from scratch on a Mac" — with an external scoreboard. See §4.3.
 
 ## Tier C — POLISH (mostly shipped this session)
 
@@ -355,6 +363,7 @@ Pauses the "training at 2024 fundamentals" cadence; deliverable is a paper-shape
 - ⬜ **5.4 Diffusion LM micro-implementation** — 1-2 weeks; new paradigm via masked denoising loss.
 - ⬜ **5.5 Real sparse MoE kernels** — 2-3 weeks; custom Metal kernel + measure FLOP reduction.
 - ⬜ **5.6 TTS toy (text-to-speech via audio-token GPT)** — ~2-4 weeks; integrate EnCodec, train an autoregressive decoder over discrete audio tokens (VALL-E / MusicGen shape). The transformer side already exists in TinyGPT; the new pieces are codec integration, text→audio conditioning, vocoder decode, and an audio data pipeline. **Scoping note (2026-06-03): comes AFTER the Wave 3 specialist track (A1-B8) AND after 5.3 vision-language toy** — both higher-priority research arcs ahead of it.
+- ⬜ **5.7 Specialized explainer-video model** — ~3-6 weeks for a Lamina-like toy: document/prompt → script → storyboard DSL → deterministic whiteboard/diagram render. This is NOT a Sora/Runway competitor; the first useful version is a specialized visual-planning model plus renderer. **Scoping note (2026-06-04): comes after A1-B8 and after 5.3 VL, because it needs both specialist training discipline and the text↔visual bridge.**
 
 ### 5.6 TTS toy — detailed scoping
 
@@ -381,6 +390,78 @@ New code surface (~2 weeks of focused engineering + 3-7 days training):
 **Why ordered after specialist + VL:**
 - Specialist track validates the north-star thesis (Wave 3 work the project is actually about). Until at least one specialist beats a baseline, modality experiments are noise on top of unproven foundations.
 - 5.3 vision-language toy is ahead because (a) it's the older Tier-5 item and (b) it stress-tests the same "external pretrained encoder + cross-attention into our decoder" pattern that TTS would reuse. Shipping VL first means TTS inherits a validated pattern instead of a speculative one.
+
+### 5.7 Specialized explainer-video model — Lamina-like track
+
+Reference product: Lamina Labs' Simi positions itself as an AI explainer
+studio: prompt or document in, whiteboard-style educational video out
+for students, course creators, customer training, and teams. The public
+lesson is not "train a giant cinematic video model"; it is "make a
+narrow video system that explains accurately, quickly, and consistently."
+
+The TinyGPT version should start as a **structured explainer compiler**:
+
+```
+source document / prompt
+  -> lesson script
+  -> storyboard scenes
+  -> visual DSL (objects, labels, arrows, equations, timeline)
+  -> deterministic renderer (SVG/canvas/Remotion/Manim-style)
+  -> captions + voiceover + MP4
+```
+
+What we would need:
+
+| Piece | Build | Why |
+|---|---|---|
+| Scene/storyboard schema | JSON DSL for concepts, equations, diagrams, timings, camera/stroke actions | Gives the model a constrained target instead of free-form pixels |
+| Renderer | Start with SVG/canvas frames; later Remotion/Manim export | Deterministic, debuggable, cheap to render |
+| Visual-planner specialist | SFT/LoRA model: prompt/doc → storyboard DSL | This is the first "specialized video model" worth training |
+| Asset/diagram library | Shapes, arrows, axes, code blocks, graph layouts, simple physics/math primitives | Explainers need reusable semantic primitives more than photorealism |
+| Data pipeline | Pair open lessons/transcripts/docs with generated or human-edited storyboards | The scarce asset is supervised storyboard data |
+| Eval set | Held-out concepts with rubric: factual correctness, visual grounding, pacing, label consistency, equation validity | Prevents "pretty but wrong" videos |
+| Editing loop | User can regenerate one scene, lock script, lock diagrams, export MP4 | Real workflows need partial repair, not one-shot magic |
+
+Model ladder:
+
+1. **No learned video model**: use a strong text model or cloud model to
+   produce the DSL; render deterministically. This validates product and
+   schema fast.
+2. **Tiny visual-planner specialist**: fine-tune tinygpt/HF-loaded base
+   on prompt/doc → storyboard DSL. This is the first trainable model.
+3. **Visual critic/evaluator**: model scores whether scene frames match
+   the script and flags bad labels, missing objects, impossible diagrams.
+4. **Optional diffusion/image/video model**: only for decorative assets
+   or scene backgrounds after the deterministic explainer path works.
+
+Good first eval tasks:
+
+| Eval | Metric |
+|---|---|
+| Concept-to-storyboard | JSON validity + human/LLM rubric on lesson coverage |
+| Equation/diagram correctness | Symbol/label exactness, graph/axis consistency |
+| Script-to-scene grounding | Every narrated claim maps to an on-screen object/action |
+| Pacing | Scene duration fits narration without overcrowding |
+| Editability | Regenerate one scene without changing locked scenes |
+
+Why this is plausible for TinyGPT:
+
+- The project already has specialist SFT/LoRA, structured output,
+  constrained generation, eval harnesses, and renderer-friendly web/native
+  surfaces.
+- A storyboard DSL is text. TinyGPT can train on that before any pixel
+  generation exists.
+- Deterministic rendering avoids the hardest part of video generation:
+  long-horizon visual consistency.
+
+Why it stays behind the current specialist track:
+
+- It is a new modality product, not a training-foundation prerequisite.
+- Data is the bottleneck. We need hundreds to thousands of good
+  storyboard pairs before model training is meaningful.
+- The first marketable version is mostly pipeline + UX, not raw model
+  research. Build it only after the first text/tool specialist proves the
+  project can beat a baseline.
 
 ## Unshipped techniques — after applying the value-add filter (and re-auditing)
 
@@ -763,6 +844,11 @@ All in `native-mac/Sources/TinyGPTModel/PeftVariants.swift`, surfaced via `tinyg
 | nanochat-style `--depth` single-knob HP derivation | [karpathy/nanochat](https://github.com/karpathy/nanochat) | §3 B18 — ~1 day; one knob auto-derives width / heads / LR / batch / steps; UX win |
 | Group-SAE (layer-group SAE training) | [Wang et al., 2024](https://arxiv.org/abs/2410.21508) | §3 B19 — 2-3 days; trains SAEs once per layer-group instead of per-layer; cuts SAE training cost |
 | Learnable cross-stream attention (modded-nanogpt speedrun trick) | [KellerJordan/modded-nanogpt](https://github.com/KellerJordan/modded-nanogpt) | §3 B20 — read-and-evaluate; speedrun-specific, not yet a paper |
+| ScaleDown extractive context compression SLM | [ScaleDown blog](https://tinyml.substack.com/p/how-we-train-small-language-models) · [Challenge leaderboard](https://main.d3hbeukddvrxcc.amplifyapp.com/leaderboard) · [scaledown.ai](https://scaledown.ai/) | §3 B25 — 3-5 days; token-level relevance head + sentence aggregation; submit to public leaderboard as a "specialist trained on a Mac" proof-point |
+| Micro-AutoMixer for specialist data mixes | [Poolside Laguna deep dive](https://poolside.ai/blog/laguna-a-deeper-dive) · RegMix/DoReMi-style mixture search | §3 B21 — small proxy-run version of Poolside's automixing; optimize specialist ratios before full training |
+| Token-preserving agent trajectory recorder | [Poolside Laguna deep dive](https://poolside.ai/blog/laguna-a-deeper-dive) | §3 B22 — preserve token IDs through rollout → training so agent traces cannot drift through retokenization |
+| Agent eval protocol hardening | [Poolside Laguna deep dive](https://poolside.ai/blog/laguna-a-deeper-dive) | §3 B23 — repeated pass@1, fixed step/resource/sampling budgets, and explicit infra-patch notes |
+| Muon large-scale re-benchmark | [Poolside Laguna deep dive](https://poolside.ai/blog/laguna-a-deeper-dive) · [Jordan, 2024](https://kellerjordan.github.io/posts/muon/) | §3 B24 — only revisit if large/proxy matmul-dominated runs amortize Newton-Schulz overhead |
 
 ## 4.4 Reference reads (no verdict — context only)
 
@@ -780,6 +866,7 @@ For mental-model framing, not techniques to implement:
 **Direct from-scratch peers (full pipeline, not just pretrain):**
 - [karpathy/nanochat](https://github.com/karpathy/nanochat) — tokenizer → pretrain → SFT → RL → CLI/web chat in one repo. $48/2h on 8×H100. Apple Silicon mode exists via `runs/runcpu.sh` (degraded scale). **No interpretability story.** Single `--depth` knob auto-derives all HPs. Closest head-on competitor; differentiation = Mac-first + interp lab.
 - [KellerJordan/modded-nanogpt](https://github.com/KellerJordan/modded-nanogpt) — speedrun fork; April 2026 record 1.35 min to GPT-2 quality on 8×H100. Playbook: Muon (we have) · FA3 · FP8 head (HW-blocked) · learnable cross-stream attention · MTP (queued).
+- [Poolside Laguna XS.2 / M.1 deep dive](https://poolside.ai/blog/laguna-a-deeper-dive) — agentic coding models with open XS.2 weights, strong SWE/Terminal benchmark protocol, quality+diversity data curation, synthetic data throughout pretraining, automixed data ratios, Muon at scale, and async agent RL. **Steal the workflow discipline, not the scale:** data-mix proxy sweeps, token-preserved agent traces, repeated eval protocol, and Muon only after large-scale re-benchmark.
 
 **Tools worth knowing**:
 - [Unsloth](https://github.com/unslothai/unsloth) — Triton-kernel fine-tune framework; not Mac/MLX but study for technique transfer. **Feb 2026**: 12× faster MoE training + embedding model support + ultra-long-context RL.
