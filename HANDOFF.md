@@ -3,7 +3,7 @@
 A fresh-context agent should read this first, then `NIGHTLY.md` for the
 training cadence, then `docs/PLAN.md` for the long-term roadmap.
 
-## 🌙 Nightly training cadence (NEW)
+## 🌙 Nightly training cadence
 
 Project shape changed: every night the Mac produces a training artifact.
 Run `./scripts/nightly.sh` before bed; it picks the next pending job
@@ -11,10 +11,21 @@ from `scripts/nightly/N*.sh`, wraps it in `caffeinate -di`, logs to
 `~/.cache/tinygpt/nightly/logs/`, and posts a Mac notification on
 completion. See `NIGHTLY.md` for the full plan and queue state.
 
-Current queue: N01 (pull datasets, ~1 hr) + N02 (huge-base-v1 pretrain,
-~8-10 hr). Together fit one night. N03-N05 (SFT → DPO → eval) get
-written after N02 results land — recipe choices depend on what N02
-produces.
+**State as of 2026-06-05 PM (after daytime audit + parquet unblocking):**
+- N01 ✅ done — Gutenberg combined corpus + SmolLM2 tokenizer + hermes-fc
+  (50 MB SFT data) verified. N01 is now a *verifier*, not a downloader;
+  parquet/HF_TOKEN-gated stuff is tracked under "Known blockers" in
+  NIGHTLY.md.
+- N02 ⏳ queued — repointed at FineWeb-Edu (241 MB educational text,
+  decoded from parquet via the new `scripts/parquet_to_txt.py`). 200K
+  steps, ~11 hrs. Smoke-tested at 100 steps: loss 11.4 → 7.4 → still
+  decreasing. **Fire `./scripts/nightly.sh` before bed to start it.**
+- N03-N05 — not scripted yet; written after N02 produces a base.
+
+**Parquet decoder unlocked**: FineWeb-Edu (50K rows = 241 MB text) and
+UltraFeedback (187K rows = 1.2 GB JSONL) both decoded and ready.
+`scripts/parquet_to_txt.py` handles arbitrary parquet shards — see its
+header docstring. Requires `pyarrow` (pip-installed today).
 
 ## Snapshot (top of session-end 2026-06-04 PM)
 
