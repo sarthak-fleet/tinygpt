@@ -45,19 +45,26 @@ if [[ -z "$TOKENIZER_PATH" ]] || [[ ! -f "$TOKENIZER_PATH/tokenizer.json" ]]; th
     exit 1
 fi
 
-# Pretrain corpus: combined Gutenberg classics (32 MB clean text).
-# FineWeb-Edu would be richer (2.4 GB) but is parquet-only and tinygpt
-# doesn't decode parquet yet — see TODO at end of file.
-# fetch_corpora.sh produces the books; we concat them on demand.
-CORPUS_TXT="/tmp/tinygpt-corpora/everything.txt"
-GUTENBERG_DIR="/tmp/tinygpt-corpora"
+# Pretrain corpus: FineWeb-Edu sample (~50M tokens of clean educational
+# text). Decoded from the cached parquet shard via scripts/parquet_to_txt.py.
+# 7.5× bigger than the Gutenberg fallback (32 MB) and modern English
+# vs. 19th-century literary; the right corpus for a tool-caller base.
+#
+# If you want the smaller/cheaper Gutenberg corpus instead, override:
+#   CORPUS_TXT=/tmp/tinygpt-corpora/everything.txt ./scripts/nightly/N02-...
+CORPUS_TXT="${CORPUS_TXT:-/tmp/fineweb-edu.txt}"
+PARQUET_DIR="$HOME/.cache/tinygpt/datasets/HuggingFaceFW/fineweb-edu/data/CC-MAIN-2013-20/"
 
 if [[ ! -f "$CORPUS_TXT" ]]; then
-    if [[ -d "$GUTENBERG_DIR" ]] && ls "$GUTENBERG_DIR"/*.txt >/dev/null 2>&1; then
-        echo "concatenating Gutenberg corpus → $CORPUS_TXT"
-        cat "$GUTENBERG_DIR"/*.txt > "$CORPUS_TXT"
+    if [[ "$CORPUS_TXT" == "/tmp/fineweb-edu.txt" ]] && [[ -d "$PARQUET_DIR" ]]; then
+        echo "decoding parquet → $CORPUS_TXT (50K rows, ~240 MB)..."
+        python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/parquet_to_txt.py" \
+            "$PARQUET_DIR" "$CORPUS_TXT" --max-rows 50000
     else
-        echo "Gutenberg corpus missing. Run: ./scripts/fetch_corpora.sh" >&2
+        echo "pretrain corpus missing at $CORPUS_TXT" >&2
+        echo "options:" >&2
+        echo "  1. ensure $PARQUET_DIR exists and pyarrow is installed (default path)" >&2
+        echo "  2. CORPUS_TXT=/tmp/tinygpt-corpora/everything.txt $0  (Gutenberg fallback)" >&2
         exit 1
     fi
 fi
