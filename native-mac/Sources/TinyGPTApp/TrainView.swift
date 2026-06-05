@@ -64,6 +64,46 @@ struct TrainView: View {
                         .font(.system(size: 11, design: .monospaced))
                 }
 
+                // LR schedule picker — exposes today's WSD + cosine + constant.
+                HStack(spacing: 6) {
+                    Text("schedule")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Theme.faint)
+                    Picker("", selection: $controller.lrSchedule) {
+                        ForEach(TrainController.LRSchedule.allCases) { s in
+                            Text(s.rawValue).tag(s)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 95)
+                }
+
+                // Seed — empty string = random (non-deterministic).
+                HStack(spacing: 6) {
+                    Text("seed")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Theme.faint)
+                    TextField("rand", text: $controller.seedText)
+                        .textFieldStyle(.plain)
+                        .frame(width: 60)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Theme.panel)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .font(.system(size: 11, design: .monospaced))
+                        .help("Leave blank for random init; any UInt64 makes init reproducible.")
+                }
+
+                // Spike-detector toggle — same primitive the CLI uses.
+                Toggle(isOn: $controller.spikeDetectEnabled) {
+                    Text("spike")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Theme.faint)
+                }
+                .toggleStyle(.checkbox)
+                .help("Logs a warning when loss > 3× moving avg over the last 50 steps.")
+
                 // Starter corpora menu — one click loads any of the
                 // fetched Project Gutenberg classics or browser gallery
                 // corpora. Falls through to "Other..." for arbitrary files.
@@ -130,6 +170,31 @@ struct TrainView: View {
             .padding(.vertical, 12)
             .background(Theme.panel)
             Divider().background(Theme.line)
+
+            // Spike alert banner — sticky between the controls and the
+            // chart so it sits in the operator's peripheral vision but
+            // doesn't crowd the chart itself.
+            if let alert = controller.spikeAlert {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Theme.warn)
+                    Text(alert)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.fg)
+                    Spacer()
+                    Button {
+                        controller.spikeAlert = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(Theme.faint)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 8)
+                .background(Theme.warn.opacity(0.12))
+                .overlay(Rectangle().fill(Theme.warn).frame(height: 1), alignment: .bottom)
+            }
 
             // Chart
             LossChart(points: controller.lossHistory, targetSteps: controller.targetSteps)
