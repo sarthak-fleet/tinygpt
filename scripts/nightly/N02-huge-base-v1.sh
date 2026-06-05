@@ -45,37 +45,21 @@ if [[ -z "$TOKENIZER_PATH" ]] || [[ ! -f "$TOKENIZER_PATH/tokenizer.json" ]]; th
     exit 1
 fi
 
-# FineWeb-Edu lands as JSONL; the train command wants a raw text file.
-# Extract the "text" field once; cache the result so reruns are instant.
-CORPUS_JSONL="$CACHE/fineweb-edu.sample.jsonl"
-CORPUS_TXT="$CACHE/fineweb-edu.sample.txt"
+# Pretrain corpus: combined Gutenberg classics (32 MB clean text).
+# FineWeb-Edu would be richer (2.4 GB) but is parquet-only and tinygpt
+# doesn't decode parquet yet — see TODO at end of file.
+# fetch_corpora.sh produces the books; we concat them on demand.
+CORPUS_TXT="/tmp/tinygpt-corpora/everything.txt"
+GUTENBERG_DIR="/tmp/tinygpt-corpora"
 
-if [[ ! -f "$CORPUS_JSONL" ]]; then
-    echo "pretrain corpus not found at $CORPUS_JSONL — run N01 first" >&2
-    exit 1
-fi
-
-if [[ ! -f "$CORPUS_TXT" ]] || [[ "$CORPUS_JSONL" -nt "$CORPUS_TXT" ]]; then
-    echo "extracting raw text from $CORPUS_JSONL …"
-    # Use jq if available (precise); fall back to python (always available
-    # on macOS via /usr/bin/python3).
-    if command -v jq >/dev/null 2>&1; then
-        jq -r '.text // .content // empty' "$CORPUS_JSONL" > "$CORPUS_TXT"
+if [[ ! -f "$CORPUS_TXT" ]]; then
+    if [[ -d "$GUTENBERG_DIR" ]] && ls "$GUTENBERG_DIR"/*.txt >/dev/null 2>&1; then
+        echo "concatenating Gutenberg corpus → $CORPUS_TXT"
+        cat "$GUTENBERG_DIR"/*.txt > "$CORPUS_TXT"
     else
-        /usr/bin/python3 -c "
-import json, sys
-with open('$CORPUS_JSONL') as f, open('$CORPUS_TXT', 'w') as out:
-    for line in f:
-        try:
-            obj = json.loads(line)
-            text = obj.get('text') or obj.get('content') or ''
-            if text:
-                out.write(text + '\n\n')
-        except Exception:
-            pass
-"
+        echo "Gutenberg corpus missing. Run: ./scripts/fetch_corpora.sh" >&2
+        exit 1
     fi
-    echo "  extracted $(wc -c < "$CORPUS_TXT") bytes"
 fi
 
 OUT="/tmp/huge-base-v1.tinygpt"
@@ -98,14 +82,14 @@ echo ""
     --ctx 256 \
     --batch 8 \
     --accum 2 \
-    --steps 100000 \
+    --steps 200000 \
     --lr-schedule wsd \
     --warmup 1000 \
-    --decay-steps 10000 \
+    --decay-steps 20000 \
     --max-lr 3e-4 \
     --min-lr 3e-5 \
     --grad-clip 1.0 \
-    --save-every 1000 \
+    --save-every 2000 \
     --save-history \
     --val-split 0.005 \
     --val-every 500 \

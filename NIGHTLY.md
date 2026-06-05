@@ -28,19 +28,36 @@ markers).
 
 ## Queue
 
-The path to **A1 (first specialist · tool-caller)** end-to-end:
+The path to **A1 (first specialist · tool-caller)** end-to-end. Honest
+state as of 2026-06-05 — parquet decoder + HF_TOKEN unblocking is
+v2 work (see "Known blockers" at bottom):
 
-- [ ] **N01 · pull-datasets** · ~1 hr · `scripts/nightly/N01-pull-datasets.sh`
-      Pulls xlam-function-calling-60k, hermes-function-calling-v1,
-      ultrafeedback-binarized, BFCL, and a FineWeb-Edu sample
-      (~200M tokens) into `~/.cache/tinygpt/datasets/`. Tokenizes the
-      pretrain corpus with SmolLM2 tokenizer (already in HF cache).
-- [ ] **N02 · huge-base-v1** · ~10 hr · `scripts/nightly/N02-huge-base-v1.sh`
-      Pretrain Huge preset (12L · d=256 · ctx=512) on the FineWeb-Edu
-      sample. ~50K steps, WSD schedule, save-every 1000, save-history
-      ON, --seed 42, spike detector on, JSONL log on. Output:
-      `/tmp/huge-base-v1.tinygpt` (canonical) + `/tmp/huge-base-v1.step-*.tinygpt`
-      (history) + `/tmp/huge-base-v1.jsonl`.
+- [x] **N01 · pull-datasets** · DONE — Gutenberg corpus (32 MB clean
+      text) + hermes-function-calling-v1 + SmolLM2-135M tokenizer all
+      verified in place. FineWeb-Edu, xlam, UltraFeedback, BFCL still
+      blocked (see "Known blockers"). N01 now a verifier, not a
+      downloader.
+- [ ] **N02 · huge-base-v1** · ~9 hr · `scripts/nightly/N02-huge-base-v1.sh`
+      Pretrain Huge preset (12L · d=256 · ctx=256, SmolLM2 BPE) on
+      Gutenberg combined (~32 MB · ~8M tokens · ~6 epochs at 200K
+      steps). WSD schedule (warmup 1000, decay 20000). save-every
+      2000 + save-history (100 checkpoints, ~11 GB). --seed 42, spike
+      detector on, JSONL log on. Output: `/tmp/huge-base-v1.tinygpt`
+      + `/tmp/huge-base-v1.step-*.tinygpt` (history) +
+      `/tmp/huge-base-v1.jsonl`. Smoke-tested at 100 steps: 11.4→6.5
+      loss, 6.2 step/s steady state.
+**Known blockers (limit our recipe for now):**
+
+- `tinygpt download-dataset` saves parquet files as-is — no parquet→txt
+  decoder yet. Blocks FineWeb-Edu (richer pretrain, 2.4 GB on disk),
+  UltraFeedback (DPO data), and any other parquet-only HF dataset.
+  **Daytime task**: add parquet decoding to `tinygpt download-dataset`
+  (or write a small `tinygpt parquet-to-txt` subcommand).
+- `Salesforce/xlam-function-calling-60k` is gated — needs `HF_TOKEN`.
+  Either `export HF_TOKEN=hf_…` or `huggingface-cli login`.
+- BFCL flat-emit hit a bug — `bfcl.jsonl` is 0 bytes. The cached HF
+  dataset is fine; needs a re-emit pass once we know what fixed it.
+
 **Planned (scripts written after N02 results land):**
 
 - N03 · sft-toolcaller-v1 · ~8 hr · LoRA SFT on huge-base-v1 against
