@@ -148,7 +148,12 @@ public enum EvalCompare {
             counts[r.task, default: [:]][r.model_name] = r.n_examples
         }
 
-        let modelW = max(8, (models.map { $0.count }.max() ?? 8))
+        // Column width has to fit BOTH the header (model name) and the
+        // wide-format cells ("0.350  (n=12345)"). Otherwise the trailing
+        // ")" gets truncated by `.padding(toLength:)`.
+        let maxN = counts.values.flatMap { $0.values }.max() ?? 0
+        let cellW = ("0.350  (n=\(maxN))").count
+        let modelW = max((models.map { $0.count }.max() ?? 8), cellW)
         let taskW = max(8, (tasks.map { $0.count }.max() ?? 8))
 
         print("")
