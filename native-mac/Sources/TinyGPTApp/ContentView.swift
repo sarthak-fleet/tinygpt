@@ -126,13 +126,25 @@ struct ContentView: View {
             .padding(.top, 24)
             .padding(.bottom, 24)
 
-            // Gallery list
-            Text("GALLERY")
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Theme.faint)
-                .tracking(1)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 8)
+            // Gallery list + open arbitrary file
+            HStack {
+                Text("GALLERY")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.faint)
+                    .tracking(1)
+                Spacer()
+                Button {
+                    openModelFile()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+                .help("Open a .tinygpt file from anywhere on disk.")
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
 
             ScrollView {
                 LazyVStack(spacing: 4) {
@@ -621,6 +633,36 @@ struct ContentView: View {
             } catch {
                 controller.evalResult = "couldn't read \(url.lastPathComponent): \(error)"
             }
+        }
+    }
+
+    /// File-picker entry to the sidebar "+" button. Any .tinygpt file
+    /// becomes a one-off GalleryItem with the filename as display name.
+    /// The item isn't added to the persistent gallery list — close +
+    /// reopen the app to re-pick — but it loads + samples identically
+    /// to a gallery entry.
+    private func openModelFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        // Allow any extension type — .tinygpt is custom, .bin is the
+        // browser-shipping format, and macOS would otherwise hide both.
+        panel.allowedContentTypes = [.data]
+        panel.message = "Pick a .tinygpt or .bin model checkpoint."
+        if panel.runModal() == .OK, let url = panel.url {
+            let stem = url.deletingPathExtension().lastPathComponent
+            let item = GalleryItem(
+                id: "user-\(stem)-\(UUID().uuidString.prefix(6))",
+                displayName: stem.replacingOccurrences(of: "-", with: " ").capitalized,
+                icon: "📦",
+                url: url,
+                prompt: "Hello"
+            )
+            // Append to the sidebar list so it's selectable for this session.
+            if !galleryItems.contains(where: { $0.url == item.url }) {
+                galleryItems.append(item)
+            }
+            Task { await controller.load(item) }
         }
     }
 
