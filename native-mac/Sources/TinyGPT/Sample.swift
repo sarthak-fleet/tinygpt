@@ -336,7 +336,8 @@ enum Sample {
         let draftModel: AnyModel? = draftPath.flatMap { p in
             do {
                 let d = try ModelLoader.load(p)
-                print("draft model loaded: \(formatLargeInt(d.model.numParameters())) params · greedy speculative-k=\(speculativeK)")
+                let mode = temperature > 0 ? "stochastic (Leviathan rejection sampling)" : "greedy"
+                print("draft model loaded: \(formatLargeInt(d.model.numParameters())) params · \(mode) speculative-k=\(speculativeK)")
                 return d.model
             } catch {
                 fputs("warning: draft model load failed (\(error)); proceeding without spec-decode\n", stderr)
@@ -608,15 +609,17 @@ enum Sample {
                           stepCount, totalProposed, totalAccepted,
                           acceptRate * 100, tps, elapsedHeads), stderr)
         } else if let draft = draftModel {
-            // Speculative decoding (greedy). Generate in bursts of up-to-K
-            // tokens at a time. Temperature is ignored — the greedy
-            // variant is lossless wrt target's argmax; sampled spec-decode
-            // is a follow-up.
-            if temperature > 0 {
-                fputs("note: --draft forces greedy (temperature ignored)\n", stderr)
-            }
+            // Speculative decoding. Generate in bursts of up-to-K tokens.
+            //   temperature == 0  → greedy (argmax match) — lossless wrt
+            //                       target's argmax output.
+            //   temperature > 0   → stochastic with rejection sampling
+            //                       (Leviathan 2023 Thm 3.5) — lossless
+            //                       wrt sampling from p_target directly.
+            //
+            // Both paths are PROVABLY identical in distribution to running
+            // target-only at the same temperature; spec-dec only changes
+            // wall-clock, not output.
             var ids: [Int] = []
-            // Initialise ids from the prompt.
             do {
                 let arr = promptIds[0, 0...]
                 eval(arr)
@@ -628,11 +631,14 @@ enum Sample {
                 if TrainSupport.stopRequested.isSet { break }
                 let remaining = maxTokens - (ids.count - startCount)
                 let k = min(speculativeK, remaining)
-                let priorCount = ids.count
-                let accepted = SpeculativeDecode.step(target: model, draft: draft,
-                                                       ids: &ids, k: k,
-                                                       ctxCap: cfg.contextLength)
-                _ = priorCount
+                let accepted: [Int] = temperature > 0
+                    ? SpeculativeDecode.stepStochastic(
+                        target: model, draft: draft,
+                        ids: &ids, k: k, ctxCap: cfg.contextLength,
+                        temperature: temperature)
+                    : SpeculativeDecode.step(
+                        target: model, draft: draft,
+                        ids: &ids, k: k, ctxCap: cfg.contextLength)
                 for id in accepted { emit(id) }
                 if ids.count >= cfg.contextLength { break }
             }
