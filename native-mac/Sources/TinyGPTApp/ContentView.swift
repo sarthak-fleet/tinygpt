@@ -5,8 +5,10 @@ enum AppTab: Hashable { case sample, train, finetune, interp }
 struct ContentView: View {
     @StateObject private var controller = ModelController()
     @StateObject private var stats = MachineStats()
+    @StateObject private var hfBrowser = HFBrowserController()
     @State private var galleryItems: [GalleryItem] = []
     @State private var selectedItem: GalleryItem? = nil
+    @State private var showHFBrowser: Bool = false
 
     // Sampler params — persisted across launches so a tuned recipe sticks.
     @AppStorage("tg.prompt")        private var prompt: String = "ROMEO:"
@@ -49,6 +51,9 @@ struct ContentView: View {
         }
         .onAppear {
             galleryItems = GalleryDiscovery.discover()
+        }
+        .sheet(isPresented: $showHFBrowser) {
+            HFBrowserView(controller: hfBrowser, isPresented: $showHFBrowser)
         }
     }
 
@@ -135,6 +140,15 @@ struct ContentView: View {
                     .foregroundStyle(Theme.faint)
                     .tracking(1)
                 Spacer()
+                Button {
+                    showHFBrowser = true
+                } label: {
+                    Image(systemName: "cloud.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+                .help("Browse + download HuggingFace models.")
                 Button {
                     openModelFile()
                 } label: {
