@@ -103,6 +103,8 @@ struct TinyGPT {
             QualityClassifier.runTrain(args: Array(args.dropFirst()))
         case "quality-filter":
             QualityClassifier.runFilter(args: Array(args.dropFirst()))
+        case "eval-compare":
+            EvalCompare.run(args: Array(args.dropFirst()))
         case "patch":
             Patch.run(args: Array(args.dropFirst()))
         case "causal-trace":
