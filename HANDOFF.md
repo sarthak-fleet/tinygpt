@@ -52,6 +52,29 @@ supplies positive/negative for their quality dimension. .tgfq format
 accept on word-shuffled text after 5 epochs on a 1000-doc training
 set.
 
+**Mac app — "decent standard" sprint** (2026-06-05 PM session 2)
+- `.app` bundle build via `scripts/build_macapp.sh` — proper
+  Contents/{MacOS,Resources} layout, Info.plist, ad-hoc codesigned,
+  smoke-launches via `open build/TinyGPT.app`
+- Branded icon via `scripts/make_icon.sh` — pipes
+  `browser/public/favicon.svg` through qlmanage → sips → iconutil →
+  `native-mac/Resources/TinyGPT.icns` (also wired into the bundle)
+- Sampler inspector in Sample tab: temperature + top-K + repetition
+  penalty + max-tokens, all persisted via @AppStorage; toggleable
+  show/hide
+- Session-scoped completion history: each Generate run appends a
+  card (timestamp, prompt, output, sampler recipe, perf, Copy button)
+- "+" button in sidebar — `NSOpenPanel` for opening arbitrary
+  `.tinygpt`/`.bin` files outside the gallery search paths
+- Gallery discovery walks `data/gallery/` (added), `browser/public/
+  gallery/`, `public/gallery/`, plus the system Application Support
+  fallback. Empty-state lists the paths + has a Reload button.
+- Welcome pane replaces the old `←` placeholder with a three-feature
+  pitch (Sample / Train / Fine-tune)
+- `File → New` menu item dropped (no document model to instantiate)
+
+Launch: `open build/TinyGPT.app` or `cp -r build/TinyGPT.app /Applications/`.
+
 ## What's deferred (with reasons)
 
 These items need either training to materialize, or non-trivial
