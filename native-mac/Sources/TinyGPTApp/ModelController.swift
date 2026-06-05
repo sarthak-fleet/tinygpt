@@ -24,9 +24,10 @@ final class ModelController: ObservableObject {
     @Published var history: [HistoryItem] = []
 
     /// One past prompt + completion + the sampler settings that produced
-    /// it. Reproducible at a click.
-    struct HistoryItem: Identifiable, Hashable {
-        let id = UUID()
+    /// it. Reproducible at a click. Codable so the session-list persists
+    /// across app launches via UserDefaults.
+    struct HistoryItem: Identifiable, Hashable, Codable {
+        var id = UUID()
         let timestamp: Date
         let modelId: String
         let modelName: String
@@ -39,12 +40,32 @@ final class ModelController: ObservableObject {
         let tokensPerSec: Double
     }
 
+    private static let historyKey = "tg.completionHistory.v1"
+    /// Bound the persisted history — keep the last N completions so the
+    /// UserDefaults plist doesn't grow without limit on heavy use.
+    private static let historyMax = 200
+
     private var model: TinyGPTModel? = nil
     private var modelConfig: ModelConfig? = nil
     private var generationTask: Task<Void, Never>? = nil
 
     init() {
         deviceName = "\(Device.defaultDevice())"
+        loadHistory()
+    }
+
+    private func loadHistory() {
+        guard let data = UserDefaults.standard.data(forKey: Self.historyKey),
+              let items = try? JSONDecoder().decode([HistoryItem].self, from: data)
+        else { return }
+        self.history = items
+    }
+
+    private func saveHistory() {
+        // Cap the persisted size — older runs drop off the front.
+        let trimmed = history.suffix(Self.historyMax)
+        guard let data = try? JSONEncoder().encode(Array(trimmed)) else { return }
+        UserDefaults.standard.set(data, forKey: Self.historyKey)
     }
 
     func load(_ item: GalleryItem) async {
@@ -107,7 +128,10 @@ final class ModelController: ObservableObject {
         }
     }
 
-    func clearHistory() { history.removeAll() }
+    func clearHistory() {
+        history.removeAll()
+        saveHistory()
+    }
 
     func cancelGeneration() {
         generationTask?.cancel()
@@ -257,6 +281,7 @@ final class ModelController: ObservableObject {
                     tokensGenerated: streamed,
                     tokensPerSec: self.tokensPerSec
                 ))
+                self.saveHistory()
             }
         }
     }
