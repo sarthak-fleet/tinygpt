@@ -27,6 +27,11 @@ UltraFeedback (187K rows = 1.2 GB JSONL) both decoded and ready.
 `scripts/parquet_to_txt.py` handles arbitrary parquet shards — see its
 header docstring. Requires `pyarrow` (pip-installed today).
 
+**Group-SAE v1 (B19)** — `tinygpt sae --layer-group A,B,C` trains one
+SAE on the union of residuals from N layers. ~3× fewer SAE trainings
+at ~16% higher MSE. Smoke-tested. Combines with --checkpoint-dir for
+group-aware timeline. AMAD-driven group selection deferred to v2.
+
 ## Snapshot (top of session-end 2026-06-04 PM)
 
 **Branch:** `main` · **Working tree:** clean save for `.claude/` (session state) and `default.profraw` (test artifact, gitignore-eligible).
