@@ -57,6 +57,12 @@ enum SAE {
         // gets `<stem>.step-N.sae`).
         var checkpointDir: String? = nil
         var timelineOut: String? = nil
+        // B19 Group-SAE: train one SAE on the union of residuals from a
+        // group of (typically contiguous) layers. The encoder/decoder
+        // weights are shared across the group. Comma-separated list,
+        // e.g. `--layer-group 0,1,2`. Mutually exclusive with --layer.
+        // Source: Wang et al., 2024 (arxiv 2410.21508).
+        var layerGroup: [Int]? = nil
 
         var i = 0
         while i < args.count {
@@ -72,6 +78,12 @@ enum SAE {
             case "--ctx":        ctxOverride = Int(args[i+1]); i += 2
             case "--checkpoint-dir": checkpointDir = args[i+1]; i += 2
             case "--timeline-out":   timelineOut = args[i+1]; i += 2
+            case "--layer-group":
+                layerGroup = args[i+1].split(separator: ",").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+                if (layerGroup ?? []).isEmpty {
+                    fputs("--layer-group needs a comma-separated list of layer indices (got '\(args[i+1])')\n", stderr); exit(2)
+                }
+                i += 2
             case "-h", "--help": exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
@@ -80,12 +92,28 @@ enum SAE {
         }
         guard let corpusPath = corpusPath else { fputs("--corpus required\n", stderr); exitUsage() }
         guard let outPath = outPath else { fputs("--out required\n", stderr); exitUsage() }
-        guard let layer = layer else { fputs("--layer required\n", stderr); exitUsage() }
+
+        // Resolve the layer set: either --layer-group A,B,C (group mode) or
+        // --layer N (singleton). Exactly one must be set.
+        let layers: [Int]
+        if layer == nil && layerGroup == nil {
+            fputs("either --layer N or --layer-group A,B,C is required\n", stderr); exitUsage()
+        }
+        if layer != nil && layerGroup != nil {
+            fputs("--layer and --layer-group are mutually exclusive\n", stderr); exitUsage()
+        }
+        if let one = layer {
+            layers = [one]
+        } else if let group = layerGroup {
+            layers = group
+        } else {
+            fputs("internal: failed to resolve layer set\n", stderr); exit(2)
+        }
 
         // B13 dispatch: --checkpoint-dir runs the SAE training loop across
         // every .tinygpt file under <dir>, sorted by header step.
         if let ckptDir = checkpointDir {
-            runTimeline(checkpointDir: ckptDir, corpusPath: corpusPath, layer: layer,
+            runTimeline(checkpointDir: ckptDir, corpusPath: corpusPath, layers: layers,
                          outStem: outPath, timelineOut: timelineOut,
                          dFeatures: dFeatures, steps: steps, lr: lr,
                          l1Penalty: l1Penalty, batchSize: batchSize,
@@ -95,7 +123,7 @@ enum SAE {
 
         guard let modelPath = modelPath else { fputs("missing <model>\n", stderr); exitUsage() }
 
-        _ = trainOne(modelPath: modelPath, corpusPath: corpusPath, layer: layer,
+        _ = trainOne(modelPath: modelPath, corpusPath: corpusPath, layers: layers,
                       dFeatures: dFeatures, steps: steps, lr: lr,
                       l1Penalty: l1Penalty, batchSize: batchSize,
                       ctxOverride: ctxOverride, outPath: outPath)
@@ -108,7 +136,7 @@ enum SAE {
     /// whole loop).
     @discardableResult
     private static func trainOne(
-        modelPath: String, corpusPath: String, layer: Int,
+        modelPath: String, corpusPath: String, layers: [Int],
         dFeatures: Int?, steps: Int, lr: Float, l1Penalty: Float,
         batchSize: Int, ctxOverride: Int?, outPath: String
     ) -> (mse: Float, l0PerSample: Float, l0Frac: Float,
@@ -122,9 +150,12 @@ enum SAE {
             fputs("sae first-cut targets from-scratch byte-level models.\n", stderr); exit(2)
         }
         let cfg = load.config
-        guard layer >= 0, layer < cfg.nLayers else {
-            fputs("--layer \(layer) out of range [0, \(cfg.nLayers))\n", stderr); exit(2)
+        for l in layers {
+            guard l >= 0, l < cfg.nLayers else {
+                fputs("layer \(l) out of range [0, \(cfg.nLayers))\n", stderr); exit(2)
+            }
         }
+        let isGroup = layers.count > 1
         let D = cfg.dModel
         let F = dFeatures ?? (4 * D)
         let T = min(ctxOverride ?? cfg.contextLength, cfg.contextLength)
@@ -150,7 +181,8 @@ enum SAE {
         ----------------------------
         base:           \(modelPath)
         corpus:         \(corpusPath) (\(bytes.count) bytes)
-        layer:          \(layer)
+        \(isGroup ? "group:          \(layers) (\(layers.count) layers; shared encoder/decoder)"
+                  : "layer:          \(layers[0])")
         d_model:        \(D)
         d_features:     \(F)  (\(String(format: "%.1f", Float(F)/Float(D)))× overcomplete)
         steps:          \(steps)
@@ -199,8 +231,18 @@ enum SAE {
             }
             let idx = MLXArray(batchBytes, [batchSize, T])
             let states = model.forwardLayerwise(idx)
-            // states[layer] has shape [B, T, D]; flatten to [B*T, D].
-            let h = states[layer].reshaped([batchSize * T, D])
+            // Single-layer: states[layer] → [B*T, D].
+            // Group-SAE: concat states[i] for each i in `layers` → [B*T*|G|, D].
+            //   Each row is one residual sample; the SAE sees the union of
+            //   the group's activations and learns features that reconstruct
+            //   all of them with shared parameters.
+            let h: MLXArray
+            if isGroup {
+                let parts = layers.map { states[$0].reshaped([batchSize * T, D]) }
+                h = MLX.concatenated(parts, axis: 0)
+            } else {
+                h = states[layers[0]].reshaped([batchSize * T, D])
+            }
             MLX.eval(h)
 
             let (loss, grads) = gradFn(sae, h, h)
@@ -226,7 +268,15 @@ enum SAE {
         }
         let diagIdx = MLXArray(diagBytes, [batchSize, T])
         let diagStates = model.forwardLayerwise(diagIdx)
-        let hDiag = diagStates[layer].reshaped([batchSize * T, D])
+        // Same stacking as training: held-out diagnostics reflect group
+        // behaviour, not single-layer.
+        let hDiag: MLXArray
+        if isGroup {
+            let parts = layers.map { diagStates[$0].reshaped([batchSize * T, D]) }
+            hDiag = MLX.concatenated(parts, axis: 0)
+        } else {
+            hDiag = diagStates[layers[0]].reshaped([batchSize * T, D])
+        }
         MLX.eval(hDiag)
         let centered = hDiag - sae.bDec
         let encDiag = MLX.maximum(MLX.matmul(centered, sae.wEnc.transposed()) + sae.bEnc,
@@ -245,9 +295,14 @@ enum SAE {
           mean L0 (active features per sample): \(String(format: "%.1f / %d  (%.2f%%)", l0PerSample, F, l0Frac * 100))
         """)
 
-        // Persist.
+        // Persist. Single-layer SAE: store the layer index as before.
+        // Group SAE: store the first layer in the legacy `layer` field
+        // (so old readers still see a valid value) plus the full layer
+        // list in the new `layers` field via SaeWriter's layers param.
         do {
-            try SaeWriter.write(sae: sae, cfg: cfg, layer: layer,
+            try SaeWriter.write(sae: sae, cfg: cfg,
+                                 layer: layers[0],
+                                 layers: layers.count > 1 ? layers : nil,
                                  to: URL(fileURLWithPath: outPath))
             print("wrote SAE sidecar → \(outPath)")
         } catch {
@@ -267,7 +322,7 @@ enum SAE {
     /// The timeline file is append-safe — re-running with a longer list of
     /// checkpoints rewrites it.
     private static func runTimeline(
-        checkpointDir: String, corpusPath: String, layer: Int,
+        checkpointDir: String, corpusPath: String, layers: [Int],
         outStem: String, timelineOut: String?,
         dFeatures: Int?, steps: Int, lr: Float, l1Penalty: Float,
         batchSize: Int, ctxOverride: Int?
@@ -310,7 +365,7 @@ enum SAE {
         ----------------------
         checkpoints: \(ckpts.count) (steps \(ckpts.first!.step) → \(ckpts.last!.step))
         corpus:      \(corpusPath)
-        layer:       \(layer)
+        \(layers.count > 1 ? "group:       \(layers)" : "layer:       \(layers[0])")
         steps/SAE:   \(steps)
         out stem:    \(outStem)
         timeline:    \(timelineOut ?? "(stdout)")
@@ -339,20 +394,26 @@ enum SAE {
         let stemBase = stemIsDir ? "sae" : URL(fileURLWithPath: outStem).deletingPathExtension().lastPathComponent
         try? fm.createDirectory(atPath: stemDir, withIntermediateDirectories: true)
 
+        // Group SAEs get a different per-checkpoint filename suffix so
+        // single-layer and grouped timelines don't collide if both are
+        // run against the same checkpoint dir.
+        let layerTag = layers.count > 1
+            ? "group-" + layers.map(String.init).joined(separator: "_")
+            : "layer-\(layers[0])"
+
         for (i, ckpt) in ckpts.enumerated() {
-            let perOut = "\(stemDir)/\(stemBase).step-\(ckpt.step).sae"
+            let perOut = "\(stemDir)/\(stemBase).\(layerTag).step-\(ckpt.step).sae"
             print("\n[\(i+1)/\(ckpts.count)] step \(ckpt.step) — training SAE on \(ckpt.url.lastPathComponent)")
             let stats = trainOne(modelPath: ckpt.url.path, corpusPath: corpusPath,
-                                  layer: layer, dFeatures: dFeatures, steps: steps,
+                                  layers: layers, dFeatures: dFeatures, steps: steps,
                                   lr: lr, l1Penalty: l1Penalty, batchSize: batchSize,
                                   ctxOverride: ctxOverride, outPath: perOut)
-            // Schema kept stable for the future browser viewer:
-            //   {"step":Int, "layer":Int, "d_model":Int, "d_features":Int,
-            //    "mse":Float, "l0_per_sample":Float, "l0_frac":Float,
-            //    "sae_path":String, "ckpt_path":String}
+            // Schema kept stable for the future browser viewer; "layers"
+            // is the new field for group runs, "layer" stays for backcompat.
             let row: [String: Any] = [
                 "step": ckpt.step,
-                "layer": layer,
+                "layer": layers[0],
+                "layers": layers,
                 "d_model": stats.dModel,
                 "d_features": stats.dFeatures,
                 "mse": stats.mse.isFinite ? stats.mse : 0,
@@ -408,7 +469,19 @@ enum SAE {
                               PATH. Defaults to stdout when omitted.
                               In timeline mode --out becomes a path stem
                               (or directory); each checkpoint produces
-                              `<stem>.step-N.sae`.
+                              `<stem>.<layer-tag>.step-N.sae`.
+
+        Group-SAE mode (B19 — Wang et al., 2024 · arxiv 2410.21508):
+        --layer-group A,B,C   train ONE SAE on the union of residuals
+                              from layers A, B, C (encoder/decoder
+                              weights shared). Mutually exclusive with
+                              --layer. Typically picks contiguous layers
+                              (e.g. 2,3,4). ~3× faster than three
+                              per-layer SAEs at the cost of slightly
+                              higher MSE — useful when you'd otherwise
+                              train many similar SAEs. Combines with
+                              --checkpoint-dir to get one timeline per
+                              group.
         """)
         exit(code)
     }
@@ -445,17 +518,23 @@ private struct SaeHeader: Codable {
     var dModel: Int
     var dFeatures: Int
     var layer: Int
+    /// Group-SAE only — full layer list when the SAE was trained on the
+    /// union of multiple layers' residuals (B19 Group-SAE). Nil for
+    /// single-layer SAEs so older readers round-trip cleanly.
+    var layers: [Int]?
     var baseLayers: Int
     var baseDModel: Int
     var baseCtx: Int
 }
 
 enum SaeWriter {
-    static func write(sae: SaeModule, cfg: ModelConfig, layer: Int,
+    static func write(sae: SaeModule, cfg: ModelConfig,
+                       layer: Int, layers: [Int]? = nil,
                        to url: URL) throws {
         let header = SaeHeader(
             version: 1, dModel: sae.dModel, dFeatures: sae.dFeatures,
-            layer: layer, baseLayers: cfg.nLayers, baseDModel: cfg.dModel,
+            layer: layer, layers: layers,
+            baseLayers: cfg.nLayers, baseDModel: cfg.dModel,
             baseCtx: cfg.contextLength
         )
         let encoder = JSONEncoder()
