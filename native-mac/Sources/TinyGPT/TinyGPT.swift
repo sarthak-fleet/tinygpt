@@ -97,6 +97,8 @@ struct TinyGPT {
             SAE.run(args: Array(args.dropFirst()))
         case "sae-explore":
             SaeExplore.run(args: Array(args.dropFirst()))
+        case "sae-to-saelens":
+            SaeToSaelens.run(args: Array(args.dropFirst()))
         case "patch":
             Patch.run(args: Array(args.dropFirst()))
         case "causal-trace":
