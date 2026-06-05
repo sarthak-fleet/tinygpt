@@ -17,6 +17,8 @@ import Foundation
 enum RunLmEval {
     static func run(args: [String]) {
         var hfModel: String? = nil
+        var tinygptModel: String? = nil           // .tinygpt path; routes via serve
+        var servePort: Int = 8089                 // avoid 8080 collision
         var tasks: String = "arc_easy"
         var limit: Int = 0                         // 0 = full
         var batchSize: Int = 4
@@ -28,11 +30,15 @@ enum RunLmEval {
         var workDir: String = "/tmp/tinygpt-lm-eval"
         var dtype: String = "float32"
         var device: String = "mps"                 // Metal on Apple Silicon
+        var tokenizerPath: String? = nil          // override; default = read from .tinygpt header
 
         var i = 0
         while i < args.count {
             switch args[i] {
-            case "--hf-model":   hfModel = args[i+1]; i += 2
+            case "--hf-model":      hfModel = args[i+1]; i += 2
+            case "--tinygpt-model": tinygptModel = args[i+1]; i += 2
+            case "--serve-port":    servePort = Int(args[i+1]) ?? servePort; i += 2
+            case "--tokenizer":     tokenizerPath = args[i+1]; i += 2
             case "--tasks":      tasks = args[i+1]; i += 2
             case "--limit":      limit = Int(args[i+1]) ?? limit; i += 2
             case "--batch":      batchSize = Int(args[i+1]) ?? batchSize; i += 2
@@ -49,8 +55,29 @@ enum RunLmEval {
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
             }
         }
-        guard let hfModel = hfModel else { fputs("--hf-model <dir> required (v1 takes HF-loadable models only; .tinygpt support is v2)\n", stderr); exitUsage() }
+        guard hfModel != nil || tinygptModel != nil else {
+            fputs("either --hf-model <dir> or --tinygpt-model <path.tinygpt> is required\n", stderr); exitUsage()
+        }
+        if hfModel != nil && tinygptModel != nil {
+            fputs("--hf-model and --tinygpt-model are mutually exclusive\n", stderr); exitUsage()
+        }
         guard let outJsonl = outJsonl else { fputs("--out <path.jsonl> required (E0 schema target)\n", stderr); exitUsage() }
+
+        // .tinygpt mode: spawn `tinygpt-cli serve` in the background +
+        // run lm_eval against the resulting OpenAI-compatible endpoint.
+        // The actual TinyGPT forward pass evaluates — no semantic
+        // mismatch from re-loading our weights into LlamaForCausalLM.
+        if let tg = tinygptModel {
+            runViaServe(tinygptPath: tg, servePort: servePort,
+                         tokenizerOverride: tokenizerPath,
+                         tasks: tasks, limit: limit, batchSize: batchSize,
+                         outJsonl: outJsonl, modelName: modelName,
+                         modelStep: modelStep, baseline: baseline,
+                         lmEvalBin: lmEvalBin, workDir: workDir)
+            return
+        }
+
+        guard let hfModel = hfModel else { fatalError("unreachable") }
 
         // Default the friendly model name to the dir's last path component
         // — usually the snapshot SHA, which is informative enough for v1.
@@ -194,6 +221,188 @@ enum RunLmEval {
             }
         }
         return emitted
+    }
+
+    /// Score a `.tinygpt` model by spawning `tinygpt-cli serve` and
+    /// running lm_eval against its OpenAI-compatible endpoint via the
+    /// `local-completions` backend. The model's actual forward pass
+    /// evaluates — no architecture-cast misfire.
+    private static func runViaServe(
+        tinygptPath: String, servePort: Int, tokenizerOverride: String?,
+        tasks: String, limit: Int, batchSize: Int, outJsonl: String,
+        modelName: String?, modelStep: Int?, baseline: Bool,
+        lmEvalBin: String, workDir: String
+    ) {
+        let displayName = modelName ?? URL(fileURLWithPath: tinygptPath)
+            .deletingPathExtension().lastPathComponent
+
+        // Locate the bundled tinygpt-cli for serve. Order:
+        //   1. self — the binary we're already running (covers SwiftPM
+        //      build, .app bundle, and a `cp /usr/local/bin/tinygpt`
+        //      install equally). This is the cleanest path when the
+        //      runner IS tinygpt invoking itself.
+        //   2. PATH lookup via `which tinygpt` / `which tinygpt-cli`.
+        //   3. Common install locations as a last-ditch fallback.
+        let selfPath = CommandLine.arguments.first.map { URL(fileURLWithPath: $0) }
+            ?? Bundle.main.executableURL
+        let tinygptCLI: URL? = selfPath ?? resolveExecutable("tinygpt") ?? resolveExecutable("tinygpt-cli")
+        guard let tinygptCLI = tinygptCLI else {
+            fputs("tinygpt CLI not found for serve. Build with `swift build -c release`.\n", stderr); exit(1)
+        }
+        guard let lmEvalURL = resolveExecutable(lmEvalBin) else {
+            fputs("lm_eval not found. `pip install lm-eval` then ensure it's on PATH.\n", stderr); exit(1)
+        }
+
+        // Find the tokenizer the model was trained with — lm_eval's
+        // local-completions backend needs a tokenizer to count tokens.
+        // Read it from the .tinygpt header (tokenizerSource field),
+        // fall back to the explicit --tokenizer override.
+        let tokenizerPath: String? = tokenizerOverride ?? Self.readTokenizerSource(from: tinygptPath)
+        if tokenizerPath == nil {
+            fputs("could not infer tokenizer path. Pass --tokenizer <HF model id or dir>.\n", stderr); exit(1)
+        }
+
+        let serveBaseUrl = "http://127.0.0.1:\(servePort)/v1"
+
+        // Fresh work dir per run; lm_eval writes results JSON under
+        // <work-dir>/<sanitized-name>/.
+        let workURL = URL(fileURLWithPath: workDir)
+            .appendingPathComponent(UUID().uuidString.prefix(8).description)
+        try? FileManager.default.createDirectory(at: workURL, withIntermediateDirectories: true)
+
+        print("""
+
+        tinygpt run-lm-eval  (via tinygpt serve)
+        ----------------------------------------
+        model:      \(tinygptPath)
+        name:       \(displayName)\(baseline ? " (baseline)" : "")\(modelStep.map { " · step \($0)" } ?? "")
+        tasks:      \(tasks)
+        batch:      \(batchSize)\(limit > 0 ? " · limit \(limit)" : " · FULL splits")
+        tokenizer:  \(tokenizerPath ?? "—")
+        serve port: \(servePort)
+        out:        \(outJsonl)
+        work:       \(workURL.path)
+        """)
+
+        // 1. Spawn the server in the background.
+        let serveProc = Process()
+        serveProc.executableURL = tinygptCLI
+        serveProc.arguments = ["serve", tinygptPath, "--host", "127.0.0.1", "--port", "\(servePort)"]
+        let servePipe = Pipe()
+        serveProc.standardOutput = servePipe
+        serveProc.standardError = servePipe
+        do { try serveProc.run() }
+        catch {
+            fputs("couldn't launch tinygpt serve: \(error)\n", stderr); exit(1)
+        }
+        // Best-effort cleanup if we crash before reaching the explicit
+        // terminate() below.
+        defer { if serveProc.isRunning { serveProc.terminate() } }
+
+        // 2. Poll the endpoint until ready. tinygpt serve prints
+        //    "tinygpt serve — listening on ..." once bound; easier to
+        //    just hit /v1/models in a loop.
+        print("  waiting for serve …", terminator: "")
+        fflush(stdout)
+        let modelsURL = URL(string: "\(serveBaseUrl)/models")!
+        var ready = false
+        for _ in 0..<60 {  // 60 × 1s = 60 s timeout
+            Thread.sleep(forTimeInterval: 1.0)
+            print(".", terminator: ""); fflush(stdout)
+            var req = URLRequest(url: modelsURL); req.timeoutInterval = 2
+            let sem = DispatchSemaphore(value: 0)
+            var ok = false
+            URLSession.shared.dataTask(with: req) { _, resp, _ in
+                if let http = resp as? HTTPURLResponse, http.statusCode < 500 { ok = true }
+                sem.signal()
+            }.resume()
+            _ = sem.wait(timeout: .now() + 3)
+            if ok { ready = true; break }
+            if !serveProc.isRunning { break }
+        }
+        if !ready {
+            print(" ✗")
+            fputs("\ntinygpt serve never became reachable on \(serveBaseUrl).\n", stderr)
+            // Surface the serve's last 10 lines for debugging.
+            servePipe.fileHandleForReading.closeFile()
+            exit(1)
+        }
+        print(" ✓ (model loaded, evaluating…)")
+
+        // 3. Run lm_eval against the endpoint.
+        let modelArgs = "base_url=\(serveBaseUrl)/completions,model=tinygpt,tokenizer_backend=huggingface,tokenizer=\(tokenizerPath!)"
+        var lmArgs: [String] = [
+            "--model", "local-completions",
+            "--model_args", modelArgs,
+            "--tasks", tasks,
+            "--batch_size", "\(batchSize)",
+            "--output_path", workURL.path,
+        ]
+        if limit > 0 { lmArgs.append(contentsOf: ["--limit", "\(limit)"]) }
+
+        let start = Date()
+        let lm = Process()
+        lm.executableURL = lmEvalURL
+        lm.arguments = lmArgs
+        do { try lm.run() }
+        catch {
+            fputs("couldn't launch lm_eval: \(error)\n", stderr); serveProc.terminate(); exit(1)
+        }
+        lm.waitUntilExit()
+        let wall = -start.timeIntervalSinceNow
+
+        // 4. Clean up the serve.
+        serveProc.terminate()
+
+        guard lm.terminationStatus == 0 else {
+            fputs("lm_eval exited with code \(lm.terminationStatus)\n", stderr); exit(lm.terminationStatus)
+        }
+        guard let resultsURL = findLatestResultsJSON(under: workURL) else {
+            fputs("could not find results JSON under \(workURL.path)\n", stderr); exit(1)
+        }
+        print("  → results: \(resultsURL.path)")
+
+        let runId = UUID().uuidString
+        let rowsEmitted = try? emitRows(
+            from: resultsURL,
+            outJsonl: URL(fileURLWithPath: outJsonl),
+            runId: runId,
+            modelPath: tinygptPath,
+            modelName: displayName,
+            modelStep: modelStep,
+            baseline: baseline,
+            wallSeconds: wall
+        )
+        print("")
+        print("✓ wrote \(rowsEmitted ?? 0) rows to \(outJsonl)")
+        print("  → view: tinygpt eval-compare \(outJsonl) --by model")
+        print("")
+    }
+
+    /// Best-effort: read the tokenizerSource field from the .tinygpt
+    /// header. Works for BPE-trained models; nil for byte-level.
+    private static func readTokenizerSource(from path: String) -> String? {
+        // The .tinygpt file is a TinyGPTHeader-prefixed binary. Rather
+        // than reach into TinyGPTIO from here (would couple this CLI
+        // module to the IO module's reader), we just grep the first
+        // 64 KB for the tokenizerSource JSON field — the header is
+        // typically < 8 KB so this is overkill-safe.
+        guard let fh = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else { return nil }
+        defer { try? fh.close() }
+        let blob = (try? fh.read(upToCount: 64 * 1024)) ?? Data()
+        guard let text = String(data: blob, encoding: .utf8) ?? String(data: blob, encoding: .ascii) else {
+            return nil
+        }
+        // Look for "tokenizerSource":"..." OR "tokenizer_source":"..."
+        for needle in ["\"tokenizerSource\":\"", "\"tokenizer_source\":\""] {
+            if let r = text.range(of: needle) {
+                let rest = text[r.upperBound...]
+                if let end = rest.firstIndex(of: "\"") {
+                    return String(rest[..<end])
+                }
+            }
+        }
+        return nil
     }
 
     private static func findLatestResultsJSON(under root: URL) -> URL? {
