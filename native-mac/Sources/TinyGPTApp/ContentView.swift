@@ -269,6 +269,55 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// One past completion as a card. Prompt is highlighted in the
+    /// accent colour to set it off from the model's output, with a
+    /// monospaced footer line for the sampler recipe so re-running the
+    /// same prompt at the same settings stays easy.
+    private func historyCard(_ item: ModelController.HistoryItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(item.prompt)
+                    .font(.tgMono)
+                    .foregroundStyle(Theme.accent)
+                Spacer()
+                Text(item.timestamp, format: .dateTime.hour().minute().second())
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Theme.faint)
+            }
+            Text(item.output)
+                .font(.tgMono)
+                .foregroundStyle(Theme.fg)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            HStack(spacing: 10) {
+                Text("T=\(String(format: "%.2f", item.temperature))")
+                if item.topK > 0 { Text("top-k=\(item.topK)") }
+                if item.repetitionPenalty > 1.001 { Text("rp=\(String(format: "%.2f", item.repetitionPenalty))") }
+                Text("\(item.tokensGenerated) tok")
+                Text(String(format: "%.0f tok/s", item.tokensPerSec))
+                Spacer()
+                Button {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(item.output, forType: .string)
+                } label: { Text("Copy") }
+                .buttonStyle(.borderless)
+                .controlSize(.mini)
+            }
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(Theme.faint)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Theme.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Theme.line, lineWidth: 1)
+        )
+    }
+
     private func welcomeRow(icon: String, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: icon)
@@ -330,20 +379,35 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 ScrollView {
                     ScrollViewReader { proxy in
-                        Text(controller.generated.isEmpty
-                             ? "Output will appear here as the model generates token-by-token."
-                             : controller.generated)
-                            .font(.tgMono)
-                            .foregroundStyle(controller.generated.isEmpty ? Theme.faint : Theme.fg)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(24)
-                            .textSelection(.enabled)
-                            .id("output-end")
-                            .onChange(of: controller.generated) { _, _ in
-                                withAnimation(.linear(duration: 0.1)) {
-                                    proxy.scrollTo("output-end", anchor: .bottom)
-                                }
+                        VStack(alignment: .leading, spacing: 16) {
+                            // Past completions (this session). Each is a
+                            // card with the prompt + output + the sampler
+                            // recipe that produced it.
+                            ForEach(controller.history) { item in
+                                historyCard(item)
                             }
+
+                            // Live in-flight buffer.
+                            Text(controller.generated.isEmpty && controller.history.isEmpty
+                                 ? "Output will appear here as the model generates token-by-token."
+                                 : controller.generated)
+                                .font(.tgMono)
+                                .foregroundStyle((controller.generated.isEmpty && controller.history.isEmpty) ? Theme.faint : Theme.fg)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .padding(24)
+                        .id("output-end")
+                        .onChange(of: controller.generated) { _, _ in
+                            withAnimation(.linear(duration: 0.1)) {
+                                proxy.scrollTo("output-end", anchor: .bottom)
+                            }
+                        }
+                        .onChange(of: controller.history.count) { _, _ in
+                            withAnimation(.linear(duration: 0.1)) {
+                                proxy.scrollTo("output-end", anchor: .bottom)
+                            }
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -396,6 +460,17 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
                 .disabled(controller.loadedItem == nil || controller.isEvaluating)
                 .help("Pick a text file; the model's cross-entropy loss + BPB + perplexity print to the status line.")
+
+                if !controller.history.isEmpty {
+                    Button {
+                        controller.clearHistory()
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(Theme.faint)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear completion history for this session.")
+                }
             }
             .padding(20)
             .background(Theme.panel)

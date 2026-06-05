@@ -18,6 +18,26 @@ final class ModelController: ObservableObject {
     @Published var tokensPerSec: Double = 0
     @Published var evalResult: String? = nil
     @Published var isEvaluating: Bool = false
+    /// Completed completions in this session. New runs append a fresh
+    /// HistoryItem; the live in-flight buffer is `generated` above.
+    /// Cleared via `clearHistory()` or naturally on app restart.
+    @Published var history: [HistoryItem] = []
+
+    /// One past prompt + completion + the sampler settings that produced
+    /// it. Reproducible at a click.
+    struct HistoryItem: Identifiable, Hashable {
+        let id = UUID()
+        let timestamp: Date
+        let modelId: String
+        let modelName: String
+        let prompt: String
+        let output: String
+        let temperature: Float
+        let topK: Int
+        let repetitionPenalty: Float
+        let tokensGenerated: Int
+        let tokensPerSec: Double
+    }
 
     private var model: TinyGPTModel? = nil
     private var modelConfig: ModelConfig? = nil
@@ -65,7 +85,8 @@ final class ModelController: ObservableObject {
 
     /// Stream-generate tokens. Cancel any in-flight generation first.
     /// `topK` 0 disables top-k filtering; `repetitionPenalty` 1.0 disables
-    /// the repetition-penalty pass.
+    /// the repetition-penalty pass. The completed run is archived to
+    /// `history` once finished (or on cancel after at least one token).
     func generate(prompt: String, maxTokens: Int, temperature: Float,
                   topK: Int = 0, repetitionPenalty: Float = 1.0) {
         cancelGeneration()
@@ -75,14 +96,18 @@ final class ModelController: ObservableObject {
         tokensPerSec = 0
         status = "generating…"
 
+        let item = loadedItem
         generationTask = Task {
             await runGenerate(model: model, cfg: cfg,
                               prompt: prompt, maxTokens: maxTokens,
                               temperature: temperature,
                               topK: topK,
-                              repetitionPenalty: repetitionPenalty)
+                              repetitionPenalty: repetitionPenalty,
+                              archiveTo: item)
         }
     }
+
+    func clearHistory() { history.removeAll() }
 
     func cancelGeneration() {
         generationTask?.cancel()
@@ -126,7 +151,8 @@ final class ModelController: ObservableObject {
 
     private func runGenerate(model: TinyGPTModel, cfg: ModelConfig,
                              prompt: String, maxTokens: Int, temperature: Float,
-                             topK: Int, repetitionPenalty: Float) async {
+                             topK: Int, repetitionPenalty: Float,
+                             archiveTo item: GalleryItem?) async {
         let promptBytes = [UInt8](prompt.utf8)
         var idx = MLXArray(promptBytes.map { Int32($0) }, [1, promptBytes.count])
         // Track recent tokens for the repetition-penalty pass. Bound the
@@ -215,6 +241,23 @@ final class ModelController: ObservableObject {
         await MainActor.run {
             self.isGenerating = false
             self.status = "done — \(streamed) tokens at \(String(format: "%.0f", self.tokensPerSec)) tok/s"
+            // Archive the run — except for trivial zero-token cancels, which
+            // would clutter the history list.
+            if streamed > 0, let item {
+                let outputOnly = String(self.generated.dropFirst(prompt.count))
+                self.history.append(HistoryItem(
+                    timestamp: Date(),
+                    modelId: item.id,
+                    modelName: item.displayName,
+                    prompt: prompt,
+                    output: outputOnly,
+                    temperature: temperature,
+                    topK: topK,
+                    repetitionPenalty: repetitionPenalty,
+                    tokensGenerated: streamed,
+                    tokensPerSec: self.tokensPerSec
+                ))
+            }
         }
     }
 
