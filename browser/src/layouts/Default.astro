@@ -5,7 +5,7 @@
  * Centralizes the bits that genuinely repeat across all five routes:
  *   - <!doctype>, <html lang>, charset, viewport
  *   - favicon, theme-color
- *   - Geist + Geist Mono font preconnect/stylesheet
+ *   - Geist + Geist Mono fonts (self-hosted via @fontsource-variable)
  *   - OG/Twitter meta with sensible defaults overridable per page
  *
  * Page-specific styles still live inside each page's own <style is:global>
@@ -14,7 +14,18 @@
  * relies on global selectors that Astro's per-component scoping would
  * break. Keeping styles on the page preserves the existing visual design
  * with zero refactor risk.
+ *
+ * Fonts are now self-hosted via @fontsource-variable to drop the
+ * fonts.googleapis.com CSS chain from the LCP path. The woff2 files ship
+ * from the same origin as the HTML, so no preconnect/preload of an
+ * external CDN is required. Browsers only fetch the woff2 when CSS
+ * actually references the family — so the loadFonts prop is preserved
+ * for API compat but is effectively a no-op for self-hosted fonts
+ * (pages that don't reference "Geist Variable" in CSS won't pull the
+ * file).
  */
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 
 export interface Props {
   title: string;
@@ -26,6 +37,12 @@ export interface Props {
   twitterTitle?: string;
   twitterDescription?: string;
   themeColor?: string;
+  /**
+   * Retained for API compat with existing pages (training-dashboard,
+   * speedup, devlog, webgpu-test pass false). Now a no-op: self-hosted
+   * woff2 files are only fetched if CSS actually references the family,
+   * so opting out happens implicitly via not using the font in styles.
+   */
   loadFonts?: boolean;
 }
 
@@ -39,7 +56,7 @@ const {
   twitterTitle,
   twitterDescription,
   themeColor = "#08090a",
-  loadFonts = true,
+  loadFonts: _loadFonts = true,
 } = Astro.props;
 ---
 
@@ -65,29 +82,6 @@ const {
     <meta name="twitter:title" content={twitterTitle ?? ogTitle ?? title} />
     <meta name="twitter:description" content={twitterDescription ?? ogDescription ?? description} />
     <meta name="twitter:image" content="/og-image.png" />
-
-    {loadFonts && (
-      <>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        {/* Non-blocking font load — psi-swarm flagged the Geist stylesheet as
-            the LCP render-blocker (1.6s wasted on mobile-slow). The
-            media=print + onload-swap trick fetches in parallel without
-            stalling first paint; system fonts render until Geist is ready. */}
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
-          media="print"
-          onload="this.media='all'"
-        />
-        <noscript>
-          <link
-            rel="stylesheet"
-            href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
-          />
-        </noscript>
-      </>
-    )}
 
     <!-- Preload the gallery manifest so the demo banner doesn't pop in
          late on a cold load (was waiting for the JS bundle to evaluate
