@@ -32,6 +32,59 @@ SAE on the union of residuals from N layers. ~3× fewer SAE trainings
 at ~16% higher MSE. Smoke-tested. Combines with --checkpoint-dir for
 group-aware timeline. AMAD-driven group selection deferred to v2.
 
+**SAELens export (B17)** — `tinygpt sae-to-saelens <in.sae> --out <dir>`
+emits sae_weights.safetensors + cfg.json in the on-disk shape SAELens
+and Neuronpedia consume. Provenance preserved in cfg.json metadata
+(hook_name, hook_layer, base shapes, group layers for B19 SAEs).
+Smoke-verified: safetensors loads in Python.
+
+**Stochastic spec-dec (B14)** — `tinygpt sample --draft <m> --temperature T`
+now picks the right algorithm: T==0 → existing greedy step (lossless wrt
+argmax); T>0 → new rejection-sampling step (Leviathan 2023 Thm 3.5 —
+distributionally lossless wrt sampling from p_target). Smoke-tested with
+self-speculation.
+
+**Quality classifier (B10)** — `tinygpt train-quality-classifier` +
+`tinygpt quality-filter`. Bag-of-ngrams + logistic regression, pure
+Swift no MLX. The FineWeb-Edu architecture, agnostic to labels — user
+supplies positive/negative for their quality dimension. .tgfq format
+(~262 KB binary). Smoke-tested: 97% accept on coherent text vs 2%
+accept on word-shuffled text after 5 epochs on a 1000-doc training
+set.
+
+## What's deferred (with reasons)
+
+These items need either training to materialize, or non-trivial
+infrastructure that wasn't worth blocking the lane on:
+
+- **B12 v2 auto-rollback** — needs MLX-Swift AdamW state persistence
+  across save/load. Currently `--resume` restarts Adam (~100-step
+  loss warm-up). Without preserved Adam state, "rollback to step N"
+  isn't a clean restore. Real work; skip until either MLX upstreams
+  state-readable Adam, or someone does a clean manual port.
+- **B13 v2 (memit/patch on checkpoints + browser viewer)** — the
+  `--checkpoint-dir` pattern from `tinygpt sae` ports mechanically
+  to `tinygpt memit` and `tinygpt patch`. ~1 day. The browser
+  viewer to plot SAE feature emergence over time is the third
+  piece. None of this blocks training; all of it is post-N02
+  follow-up work.
+- **B15 layer-wise LR for SFT** — pretrain already supports
+  `--lr-layer-decay`. SFT uses `makeOptimizer` directly on
+  LoRA-tagged params; needs a LoRA-aware layer-block index map.
+  Bigger than half-day, so explicitly punted.
+- **C9 v2 full bit-exact replay** — current v1 seeds MLXRandom
+  (init reproducible); batch sampling still uses Swift stdlib
+  `Int.random`. Full coverage needs a seeded host RNG threaded
+  through ByteCorpus/TokenizedCorpus.sampleBatchRaw. See
+  `docs/determinism.md` for the v2 plan.
+- **KV-cache for spec-dec path** — `tinygpt sample --draft` (both
+  greedy + new stochastic) bypasses the KV cache. Wiring KV
+  through to target's parallel verification forward is a
+  separate task.
+- **AMAD-driven group selection for B19** — the paper's group-
+  picking algorithm (Average Maximum Angular Distance). v1 takes
+  hand-specified groups; AMAD auto-grouping is queued.
+
 ## Snapshot (top of session-end 2026-06-04 PM)
 
 **Branch:** `main` · **Working tree:** clean save for `.claude/` (session state) and `default.profraw` (test artifact, gitignore-eligible).
@@ -81,22 +134,24 @@ The durable env limitation still applies: **`swift test` doesn't work outside Xc
 
 `docs/PLAN.md` §3 is the source of truth for what's next. The current pending TODO items, ranked roughly by ROI:
 
-### Tier 1 — no training required (ship today)
+### Tier 1 — no training required
 
-| Task | Effort | Files to touch |
-|---|---|---|
-| ~~**B13 Interp-on-checkpoints infra**~~ | ~~half-day~~ | **SHIPPED** — `tinygpt train --save-history` + `tinygpt sae --checkpoint-dir`. v2 = same pattern for memit/patch + browser viewer. |
-| **B17 SAELens / Neuronpedia format export** | ~2 days | Read our SAE artifact → write SAELens-compatible safetensors + config. Look at `decoderesearch/SAELens` for the schema. Existing reader: `SaeWriter` / `SaeHeader` in `Sources/TinyGPT/SAE.swift`. |
-| **B19 Group-SAE** | ~2-3 days | Layer-group variant of existing SAE trainer. See arxiv 2410.21508. The single-checkpoint path in `SAE.trainOne` is now factored out (B13) — good seam to add a `--layer-group A,B,C` mode. |
-| **B10 Quality classifier** | ~2 days build + ~1 hr classifier training | FineWeb-Edu-style fastText scorer; tiny scaffold first, the corpus filter use is a separate ~days job. |
+All shipped today (2026-06-05). Nothing left on this tier.
+
+| Task | Status |
+|---|---|
+| **B13 v1 Interp-on-checkpoints** | SHIPPED — `tinygpt train --save-history` + `tinygpt sae --checkpoint-dir` + JSONL timeline. |
+| **B17 SAELens / Neuronpedia export** | SHIPPED — `tinygpt sae-to-saelens`. |
+| **B19 Group-SAE** | SHIPPED — `tinygpt sae --layer-group A,B,C`. |
+| **B10 Quality classifier** | SHIPPED — `tinygpt train-quality-classifier` + `tinygpt quality-filter`. |
 
 ### Tier 2 — light training (~30 min to a few hrs)
 
 | Task | Training cost | Notes |
 |---|---|---|
-| **B14 Speculative decoding** infra | 0 to build | Algorithm in inference path. Needs two trained models — tiny + small smoke is fine for a demo. |
-| ~~B13 demo~~ | DONE | Already smoke-tested at 5 ckpts. Larger-scale demo = bigger preset + more checkpoints; mechanically straightforward. |
-| **B13 v2 — same pattern for memit + patch + browser viewer** | ~2-3 days | Repeat the `--checkpoint-dir` flag on `tinygpt memit` and `tinygpt patch`; add `/sae-timeline.astro` viewer page (mirror of `/training-dashboard.astro`); investigate SAE feature alignment across checkpoints. |
+| ~~**B14 Speculative decoding**~~ | SHIPPED — greedy was already there; stochastic (T>0) added today via SpeculativeDecode.stepStochastic. |
+| ~~B13 demo~~ | DONE — smoke-tested at 5 ckpts. Real-scale demo runs on tonight's N02 base. |
+| **B13 v2 — port pattern to memit + patch + browser viewer** | ~1-2 days | Mechanical: `tinygpt memit --checkpoint-dir <dir> --timeline-out <jsonl>`. Then `/sae-timeline.astro` viewer mirrors `/training-dashboard.astro`. Cross-checkpoint feature alignment is the harder follow-up. |
 
 ### Tier 3 — serious training (the A-track gate)
 
