@@ -137,11 +137,31 @@ struct ContentView: View {
             ScrollView {
                 LazyVStack(spacing: 4) {
                     if galleryItems.isEmpty {
-                        Text("no models found — drop checkpoints in browser/public/gallery/")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Theme.faint)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 8)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("No models found")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Theme.muted)
+                            Text("Drop .tinygpt checkpoints into one of:")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.faint)
+                            Text("data/gallery/")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Theme.faint)
+                            Text("browser/public/gallery/")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Theme.faint)
+                            Text("~/Library/Application Support/TinyGPT/gallery/")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(Theme.faint)
+                            Button("Reload gallery") {
+                                galleryItems = GalleryDiscovery.discover()
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .padding(.top, 4)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
                     } else {
                         ForEach(galleryItems) { item in
                             galleryRow(item)
@@ -202,20 +222,70 @@ struct ContentView: View {
     }
 
     private var placeholderPane: some View {
-        VStack(spacing: 14) {
-            Text("←")
-                .font(.system(size: 40, weight: .ultraLight))
-                .foregroundStyle(Theme.faint)
-            Text("Pick a model from the gallery")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Theme.muted)
-            Text("Each gallery model is a 9.6M-parameter byte-level transformer\ntrained on a different corpus. Same architecture, different mind.")
-                .multilineTextAlignment(.center)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.faint)
-                .lineSpacing(4)
+        VStack(spacing: 24) {
+            VStack(spacing: 14) {
+                Text("TinyGPT")
+                    .font(.system(size: 36, weight: .semibold))
+                    .foregroundStyle(Theme.fg)
+                Text("native macOS ML lab")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(Theme.muted)
+                    .tracking(2)
+            }
+            .padding(.top, 60)
+
+            VStack(alignment: .leading, spacing: 16) {
+                welcomeRow(
+                    icon: "play.fill",
+                    title: "Sample",
+                    description: "Pick a model from the gallery (left sidebar) and prompt it."
+                )
+                welcomeRow(
+                    icon: "waveform.path.ecg",
+                    title: "Train",
+                    description: "Watch a transformer learn from scratch with live loss + step rate."
+                )
+                welcomeRow(
+                    icon: "slider.horizontal.3",
+                    title: "Fine-tune",
+                    description: "LoRA SFT or DPO against any base model, with composable adapters."
+                )
+            }
+            .padding(.horizontal, 40)
+            .frame(maxWidth: 540)
+
+            Spacer()
+
+            VStack(spacing: 4) {
+                Text("Each gallery model is a 9.6M-parameter byte-level transformer")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.faint)
+                Text("trained on a different corpus. Same architecture, different mind.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.faint)
+            }
+            .padding(.bottom, 40)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func welcomeRow(icon: String, title: String, description: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 24, height: 24, alignment: .center)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.fg)
+                Text(description)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
     }
 
     private var generationPane: some View {

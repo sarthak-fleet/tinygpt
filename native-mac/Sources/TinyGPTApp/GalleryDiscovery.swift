@@ -60,15 +60,23 @@ enum GalleryDiscovery {
         if let resourceURL = Bundle.main.resourceURL {
             paths.append(resourceURL.appendingPathComponent("gallery"))
         }
-        // 2. The browser's public/gallery dir relative to the repo root,
-        //    discovered by walking up from the executable.
+        // 2. Repo-relative paths — discovered by walking up from the
+        //    executable. Cover both the dev layout (`data/gallery/` for
+        //    locally-trained native checkpoints) and the browser ship
+        //    layout (`browser/public/gallery/` for the in-browser models).
         if let exec = Bundle.main.executableURL {
             var dir = exec.deletingLastPathComponent()
-            for _ in 0..<6 {
-                let try1 = dir.appendingPathComponent("browser/public/gallery")
-                if fm.fileExists(atPath: try1.path) { paths.append(try1); break }
-                let try2 = dir.appendingPathComponent("public/gallery")
-                if fm.fileExists(atPath: try2.path) { paths.append(try2); break }
+            for _ in 0..<8 {
+                for sub in [
+                    "data/gallery",
+                    "browser/public/gallery",
+                    "public/gallery",
+                ] {
+                    let candidate = dir.appendingPathComponent(sub)
+                    if fm.fileExists(atPath: candidate.path) {
+                        paths.append(candidate)
+                    }
+                }
                 dir = dir.deletingLastPathComponent()
             }
         }

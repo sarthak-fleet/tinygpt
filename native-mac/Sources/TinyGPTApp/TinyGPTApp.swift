@@ -13,6 +13,13 @@ struct TinyGPTApp: App {
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
+        .commands {
+            // Drop the default "New" item — TinyGPT has no document model
+            // to create a new instance of, so File→New would be a dead
+            // entry. Everything else (Cmd-Q, window minimize/zoom, etc.)
+            // stays at SwiftUI defaults.
+            CommandGroup(replacing: .newItem) { }
+        }
     }
 }
 
