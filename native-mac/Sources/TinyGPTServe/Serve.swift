@@ -412,11 +412,57 @@ extension Serve {
                 let temperature = (json["temperature"] as? Double).map { Float($0) } ?? 0.0
                 let stopParam = readStopParam(json["stop"])
                 let stream = (json["stream"] as? Bool) ?? false
+                // OpenAI Completions spec: `logprobs` is an int N (top-N
+                // alternatives) or null. We treat any non-null value as
+                // "yes, return token_logprobs". `echo` includes the prompt
+                // in the response — what lm-eval-harness's loglikelihood
+                // path uses.
+                let logprobsRequested = json["logprobs"] != nil && !(json["logprobs"] is NSNull)
+                let echo = (json["echo"] as? Bool) ?? false
 
                 if stream {
                     streamCompletion(clientFd: clientFd, prompt: prompt,
                                       maxTokens: maxTokens, temperature: temperature,
                                       stop: stopParam)
+                    return
+                }
+
+                // Logprobs + echo is lm-eval's loglikelihood signature.
+                // lm-eval-harness sends max_tokens=0 OR max_tokens=1
+                // depending on version; we trigger the teacher-forced
+                // scoring path whenever both flags are set and skip the
+                // generation loop entirely. Lm-eval slices [ctxlen:-1]
+                // on the returned token_logprobs so the boundary token
+                // doesn't matter.
+                if logprobsRequested && echo {
+                    let (tokens, tokenLogprobs) = try inferenceQueue.sync {
+                        try self.scoreLogprobs(prompt: prompt)
+                    }
+                    let payload: [String: Any] = [
+                        "id": "cmpl-\(UUID().uuidString)",
+                        "object": "text_completion",
+                        "created": Int(Date().timeIntervalSince1970),
+                        "model": "tinygpt",
+                        "choices": [[
+                            "index": 0,
+                            "text": prompt,
+                            "finish_reason": "length",
+                            "logprobs": [
+                                "tokens": tokens,
+                                // First-token logprob is NSNull (no preceding context).
+                                // lm-eval slices [ctxlen:-1] so the leading None doesn't matter.
+                                "token_logprobs": tokenLogprobs as [Any],
+                                "top_logprobs": [] as [Any],
+                                "text_offset": [] as [Any],
+                            ] as [String: Any],
+                        ]],
+                        "usage": [
+                            "prompt_tokens": tokens.count,
+                            "completion_tokens": 0,
+                            "total_tokens": tokens.count
+                        ]
+                    ]
+                    respondJSON(clientFd: clientFd, status: 200, payload: payload)
                     return
                 }
 
@@ -445,6 +491,51 @@ extension Serve {
             } catch {
                 respond(clientFd: clientFd, status: 500, body: "error: \(error)")
             }
+        }
+
+        /// Single teacher-forced forward over `prompt`, returning the
+        /// per-token logprobs. lm-eval-harness's `local-completions`
+        /// backend uses this for loglikelihood scoring on multi-choice
+        /// tasks (ARC, MMLU, HellaSwag, PIQA, BoolQ, WinoGrande, ...).
+        /// First-position logprob is `null` — no preceding context to
+        /// condition on. lm-eval slices `[ctxlen:-1]` so the leading
+        /// null is intentional, not a bug.
+        func scoreLogprobs(prompt: String) throws -> (tokens: [String], tokenLogprobs: [Any]) {
+            let promptIds = tokenizer.encode(prompt)
+            guard !promptIds.isEmpty else { return ([], []) }
+
+            let ctxCap = maxContext
+            // Drop from the left if the prompt overflows the model's ctx.
+            // Same policy as `generate`.
+            let head: Int
+            if promptIds.count > ctxCap {
+                head = promptIds.count - ctxCap
+            } else {
+                head = 0
+            }
+            let kept = Array(promptIds[head..<promptIds.count])
+            let arr = MLXArray(kept.map { Int32($0) }, [1, kept.count])
+
+            // One forward pass — logits at every position. log_softmax to
+            // probability space; gather the logprob of the token AT POSITION
+            // i+1 from the logits AT POSITION i (the next-token prediction).
+            let logits = model(arr)  // [1, T, vocab]
+            let logProbs = MLX.log(MLX.softmax(logits, axis: -1))
+            eval(logProbs)
+
+            var lps: [Any] = [NSNull()]   // position 0 has no preceding context
+            for i in 0..<(kept.count - 1) {
+                let nextTok = kept[i + 1]
+                let lp = logProbs[0, i, nextTok]
+                eval(lp)
+                lps.append(Double(lp.item(Float.self)))
+            }
+
+            // Decode each token id individually so the response carries
+            // human-readable token strings (lm-eval ignores the field
+            // but downstream debugging benefits).
+            let tokenStrings = kept.map { tokenizer.decode([$0]) }
+            return (tokenStrings, lps)
         }
 
         // MARK: SSE streaming
