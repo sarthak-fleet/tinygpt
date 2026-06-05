@@ -95,6 +95,18 @@ App-wide:
   fallback. Empty-state lists the paths + has a Reload button.
 - `File → New` dropped (no document model to instantiate)
 
+HF model browser (cloud-icon button in sidebar):
+- Sheet-based downloader. Text-input for `owner/repo`; pulls
+  config.json + tokenizer.json + safetensors shards into
+  `~/Library/Application Support/TinyGPT/hf/<owner>__<repo>/`.
+- URLSession + per-chunk progress callbacks. `HF_TOKEN` env for
+  gated models. Atomic .part rename on completion.
+- Downloaded models list with Reveal-in-Finder + Copy-CLI-cmd +
+  Delete per row.
+- v2 follow-ups: search via /api/models?search=, in-app sampling
+  (needs ModelController to learn `TinyGPTModelHF` alongside the
+  existing `TinyGPTModel`).
+
 App bundle: ~380 MB (mostly the MLX metallib + a CLI binary copy).
 Launch: `open build/TinyGPT.app` or `cp -r build/TinyGPT.app /Applications/`.
 Both binaries verified by smoke-launching the .app + invoking the
