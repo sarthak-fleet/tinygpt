@@ -99,6 +99,10 @@ struct TinyGPT {
             SaeExplore.run(args: Array(args.dropFirst()))
         case "sae-to-saelens":
             SaeToSaelens.run(args: Array(args.dropFirst()))
+        case "train-quality-classifier":
+            QualityClassifier.runTrain(args: Array(args.dropFirst()))
+        case "quality-filter":
+            QualityClassifier.runFilter(args: Array(args.dropFirst()))
         case "patch":
             Patch.run(args: Array(args.dropFirst()))
         case "causal-trace":
