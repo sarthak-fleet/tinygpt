@@ -292,15 +292,50 @@ ROI-ordered. Sourced from `backlog.md` (the living list, last sort 2026-05-31).
 
 ## Tier A — DO NEXT (north-star aligned; specialists)
 
-Until A1 lands, every optimization is theoretical.
+Until A1 lands, every optimization is theoretical. Until **Tier E** (eval
+pipelines) lands, every specialist is unmeasurable — A1's "ship" criterion
+implicitly requires E1 + E3 wired before any score can be published.
+Sequencing: Tier D (data) + Tier E (evals) → A1 specialist → Tier B
+follow-ups.
 
 - ⬜ **A1. Train first specialist end-to-end (tool-caller)** — 3-5 days execution + GPU hours. Validates north-star thesis.
 - ⬜ **A2. Pull foundational datasets** (xlam-function-calling-60k, hermes-function-calling-v1, function-calling-chatml, SWE-bench_Verified, alpaca-cleaned, orca_dpo_pairs, MetaMathQA, ultrafeedback-binarized-preferences-cleaned, the-stack-smol, python_code_instructions_18k_alpaca) — ~1 hr wall
 - ⬜ **A3. Fetch GitHub issue→PR corpus for debugger** — ~1 day with `GITHUB_TOKEN`
-- ⬜ **A4. Pull BFCL + τ-bench via extractor-data** — ~30 min
-- ⬜ **A5. Pull Indic eval datasets (MILU + IndicGenBench-XQuAD)** — ~30 min
+- ⬜ **A4. Pull BFCL + τ-bench via extractor-data** — ~30 min (DONE — sources at `~/.cache/tinygpt/datasets/_external/{gorilla-bfcl,tau-bench}/`; **wiring is Tier E**, not Tier A)
+- ⬜ **A5. Pull Indic eval datasets (MILU + IndicGenBench-XQuAD)** — ~30 min (DONE — MILU is lm-eval-harness, source at `_external/MILU/`; wiring → E3)
 - ⬜ **A6. Dataset inventory doc** — ~30 min after A2-A5
-- ⬜ **A7. Real-data MILU baseline on flagship-huge-v5** — ~2 hr; depends on A5
+- ⬜ **A7. Real-data MILU baseline on flagship-huge-v5** — ~2 hr; depends on A5 + E3
+
+## Tier D — DATA (gaps blocking specialists)
+
+Pulled today: hermes-fc.jsonl, ultrafeedback.jsonl, MetaMathQA, alpaca-cleaned,
+orca_dpo_pairs, FineWeb-Edu (50K-row sample via parquet decoder). Blocked /
+missing for the planned specialists:
+
+- ⬜ **D1. xlam-function-calling-60k** — GATED. Needs `export HF_TOKEN=hf_…` then re-run `tinygpt download-dataset Salesforce/xlam-function-calling-60k`. ~5 min user-side.
+- ⬜ **D2. function-calling-chatml + SWE-bench_Verified** — public; rerun `tinygpt download-dataset` once xlam unblocks. ~15 min.
+- ⬜ **D3. MS-MARCO + Natural Questions** — needed for B25 ScaleDown specialist. Pull via `tinygpt download-dataset` + decode parquet via `scripts/parquet_to_txt.py --jsonl`. ~30 min.
+- ⬜ **D4. the-stack-smol + python_code_instructions_18k_alpaca** — needed for code specialist. ~30 min.
+- ⬜ **D5. GSM8K + MATH + HumanEval + MBPP eval splits** — small JSONLs (test splits only), needed for math/code specialist eval. ~15 min. Pairs with E4 + E5.
+
+## Tier E — EVAL PIPELINES (wire harnesses → automate scores)
+
+Source code for BFCL / τ-bench / lm-eval-harness is already on disk under
+`~/.cache/tinygpt/datasets/_external/`. **Pulling source ≠ usable evaluator.**
+Each item below is the wiring work — a `tinygpt eval-<name>` subcommand that
+takes a model path, runs the harness via subprocess, parses the score JSON,
+returns a clean number. Until these land, "did the specialist learn anything?"
+has no automated answer.
+
+- ⬜ **E1. `tinygpt eval-bfcl <model>`** — subprocess to the Python BFCL harness at `_external/gorilla-bfcl/berkeley-function-call-leaderboard/`. Convert TinyGPT model → safetensors via existing `to-safetensors`, register as a model with the BFCL harness, run, parse the result JSON. ~1 day. **Blocks A1's "ship" criterion.**
+- ⬜ **E2. `tinygpt eval-tau-bench <model>`** — same pattern, harness at `_external/tau-bench/run.py`. Multi-turn agent score. ~1 day. **Pairs with E1 for tool-caller credibility.**
+- ⬜ **E3. `tinygpt run-lm-eval <model> --tasks mmlu,arc,hellaswag,gsm8k,…`** — wrap `_external/MILU/` (which IS lm-eval-harness). One wrapper unlocks **all** standard LM evals. **Highest leverage per day**; do first. ~1 day.
+- ⬜ **E4. `tinygpt eval-gsm8k <model>`** — standalone scorer. Parse model's final numeric answer, compare to gold. Tiny — covered by E3 if lm-eval-harness lands, but a standalone fallback gets you a number in ~half-day if E3 slips.
+- ⬜ **E5. `tinygpt eval-humaneval <model>` + sandbox** — sandboxed Python exec is the hard part (needs container or restricted-process). HumanEval + MBPP. ~1-2 days; the sandbox is what's risky.
+- ⬜ **E6. `tinygpt eval-scaledown <model>`** — clone ScaleBench, wire to TinyGPT-loaded model, run. Prereq for B25 submission. ~half-day after E1's subprocess pattern is the template.
+- ⬜ **E7. `tinygpt judge <out.jsonl> --judge <local-model>`** — LLM-as-judge shim. Pair preferences (or rate single outputs 1-10) via a local Qwen/SmolLM. Unlocks AlpacaEval / MT-Bench / RewardBench-style preference evals without an OpenAI API key. ~1 day.
+
+**Total Tier E**: ~5-7 focused days. Do E3 + E1 first (highest leverage + A1 unblocker), then the rest as nightly arcs.
 
 ## Tier B — NEXT QUARTER (multi-specialist + product)
 
