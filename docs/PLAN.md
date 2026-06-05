@@ -327,15 +327,30 @@ takes a model path, runs the harness via subprocess, parses the score JSON,
 returns a clean number. Until these land, "did the specialist learn anything?"
 has no automated answer.
 
-- ⬜ **E1. `tinygpt eval-bfcl <model>`** — subprocess to the Python BFCL harness at `_external/gorilla-bfcl/berkeley-function-call-leaderboard/`. Convert TinyGPT model → safetensors via existing `to-safetensors`, register as a model with the BFCL harness, run, parse the result JSON. ~1 day. **Blocks A1's "ship" criterion.**
+**Architectural constraint** (decided 2026-06-05): every E* item MUST emit
+structured JSONL conforming to a shared eval schema (E0). That makes two
+critical comparisons possible:
+
+1. **Cross-model**: TinyGPT vs SmolLM2 vs Qwen3 vs Phi-mini on the same task —
+   without this, "we trained a model" doesn't answer "is it any good?"
+2. **Cross-checkpoint** (training dynamics): every save-history checkpoint
+   scored against the same task → see WHEN a capability emerges. Pairs with
+   B13 interp-on-checkpoints — interp explains WHY features appeared, eval
+   confirms IF they're useful.
+
+Both fall out for free if E0 + E8 are designed in, not retrofitted.
+
+- ⬜ **E0. Shared eval JSONL schema + `tinygpt eval-compare`** — every E* item emits rows of `{run_id, model_path, model_name, model_step?, baseline?, task, subtask?, metric, score, n_examples, wall_seconds, timestamp, harness_version}`. `tinygpt eval-compare <result.jsonl>+ [--by model|step|task]` renders a comparison table (TinyGPT vs SmolLM2 etc.; same model across step-N checkpoints). Schema defined once here, every other E* writes to it. ~half-day to design + ship the compare CLI. **Do first — every other E* depends on this contract.**
+- ⬜ **E1. `tinygpt eval-bfcl <model>`** — subprocess to the Python BFCL harness at `_external/gorilla-bfcl/berkeley-function-call-leaderboard/`. Convert TinyGPT model → safetensors via existing `to-safetensors`, register as a model with the BFCL harness, run, parse the result JSON into E0 schema. ~1 day. **Blocks A1's "ship" criterion.**
 - ⬜ **E2. `tinygpt eval-tau-bench <model>`** — same pattern, harness at `_external/tau-bench/run.py`. Multi-turn agent score. ~1 day. **Pairs with E1 for tool-caller credibility.**
 - ⬜ **E3. `tinygpt run-lm-eval <model> --tasks mmlu,arc,hellaswag,gsm8k,…`** — wrap `_external/MILU/` (which IS lm-eval-harness). One wrapper unlocks **all** standard LM evals. **Highest leverage per day**; do first. ~1 day.
 - ⬜ **E4. `tinygpt eval-gsm8k <model>`** — standalone scorer. Parse model's final numeric answer, compare to gold. Tiny — covered by E3 if lm-eval-harness lands, but a standalone fallback gets you a number in ~half-day if E3 slips.
 - ⬜ **E5. `tinygpt eval-humaneval <model>` + sandbox** — sandboxed Python exec is the hard part (needs container or restricted-process). HumanEval + MBPP. ~1-2 days; the sandbox is what's risky.
 - ⬜ **E6. `tinygpt eval-scaledown <model>`** — clone ScaleBench, wire to TinyGPT-loaded model, run. Prereq for B25 submission. ~half-day after E1's subprocess pattern is the template.
 - ⬜ **E7. `tinygpt judge <out.jsonl> --judge <local-model>`** — LLM-as-judge shim. Pair preferences (or rate single outputs 1-10) via a local Qwen/SmolLM. Unlocks AlpacaEval / MT-Bench / RewardBench-style preference evals without an OpenAI API key. ~1 day.
+- ⬜ **E8. Train-time eval hook + dashboard plot** — every `--save-history` tick in `tinygpt train` (or every N steps under a new `--eval-every N` flag), kick off a lightweight subset of E3's tasks (small sample of GSM8K + ARC-easy, say 50 examples each) on the current model state, append to the run's eval JSONL. The browser `/training-dashboard.astro` viewer plots eval-score-vs-step alongside loss. ~1 day after E0 + E3 land. **This is the multi-checkpoint comparison view**: see capability emergence over training.
 
-**Total Tier E**: ~5-7 focused days. Do E3 + E1 first (highest leverage + A1 unblocker), then the rest as nightly arcs.
+**Total Tier E**: ~6-8 focused days. Do **E0 first** (schema is everyone's dependency), then E3 (highest harness leverage), then E1 (A1 ship-blocker), then E8 (multi-checkpoint), then the rest as nightly arcs.
 
 ## Tier B — NEXT QUARTER (multi-specialist + product)
 
