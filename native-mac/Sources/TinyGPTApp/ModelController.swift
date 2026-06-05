@@ -64,7 +64,10 @@ final class ModelController: ObservableObject {
     }
 
     /// Stream-generate tokens. Cancel any in-flight generation first.
-    func generate(prompt: String, maxTokens: Int, temperature: Float) {
+    /// `topK` 0 disables top-k filtering; `repetitionPenalty` 1.0 disables
+    /// the repetition-penalty pass.
+    func generate(prompt: String, maxTokens: Int, temperature: Float,
+                  topK: Int = 0, repetitionPenalty: Float = 1.0) {
         cancelGeneration()
         guard let model, let cfg = modelConfig else { return }
         generated = prompt
@@ -75,7 +78,9 @@ final class ModelController: ObservableObject {
         generationTask = Task {
             await runGenerate(model: model, cfg: cfg,
                               prompt: prompt, maxTokens: maxTokens,
-                              temperature: temperature)
+                              temperature: temperature,
+                              topK: topK,
+                              repetitionPenalty: repetitionPenalty)
         }
     }
 
@@ -120,9 +125,15 @@ final class ModelController: ObservableObject {
     }
 
     private func runGenerate(model: TinyGPTModel, cfg: ModelConfig,
-                             prompt: String, maxTokens: Int, temperature: Float) async {
+                             prompt: String, maxTokens: Int, temperature: Float,
+                             topK: Int, repetitionPenalty: Float) async {
         let promptBytes = [UInt8](prompt.utf8)
         var idx = MLXArray(promptBytes.map { Int32($0) }, [1, promptBytes.count])
+        // Track recent tokens for the repetition-penalty pass. Bound the
+        // window so memory doesn't grow with the run; the last 256 tokens
+        // are what matter for byte-level repetition.
+        var recent: [Int32] = promptBytes.map { Int32($0) }
+        let recentWindow = 256
 
         let t0 = Date()
         var streamed = 0
@@ -132,17 +143,55 @@ final class ModelController: ObservableObject {
             let lo = max(0, T - cfg.contextLength)
             let cond = idx[0..., lo..<T]
             let logits = model(cond)
-            let last = logits[0..., logits.shape[1] - 1, 0...]
+            var last = logits[0..., logits.shape[1] - 1, 0...].reshaped([logits.shape[2]])
+
+            // Repetition penalty (Keskar et al. 2019 — CTRL): divide logits
+            // for tokens that appeared in the recent window by `penalty`.
+            // For negative logits the standard CTRL trick is to MULTIPLY
+            // instead; we keep it symmetric by branching per-sign so
+            // |logit| always shrinks for repeated tokens.
+            if repetitionPenalty > 1.0 && !recent.isEmpty {
+                let tail = recent.suffix(recentWindow)
+                let uniq = Set(tail)
+                // Pull the logits row to host, modify, push back. The vocab
+                // is small (256 for byte-level gallery models) so this is
+                // cheap; the alternative — gather + scatter in MLX — adds
+                // graph nodes for no real win.
+                eval(last)
+                var floats = last.asArray(Float.self)
+                for tok in uniq {
+                    let i = Int(tok)
+                    if i >= 0 && i < floats.count {
+                        if floats[i] > 0 { floats[i] /= repetitionPenalty }
+                        else            { floats[i] *= repetitionPenalty }
+                    }
+                }
+                last = MLXArray(floats, [floats.count])
+            }
 
             let nextId: MLXArray
             if temperature <= 0 {
                 nextId = argMax(last, axis: -1).reshaped([1, 1])
             } else {
-                let scaled = last / MLXArray(temperature)
+                var scaled = last / MLXArray(temperature)
+                // Top-K filter: keep only the K largest logits, set the
+                // rest to -inf. K==0 or K>=vocab disables.
+                let vocab = scaled.shape.last!
+                if topK > 0 && topK < vocab {
+                    let asc = sorted(scaled, axis: -1)       // ascending
+                    let thr = asc[vocab - topK]              // k-th largest
+                    eval(thr)
+                    let thrF = thr.item(Float.self)
+                    scaled = MLX.where(
+                        scaled .< MLXArray(thrF),
+                        MLXArray(-Float.infinity),
+                        scaled)
+                }
                 nextId = MLXRandom.categorical(scaled).reshaped([1, 1])
             }
             eval(nextId)
             let id = Int(nextId.item(Int32.self))
+            recent.append(Int32(id))
             idx = concatenated([idx, nextId.asType(idx.dtype)], axis: 1)
             streamed += 1
 

@@ -7,9 +7,15 @@ struct ContentView: View {
     @StateObject private var stats = MachineStats()
     @State private var galleryItems: [GalleryItem] = []
     @State private var selectedItem: GalleryItem? = nil
-    @State private var prompt: String = "ROMEO:"
-    @State private var maxTokens: Int = 200
-    @State private var temperature: Double = 0.8
+
+    // Sampler params — persisted across launches so a tuned recipe sticks.
+    @AppStorage("tg.prompt")        private var prompt: String = "ROMEO:"
+    @AppStorage("tg.maxTokens")     private var maxTokens: Int = 200
+    @AppStorage("tg.temperature")   private var temperature: Double = 0.8
+    @AppStorage("tg.topK")          private var topK: Int = 0
+    @AppStorage("tg.repPenalty")    private var repPenalty: Double = 1.0
+    @AppStorage("tg.showInspector") private var showInspector: Bool = true
+
     @State private var tab: AppTab = .sample
 
     var body: some View {
@@ -214,7 +220,7 @@ struct ContentView: View {
 
     private var generationPane: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Model header
+            // Model header — also hosts the inspector toggle.
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(controller.loadedItem?.icon ?? "•")
                     .font(.system(size: 24))
@@ -235,34 +241,57 @@ struct ContentView: View {
                             .foregroundStyle(Theme.muted)
                     }
                 }
+                Button {
+                    showInspector.toggle()
+                } label: {
+                    Image(systemName: showInspector ? "sidebar.right" : "sidebar.squares.right")
+                        .foregroundStyle(showInspector ? Theme.accent : Theme.muted)
+                }
+                .buttonStyle(.plain)
+                .help(showInspector ? "Hide sampler inspector" : "Show sampler inspector")
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
             Divider().background(Theme.line)
 
-            // Output panel — always reads top-down, scrolls if long
-            ScrollView {
-                ScrollViewReader { proxy in
-                    Text(controller.generated.isEmpty
-                         ? "Output will appear here as the model generates token-by-token."
-                         : controller.generated)
-                        .font(.tgMono)
-                        .foregroundStyle(controller.generated.isEmpty ? Theme.faint : Theme.fg)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(24)
-                        .id("output-end")
-                        .onChange(of: controller.generated) { _, _ in
-                            withAnimation(.linear(duration: 0.1)) {
-                                proxy.scrollTo("output-end", anchor: .bottom)
+            // Output + inspector. Output reads top-down; inspector is a
+            // fixed-width column with all sampler controls so the prompt
+            // box at the bottom can stay focused on prompt-not-knobs.
+            HStack(spacing: 0) {
+                ScrollView {
+                    ScrollViewReader { proxy in
+                        Text(controller.generated.isEmpty
+                             ? "Output will appear here as the model generates token-by-token."
+                             : controller.generated)
+                            .font(.tgMono)
+                            .foregroundStyle(controller.generated.isEmpty ? Theme.faint : Theme.fg)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(24)
+                            .textSelection(.enabled)
+                            .id("output-end")
+                            .onChange(of: controller.generated) { _, _ in
+                                withAnimation(.linear(duration: 0.1)) {
+                                    proxy.scrollTo("output-end", anchor: .bottom)
+                                }
                             }
-                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if showInspector {
+                    Divider().background(Theme.line)
+                    samplerInspector
+                        .frame(width: 240)
+                        .frame(maxHeight: .infinity)
+                        .background(Theme.panel)
                 }
             }
-            .frame(maxHeight: .infinity)
 
             Divider().background(Theme.line)
 
-            // Controls
+            // Controls — prompt + generate. Sampler knobs (temp/topK/penalty)
+            // live in the inspector panel above so this row stays focused
+            // on the actual prompt + action, like Cursor's chat box.
             HStack(spacing: 16) {
                 TextField("Prompt", text: $prompt, axis: .horizontal)
                     .textFieldStyle(.plain)
@@ -273,33 +302,6 @@ struct ContentView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .font(.tgMono)
 
-                HStack(spacing: 6) {
-                    Text("temp")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Theme.faint)
-                    Slider(value: $temperature, in: 0...1.5)
-                        .frame(width: 100)
-                    Text(String(format: "%.2f", temperature))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.muted)
-                        .frame(width: 36, alignment: .leading)
-                }
-
-                HStack(spacing: 6) {
-                    Text("tokens")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Theme.faint)
-                    TextField("", value: $maxTokens, format: .number)
-                        .textFieldStyle(.plain)
-                        .frame(width: 60)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(Theme.panel)
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                        .font(.system(size: 11, design: .monospaced))
-                }
-
                 if controller.isGenerating {
                     Button("Stop") {
                         controller.cancelGeneration()
@@ -309,7 +311,9 @@ struct ContentView: View {
                 } else {
                     Button("Generate") {
                         controller.generate(prompt: prompt, maxTokens: maxTokens,
-                                          temperature: Float(temperature))
+                                          temperature: Float(temperature),
+                                          topK: topK,
+                                          repetitionPenalty: Float(repPenalty))
                     }
                     .keyboardShortcut(.return, modifiers: [.command])
                     .buttonStyle(PrimaryButtonStyle(color: Theme.accent))
@@ -341,6 +345,122 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .background(Theme.accentGlow)
             }
+        }
+    }
+
+    // MARK: - Sampler inspector
+
+    /// Right-hand inspector panel. Mirrors what LM Studio/Ollama users
+    /// expect from a "decent" local-AI app: temperature, top-K,
+    /// repetition penalty, max tokens. Persisted via @AppStorage so the
+    /// tuned recipe survives a restart.
+    private var samplerInspector: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("SAMPLING")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.faint)
+                    .tracking(1)
+                    .padding(.top, 18)
+
+                inspectorRow(
+                    label: "Temperature",
+                    hint: "0 = greedy · 1 = sample raw · >1 = more random",
+                    value: temperature,
+                    range: 0...2,
+                    format: "%.2f"
+                ) { temperature = $0 }
+
+                inspectorRow(
+                    label: "Top-K",
+                    hint: topK == 0 ? "0 = off — sample over full vocab" :
+                                       "keep only the \(topK) highest-prob tokens",
+                    value: Double(topK),
+                    range: 0...256,
+                    format: "%.0f"
+                ) { topK = Int($0) }
+
+                inspectorRow(
+                    label: "Rep. penalty",
+                    hint: repPenalty <= 1.001 ? "1.0 = off — Keskar et al. 2019" :
+                                                 "divides logits of recent tokens",
+                    value: repPenalty,
+                    range: 1.0...2.0,
+                    format: "%.2f"
+                ) { repPenalty = $0 }
+
+                Divider().background(Theme.line).padding(.vertical, 4)
+
+                Text("LENGTH")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.faint)
+                    .tracking(1)
+
+                HStack {
+                    Text("max tokens")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.muted)
+                    Spacer()
+                    TextField("", value: $maxTokens, format: .number)
+                        .textFieldStyle(.plain)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Theme.panel2)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .font(.system(size: 12, design: .monospaced))
+                }
+
+                Spacer(minLength: 16)
+
+                Button {
+                    temperature = 0.8
+                    topK = 0
+                    repPenalty = 1.0
+                    maxTokens = 200
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.counterclockwise")
+                        Text("Reset to defaults")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 20)
+        }
+    }
+
+    /// One labeled slider row with current value + hint text. Generic over
+    /// the slider type so int / float fields share one layout.
+    private func inspectorRow(label: String, hint: String, value: Double,
+                              range: ClosedRange<Double>, format: String,
+                              setter: @escaping (Double) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.fg)
+                Spacer()
+                Text(String(format: format, value))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.muted)
+            }
+            Slider(
+                value: Binding(get: { value }, set: setter),
+                in: range
+            )
+            .controlSize(.small)
+            .tint(Theme.accent)
+            Text(hint)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.faint)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
