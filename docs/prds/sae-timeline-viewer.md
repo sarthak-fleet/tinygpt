@@ -1,6 +1,6 @@
 ---
 name: Browser SAE-timeline viewer (B13 visualization)
-status: not-started
+status: shipped-2026-06-05
 owner: unassigned (parallel-agent task)
 created: 2026-06-05
 parent_plan: docs/PLAN.md §3 Tier B (B13 v2)

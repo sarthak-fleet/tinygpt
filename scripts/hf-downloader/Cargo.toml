@@ -1,0 +1,20 @@
+[package]
+name = "hf-downloader"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+futures = "0.3"
+glob = "0.3"
+indicatif = "0.17"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "time"] }
+urlencoding = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

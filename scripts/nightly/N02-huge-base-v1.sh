@@ -5,9 +5,9 @@
 # specialist SFT will start from. All later runs amortise this cost.
 #
 # Outputs:
-#   /tmp/huge-base-v1.tinygpt              canonical (atomic-saved every 1000 steps)
-#   /tmp/huge-base-v1.step-*.tinygpt       history (B13 interp)
-#   /tmp/huge-base-v1.jsonl                /training-dashboard log
+#   ~/.cache/tinygpt/runs/huge-base-v1/huge-base-v1.tinygpt   canonical
+#   ~/.cache/tinygpt/runs/huge-base-v1/huge-base-v1.step-*.tinygpt  history
+#   ~/.cache/tinygpt/runs/huge-base-v1/huge-base-v1.jsonl     dashboard log
 #
 # Recipe choices (all set with intent — change deliberately):
 #   --preset huge                   12L · d=256 · 10M body params · fits 48 GB
@@ -69,8 +69,10 @@ if [[ ! -f "$CORPUS_TXT" ]]; then
     fi
 fi
 
-OUT="/tmp/huge-base-v1.tinygpt"
-LOG="/tmp/huge-base-v1.jsonl"
+RUN_DIR="$HOME/.cache/tinygpt/runs/huge-base-v1"
+OUT="$RUN_DIR/huge-base-v1.tinygpt"
+LOG="$RUN_DIR/huge-base-v1.jsonl"
+mkdir -p "$RUN_DIR"
 
 echo ""
 echo "=== huge-base-v1 pretrain ==="

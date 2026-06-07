@@ -1,0 +1,17 @@
+[package]
+name = "parquet-decoder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+arrow-array = "58.3.0"
+arrow-json = "58.3.0"
+arrow-schema = "58.3.0"
+clap = { version = "4", features = ["derive"] }
+parquet = { version = "58.3.0", default-features = false, features = ["arrow", "snap", "zstd"] }
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+strip = true

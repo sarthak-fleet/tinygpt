@@ -128,6 +128,128 @@ Launch: `open build/TinyGPT.app` or `cp -r build/TinyGPT.app /Applications/`.
 Both binaries verified by smoke-launching the .app + invoking the
 bundled CLI to produce a real `.sae` sidecar (MSE 5.52e-02, L0 34.45%).
 
+## 2026-06-05 PM — eval-first session (training-prep)
+
+**Premise**: user has a 2-day training window starting now. Before
+firing the next real training run, get the **evals + data + parallel-
+work briefs** ready so the training day produces a model you can
+*score*, not just a model that finishes.
+
+**What landed (eval + data side, in order):**
+
+1. **PLAN.md Tier D + Tier E** — split data gaps (Tier D) from eval
+   pipelines (Tier E). E0–E8 enumerated, A1 specialist now gated on
+   E1+E3.
+2. **E0 shared schema + `tinygpt eval-compare`** —
+   `Sources/TinyGPT/EvalCompare.swift`. Codable `Row` (snake_case
+   JSON) so every harness writes one JSONL shape. Three view modes:
+   `--by step` (training emergence), `--by model` (cross-model), `--by
+   task` (which task scored what). Fixed dup-key crash + cell-truncation
+   bug during smoke.
+3. **E3 `tinygpt run-lm-eval`** — `Sources/TinyGPT/RunLmEval.swift`
+   wraps `lm-eval-harness` as a subprocess. Two modes:
+   - `--hf-model <id>` (canonical baseline scoring via HF transformers)
+   - `--tinygpt-model <ckpt>` (boots `tinygpt serve` and routes lm-eval
+     via `local-completions` — uses our actual forward pass; no
+     .tinygpt→HF semantic conversion). Self-invocation fallback chain:
+     `CommandLine.arguments.first ?? Bundle.main.executableURL ??
+     resolveExecutable("tinygpt"|"tinygpt-cli")`.
+4. **`tinygpt serve` logprobs path** — added `scoreLogprobs(prompt:)`
+   in `Sources/TinyGPTServe/Serve.swift` for echo+logprobs requests
+   (teacher-forced log_softmax). Required by lm-eval's loglikelihood
+   tasks. Trigger condition is `logprobsRequested && echo` (any
+   max_tokens).
+5. **Smoke training** — 10K steps Huge bf16 on FineWeb-Edu w/
+   `--save-history`, completed in 1627s (6.1 step/s). 5 checkpoints
+   at 2K/4K/6K/8K/10K written under `/tmp/huge-smoke-30min.*`.
+6. **Emergence sweep** — `tinygpt run-lm-eval` against all 5 checkpoints
+   + `SmolLM2-135M` baseline (limit=10, arc_easy). 12-row JSONL preserved
+   at `docs/artifacts/emergence-smoke-2026-06-05.jsonl`. Real numbers:
+
+   | Model | Step | arc_easy (n=10) |
+   |---|---|---|
+   | SmolLM2-135M | baseline | **0.500** |
+   | tinygpt-huge-smoke | 2000 | 0.300 |
+   | tinygpt-huge-smoke | 4000 | 0.300 |
+   | tinygpt-huge-smoke | 6000 | 0.300 |
+   | tinygpt-huge-smoke | 8000 | 0.300 |
+   | tinygpt-huge-smoke | 10000 | 0.300 |
+
+   Honest read: 0.300 across all our checkpoints is statistically
+   indistinguishable from random (0.25 + ~0.15 stderr at n=10) — our
+   10M-param model has 13× fewer params and ~0.00014% the data of
+   SmolLM2 and hasn't learned anything ARC-relevant yet. **Pipeline
+   works**; the model needs more training. This is exactly what A1
+   needs to ship: a runnable score path.
+
+**Parallel-agent PRDs drafted** — `docs/prds/` now has 10 self-contained
+briefs an elf can pick up cold. Each names its "don't touch" files so
+multiple agents can ship in parallel without merge conflict:
+
+| PRD | What | Estimated |
+|---|---|---|
+| `E1-bfcl-eval.md` | wire Berkeley Function Calling Leaderboard | ~1d |
+| `E2-tau-bench-eval.md` | multi-turn agent eval | ~1d |
+| `E5-humaneval-sandbox.md` | Rust-isolated Python exec scorer | ~1-2d |
+| `E7-judge-shim.md` | LLM-as-judge via local Qwen/SmolLM | ~1d |
+| `E8-train-time-eval-hook.md` | `tinygpt train --eval-every N` | ~1d |
+| `eval-leaderboard-viewer.md` | `/eval-leaderboard.astro` (3 views) | ~2-3d |
+| `sae-timeline-viewer.md` | `/sae-timeline.astro` (B13 viz) | ~1d |
+| `rust-parquet-decoder.md` | replace pyarrow with Rust binary | ~half-day |
+| `rust-hf-downloader.md` | parallel HF shard fetches | ~1d |
+| `dataset-decode-verify.md` | low-skill data plumbing | ~1hr |
+
+Coordination protocol in `docs/prds/README.md` — every PRD names a
+small "don't touch" set; agents submit a diff line for shared dispatch
+files, maintainer merges.
+
+**Verify pipeline still works (quick smoke before training):**
+
+```bash
+./native-mac/.build/arm64-apple-macosx/release/tinygpt \
+    eval-compare docs/artifacts/emergence-smoke-2026-06-05.jsonl --by step
+```
+
+Should print the 5-row TinyGPT trajectory table above.
+
+**Training-day state (2026-06-05 PM):**
+
+- **N02 fired** — `./scripts/nightly.sh` started N02 (Huge bf16,
+  FineWeb-Edu, 200K steps, ~11 hrs). PID was 18877; `caffeinate -di`
+  wrapping the job. Output goes to
+  `~/.cache/tinygpt/runs/huge-base-v1/huge-base-v1.tinygpt` +
+  `huge-base-v1.step-*.tinygpt` (every 2K steps) +
+  `huge-base-v1.jsonl` (dashboard log).
+- N02 script already has `--save-history --log-jsonl --val-every 500`
+  wired — no patches needed; emergence view applies as-is.
+- Smoke loss curve was healthy: 11.34 → 5.11 over 10K steps, no spikes,
+  no NaN. N02 (20× longer) should comfortably continue descending.
+- **Huge preset is 22M params, not 10M** (I was misquoting earlier).
+  Body 12L · d=256 · dMlp=1024 · with the SmolLM2 49K-vocab embedding
+  the total is ~22M. Still ~6× smaller than SmolLM2-135M.
+
+**When N02 finishes — fire-and-forget runbooks:**
+
+```bash
+# Score every checkpoint against the eval suite + SmolLM2 baseline.
+./scripts/score-run.sh ~/.cache/tinygpt/runs/huge-base-v1/huge-base-v1.tinygpt
+#   → writes docs/artifacts/score-huge-base-v1-<date>.jsonl
+#   → prints --by step / --by model / --by task tables
+
+# Train SAEs across the same checkpoints → feature-emergence timeline.
+./scripts/sae-run.sh ~/.cache/tinygpt/runs/huge-base-v1/huge-base-v1.tinygpt
+#   → writes docs/artifacts/sae-huge-base-v1-<date>/timeline.jsonl
+```
+
+Both scripts are CPU-light glue around already-shipped CLI surface.
+`score-checkpoint.sh` is the per-checkpoint primitive; `score-run.sh`
+wraps it for the full sweep.
+
+**Parallel agents:** 10 PRDs under `docs/prds/` are out for elves
+(E1, E2, E5, E7, E8 + eval-leaderboard / sae-timeline viewers + Rust
+parquet/HF tools + dataset-verify). Don't observe their progress;
+maintainer merges when PRs land.
+
 ## What's deferred (with reasons)
 
 These items need either training to materialize, or non-trivial

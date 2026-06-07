@@ -5,8 +5,10 @@ description: Single source of truth for what's shipped, skipped, and still to bu
 
 # TinyGPT — master plan
 
-**Last verified against codebase**: 2026-06-02 (third pass — multiple re-audits this session caught additional stale ⬜ markers)
+**Last verified against codebase**: 2026-06-06 (eval-pipeline + serve fix + elf PRDs landed; product framing clarified to "Mac platform for building/upgrading specialists")
 **Sources merged**: `docs/roadmap/*` · `docs/progress.md` · `docs/backlog.md` · `docs/feature_audit_2026_05_31.md` · `docs/roadmap/recent_research.md` (paper catalogue → §4)
+
+**Product framing** (clarified 2026-06-06): TinyGPT is a **Mac platform for individuals to build and upgrade specialist models for their specific tasks** — bring data, pick a local teacher, ship a fast/cheap specialist. Distillation + LoRA + QLoRA + constrained decoding are the toolkit. Local teacher = no API spend. Comprehensive multimodal roadmap (text/code/vision/voice/image-gen) under disciplined "one canonical best per slot" principle. **Canonical strategy doc**: [`docs/sessions/2026-06-06-mac-specialist-platform.md`](sessions/2026-06-06-mac-specialist-platform.md) — covers Tier 1-4 backlog, multi-model architectures (phone-a-friend / cascade / LoRA hot-swap / etc.), structured-output formats beyond JSON (incl. Protobuf / SQL / GraphQL via grammar), and flagship example apps (browser agent, per-language code specialist, voice command, etc.).
 
 Three sections — **shipped**, **skipped**, **TODO**. Every claim verified
 against the code. The first audit caught Lion/Sophia/Muon/PEFT-bundle/
@@ -340,15 +342,39 @@ critical comparisons possible:
 
 Both fall out for free if E0 + E8 are designed in, not retrofitted.
 
-- ⬜ **E0. Shared eval JSONL schema + `tinygpt eval-compare`** — every E* item emits rows of `{run_id, model_path, model_name, model_step?, baseline?, task, subtask?, metric, score, n_examples, wall_seconds, timestamp, harness_version}`. `tinygpt eval-compare <result.jsonl>+ [--by model|step|task]` renders a comparison table (TinyGPT vs SmolLM2 etc.; same model across step-N checkpoints). Schema defined once here, every other E* writes to it. ~half-day to design + ship the compare CLI. **Do first — every other E* depends on this contract.**
-- ⬜ **E1. `tinygpt eval-bfcl <model>`** — subprocess to the Python BFCL harness at `_external/gorilla-bfcl/berkeley-function-call-leaderboard/`. Convert TinyGPT model → safetensors via existing `to-safetensors`, register as a model with the BFCL harness, run, parse the result JSON into E0 schema. ~1 day. **Blocks A1's "ship" criterion.**
-- ⬜ **E2. `tinygpt eval-tau-bench <model>`** — same pattern, harness at `_external/tau-bench/run.py`. Multi-turn agent score. ~1 day. **Pairs with E1 for tool-caller credibility.**
-- ⬜ **E3. `tinygpt run-lm-eval <model> --tasks mmlu,arc,hellaswag,gsm8k,…`** — wrap `_external/MILU/` (which IS lm-eval-harness). One wrapper unlocks **all** standard LM evals. **Highest leverage per day**; do first. ~1 day.
-- ⬜ **E4. `tinygpt eval-gsm8k <model>`** — standalone scorer. Parse model's final numeric answer, compare to gold. Tiny — covered by E3 if lm-eval-harness lands, but a standalone fallback gets you a number in ~half-day if E3 slips.
-- ⬜ **E5. `tinygpt eval-humaneval <model>` + sandbox** — sandboxed Python exec is the hard part (needs container or restricted-process). HumanEval + MBPP. ~1-2 days; the sandbox is what's risky.
-- ⬜ **E6. `tinygpt eval-scaledown <model>`** — clone ScaleBench, wire to TinyGPT-loaded model, run. Prereq for B25 submission. ~half-day after E1's subprocess pattern is the template.
-- ⬜ **E7. `tinygpt judge <out.jsonl> --judge <local-model>`** — LLM-as-judge shim. Pair preferences (or rate single outputs 1-10) via a local Qwen/SmolLM. Unlocks AlpacaEval / MT-Bench / RewardBench-style preference evals without an OpenAI API key. ~1 day.
-- ⬜ **E8. Train-time eval hook + dashboard plot** — every `--save-history` tick in `tinygpt train` (or every N steps under a new `--eval-every N` flag), kick off a lightweight subset of E3's tasks (small sample of GSM8K + ARC-easy, say 50 examples each) on the current model state, append to the run's eval JSONL. The browser `/training-dashboard.astro` viewer plots eval-score-vs-step alongside loss. ~1 day after E0 + E3 land. **This is the multi-checkpoint comparison view**: see capability emergence over training.
+- ✅ **E0. Shared eval JSONL schema + `tinygpt eval-compare`** (SHIPPED 2026-06-05) — `Sources/TinyGPT/EvalCompare.swift`. Codable `Row` with snake_case JSON. Three view modes: `--by step` / `--by model` / `--by task`. Sample artifact at `docs/artifacts/emergence-smoke-2026-06-05.jsonl`.
+- ✅ **E1. `tinygpt eval-bfcl <model>`** (SHIPPED 2026-06-05) — `Sources/TinyGPT/EvalBFCL.swift`. Boots `tinygpt serve`, invokes `bfcl_eval._llm_response_generation` + `bfcl_eval.eval_checker.eval_runner` via subprocess with OpenAI-compatible base URL. Default 10 BFCL categories. PRD: `docs/prds/E1-bfcl-eval.md`. **Unblocks A1.**
+- ✅ **E2. `tinygpt eval-tau-bench <model>`** (SHIPPED 2026-06-05) — `Sources/TinyGPT/EvalTauBench.swift`. Retail + airline envs. Configurable user simulator model. PRD: `docs/prds/E2-tau-bench-eval.md`.
+- ✅ **E3. `tinygpt run-lm-eval <model>`** (SHIPPED 2026-06-05) — `Sources/TinyGPT/RunLmEval.swift`. Two modes: `--hf-model <id>` (baseline scoring via HF transformers) and `--tinygpt-model <ckpt>` (boots `tinygpt serve` + routes lm-eval via `local-completions` for our actual forward pass). `tinygpt serve` learned `scoreLogprobs` for echo+logprobs requests. Smoke-tested cross-checkpoint + cross-model emergence sweep.
+- ⬜ **E4. `tinygpt eval-gsm8k <model>`** — standalone scorer. Parse model's final numeric answer, compare to gold. Tiny — covered by E3 if lm-eval-harness lands, but a standalone fallback gets you a number in ~half-day if E3 slips. **May be unnecessary** — E3 via local-completions should handle gsm8k; will validate on first post-N02 sweep.
+- ✅ **E5. `tinygpt eval-humaneval <model>` + sandbox** (SHIPPED 2026-06-05) — `Sources/TinyGPT/EvalHumanEval.swift` + Rust crate at `scripts/humaneval-sandbox/` (macOS sandbox-exec policy at `macos-sandbox.sb`). HumanEval + MBPP suites. PRD: `docs/prds/E5-humaneval-sandbox.md`.
+- ⬜ **E6. `tinygpt eval-scaledown <model>`** — clone ScaleBench, wire to TinyGPT-loaded model, run. Prereq for B25 submission. ~half-day after E1's subprocess pattern is the template. See `docs/recipes/b25-scaledown.md` for the training-side plan.
+- ✅ **E7. `tinygpt judge <out.jsonl> --judge-model <model>`** (SHIPPED 2026-06-05) — `Sources/TinyGPT/JudgeShim.swift`. Two modes: `pairwise` (chosen-vs-rejected) and `rate` (1-10 score). PRD: `docs/prds/E7-judge-shim.md`.
+- ✅ **E8. Train-time eval hook + dashboard plot** (SHIPPED 2026-06-05) — `--eval-every N --eval-tasks csv --eval-limit N` flags in `tinygpt train`. Spawns background `run-lm-eval` per checkpoint, appends to `<out-stem>-evals.jsonl`. Non-blocking; skips if previous eval still in flight. PRD: `docs/prds/E8-train-time-eval-hook.md`. Post-training equivalent: `scripts/score-run.sh`.
+
+### Browser viewers shipped 2026-06-05
+
+| Page | Role |
+|---|---|
+| `/eval-leaderboard.astro` | drag-drop E0 JSONL → 3-view comparison (by step / model / task) |
+| `/sae-timeline.astro` | drag-drop B13 SAE timeline JSONL → MSE-over-step + L0-over-step charts |
+
+### Rust performance tools shipped 2026-06-05
+
+| Crate | Role |
+|---|---|
+| `scripts/parquet-decoder/` | replaces `python3 scripts/parquet_to_txt.py`; static binary, no pyarrow |
+| `scripts/hf-downloader/` | parallel HF shard fetches with progress + retry + resume |
+| `scripts/humaneval-sandbox/` | E5 supporting sandbox runner (Rust + macOS sandbox-exec) |
+
+### Eval — runbook artifacts shipped 2026-06-05
+
+| Script | Role |
+|---|---|
+| `scripts/score-checkpoint.sh` | one `.tinygpt` → E0 JSONL row(s) via lm-eval |
+| `scripts/score-run.sh` | every history checkpoint of a run + SmolLM2 baseline → JSONL + 3-view summary |
+| `scripts/sae-run.sh` | SAE-per-checkpoint sweep → JSONL timeline (B13 v2 input) |
+| `scripts/score-baselines.sh` | 5 HF baselines (SmolLM2-135/360M, Qwen3-0.6B, TinyLlama, Phi-3-mini) on the same task set |
 
 **Total Tier E**: ~6-8 focused days. Do **E0 first** (schema is everyone's dependency), then E3 (highest harness leverage), then E1 (A1 ship-blocker), then E8 (multi-checkpoint), then the rest as nightly arcs.
 

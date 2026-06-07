@@ -1,0 +1,14 @@
+[project]
+name = "tinygpt-data-prep"
+version = "0.1.0"
+description = "TinyGPT data preparation shim for BFCL, tau-bench, and GitHub corpora"
+requires-python = ">=3.10"
+dependencies = [
+  "datatrove>=0.4.0",
+  "requests>=2.31.0",
+  "ratelimit>=2.2.1",
+]
+
+[project.scripts]
+tinygpt-prep-data = "prep_data:main"
+

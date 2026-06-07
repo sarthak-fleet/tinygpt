@@ -4,6 +4,12 @@ The path to learning the whole stack without drowning in complexity. This is the
 curriculum; `model_guide.md`, `lora_guide.md`, and `browser_notes.md` are the
 implementation detail.
 
+For external course/company-doc reading, use
+[`industry_learning_roadmap.md`](industry_learning_roadmap.md). It makes
+Stanford CS336 the course spine and maps company docs from Hugging Face, Ai2,
+Anthropic, OpenAI, Poolside, Apple, Meta, Qwen, DeepSeek, Mistral, and Lamina
+back to concrete TinyGPT work.
+
 This roadmap is also mirrored into the `swe-interview-prep` fleet project as 19
 FSRS-tracked `ml-*` concepts (`swe-interview-prep/docs/TINYGPT_LEARNING_PATH.md`).
 

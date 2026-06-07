@@ -1,6 +1,6 @@
 ---
 name: D-tier dataset decode + verify
-status: not-started
+status: shipped-2026-06-05
 owner: unassigned (parallel-agent task — low-skill, data plumbing)
 created: 2026-06-05
 parent_plan: docs/PLAN.md §3 Tier D (D2/D3/D4 follow-up)

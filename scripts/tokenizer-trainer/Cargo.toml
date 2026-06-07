@@ -1,0 +1,8 @@
+[package]
+name = "tinygpt-tokenizer-trainer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }

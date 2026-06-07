@@ -419,6 +419,9 @@ When you want to go beyond TinyGPT — to models that actually produce good text
   production-shaped cousin of `python_ref/`. TinyGPT's structure mirrors it.
 - **[Lil'Log — The Transformer Family](https://lilianweng.github.io/posts/2023-01-27-the-transformer-family-v2/)**
   — every variation on the architecture, rigorously.
+- **[`industry_learning_roadmap.md`](industry_learning_roadmap.md)** — the
+  external reading track: Stanford CS336 as the course spine, then company
+  docs/blogs mapped back to TinyGPT tasks.
 
 You started as a software engineer who had never built a neural network. If you
 have followed this path, you can now read — and have tested — every line of a

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tinygpt.local/schemas/ax-capture.schema.json",
+  "title": "TinyGPT AX Capture Record",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "process_name",
+    "pid",
+    "image_width",
+    "image_height",
+    "elements"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bundle_id": {
+      "type": ["string", "null"]
+    },
+    "process_name": {
+      "type": "string"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "window_title": {
+      "type": ["string", "null"]
+    },
+    "window_frame": {
+      "$ref": "#/$defs/frame"
+    },
+    "image_width": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "image_height": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "elements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/element"
+      }
+    }
+  },
+  "$defs": {
+    "element": {
+      "type": "object",
+      "required": ["id", "role", "frame"],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "role": {
+          "type": "string"
+        },
+        "label": {
+          "type": ["string", "null"]
+        },
+        "frame": {
+          "$ref": "#/$defs/frame"
+        },
+        "enabled": {
+          "type": ["boolean", "null"]
+        }
+      }
+    },
+    "frame": {
+      "type": ["object", "null"],
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
