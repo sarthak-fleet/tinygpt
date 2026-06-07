@@ -89,3 +89,6 @@ native-mac/default.profraw
 # uv venv for Python ANE conversion (local-only — managed by uv)
 python_ref/.venv/
 python_ref/.python-version
+default.profraw
+build/
+.claude/

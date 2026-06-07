@@ -42,6 +42,8 @@ struct TinyGPT {
             // Inference-side LLM benchmark harness (Bench360-modelled).
             // See docs/benchmark_harness_design.md.
             Benchmark.run(args: Array(args.dropFirst()))
+        case "infer-heatmap":
+            InferHeatmap.run(args: Array(args.dropFirst()))
         case "bench-train":
             // Legacy training-throughput benchmark vs the WebGPU browser
             // baseline. Used to be `tinygpt bench` before the inference
@@ -65,6 +67,14 @@ struct TinyGPT {
             DPO.run(args: Array(args.dropFirst()))
         case "distill":
             Distill.run(args: Array(args.dropFirst()))
+        case "synthesize":
+            Synthesize.run(args: Array(args.dropFirst()))
+        case "tokenize-train":
+            TokenizeTrain.run(args: Array(args.dropFirst()))
+        case "rerank-train":
+            RerankTrain.run(args: Array(args.dropFirst()))
+        case "rerank-eval":
+            RerankEval.run(args: Array(args.dropFirst()))
         case "es":
             ES.run(args: Array(args.dropFirst()))
         case "laser":
@@ -78,7 +88,10 @@ struct TinyGPT {
         case "prune-structured":
             PruneStructured.run(args: Array(args.dropFirst()))
         case "score-bench":
-            Score.run(args: Array(args.dropFirst()))
+            fputs("[deprecated] score-bench is now run-bench; please migrate\n", stderr)
+            RunBench.run(args: Array(args.dropFirst()))
+        case "run-bench":
+            RunBench.run(args: Array(args.dropFirst()))
         case "magpie":
             Magpie.run(args: Array(args.dropFirst()))
         case "tuned-lens":
@@ -103,10 +116,55 @@ struct TinyGPT {
             QualityClassifier.runTrain(args: Array(args.dropFirst()))
         case "quality-filter":
             QualityClassifier.runFilter(args: Array(args.dropFirst()))
+        case "filter":
+            Filter.run(args: Array(args.dropFirst()))
         case "eval-compare":
             EvalCompare.run(args: Array(args.dropFirst()))
         case "run-lm-eval":
             RunLmEval.run(args: Array(args.dropFirst()))
+        case "eval-mteb":
+            EvalMTEB.run(args: Array(args.dropFirst()))
+        case "merge":
+            Merge.run(args: Array(args.dropFirst()))
+        case "bake-lora":
+            // Fold a .lora adapter into the base safetensors so the merged
+            // dir is drop-in for HF tools / CoreML conversion. See
+            // BakeLora.swift for math + dtype handling.
+            BakeLora.run(args: Array(args.dropFirst()))
+        case "ane-validate":
+            // Compare MLX (reference, fp32) vs CoreML (.mlpackage, fp16/ANE)
+            // top-1 token at the last position. Used as the M2 acceptance
+            // gate for the ANE conversion pipeline.
+            AneValidate.run(args: Array(args.dropFirst()))
+        case "ane-bench-smoke":
+            // Quick decode-rate measurement on the stateless .mlpackage.
+            // Pessimistic vs M3 stateful path but tells us whether ANE
+            // dispatch is engaging at all.
+            AneBenchSmoke.run(args: Array(args.dropFirst()))
+        case "coreml-serve":
+            // Minimal OpenAI-compatible HTTP server backed by a Qwen3
+            // stateful CoreML .mlpackage. See CoreMLServe.swift for the
+            // PRD-flag-vs-sibling-command deviation note (the canonical
+            // PRD asked for `serve --coreml`; we ship it as a sibling to
+            // honor the "don't touch existing serve" rule).
+            CoreMLServe.run(args: Array(args.dropFirst()))
+        case "coreml-chunked-smoke":
+            // Drive a chunked-block ANE bundle end-to-end from Swift.
+            // M8 path: 28 single-block .mlpackages sidestep the ANE
+            // multi-layer crash. See Qwen3ANEChunked.swift.
+            if #available(macOS 15.0, *) {
+                CoreMLChunkedSmoke.run(args: Array(args.dropFirst()))
+            } else {
+                fputs("coreml-chunked-smoke requires macOS 15+\n", stderr); exit(1)
+            }
+        case "eval-bfcl":
+            EvalBFCL.run(args: Array(args.dropFirst()))
+        case "eval-tau-bench":
+            EvalTauBench.run(args: Array(args.dropFirst()))
+        case "eval-humaneval":
+            EvalHumanEval.run(args: Array(args.dropFirst()))
+        case "judge":
+            JudgeShim.run(args: Array(args.dropFirst()))
         case "patch":
             Patch.run(args: Array(args.dropFirst()))
         case "causal-trace":
@@ -135,6 +193,8 @@ struct TinyGPT {
             ListDatasets.run(args: Array(args.dropFirst()))
         case "fetch-github":
             FetchGitHub.run(args: Array(args.dropFirst()))
+        case "prep-data":
+            PrepData.run(args: Array(args.dropFirst()))
         case "extractor-data":
             ExtractorData.run(args: Array(args.dropFirst()))
         case "train-extractor":
@@ -155,6 +215,8 @@ struct TinyGPT {
             Agent.run(args: Array(args.dropFirst()))
         case "screen":
             Screen.run(args: Array(args.dropFirst()))
+        case "ax-capture":
+            AXCapture.run(args: Array(args.dropFirst()))
         case "serve":
             Serve.run(args: Array(args.dropFirst()))
         case "debug-names":
@@ -167,6 +229,10 @@ struct TinyGPT {
             DebugNames.dtypes(args: Array(args.dropFirst()))
         case "debug-loss":
             DebugNames.sanityLoss(args: Array(args.dropFirst()))
+        case "vlm-smoke":
+            // VLM specialist — Milestone 1 smoke (vision encoder load +
+            // forward). See docs/prds/factory-vision-specialist.md.
+            VLMSmoke.run(args: Array(args.dropFirst()))
         case "-h", "--help":
             printUsage()
         default:
@@ -193,10 +259,16 @@ struct TinyGPT {
           tinygpt inspect <path>     print manifest + metadata for a .tinygpt file
           tinygpt validate <path>    round-trip check: read → encode → byte-compare
           tinygpt bench [flags]      inference-side LLM benchmark harness (Bench360-modelled)
+          tinygpt infer-heatmap <trace.json> render an inference latency heatmap
           tinygpt bench-train [flags] training-throughput benchmark vs. WebGPU baseline
+          tinygpt synthesize [flags] label prompt JSONL via an OpenAI-compatible teacher
+          tinygpt tokenize-train [flags] train a domain BPE tokenizer.json
+          tinygpt rerank-train [flags] train a lightweight reranker artifact
+          tinygpt rerank-eval [flags]  evaluate a reranker and emit E0 rows
           tinygpt screen <sub> ...   Mac screen-reading scaffold (Wave 2.6)
                                      subs: capture | tree | both
                                      see `tinygpt screen --help` for flags
+          tinygpt ax-capture [flags] capture PNG + AX JSON pairs for VLM data
 
         file format documented in Sources/TinyGPTIO/TinyGPTFile.swift.
         bench flags documented in `tinygpt bench --help`.
