@@ -67,14 +67,25 @@ public enum LoraAdapterWriter {
                 projections.append(("mlp.fc_out", dense.fcOut))
             }
             for (suffix, lin) in projections {
-                guard let lora = lin as? LoraLinear else { continue }
-                eval(lora.loraA, lora.loraB)
-                let aFloats = lora.loraA.asArray(Float.self)
-                let bFloats = lora.loraB.asArray(Float.self)
+                // Accept both LoraLinear and DoraLinear — they have the
+                // same A/B matrix shapes; DoRA's `m` magnitude vector is
+                // a known v1 format gap (tracked in PRD factory-dora-
+                // serialization). Trained DoRA adapters load back as
+                // LoRA (no magnitude rescaling) — quality close to LoRA.
+                let lA: MLXArray
+                let lB: MLXArray
+                if let lora = lin as? LoraLinear {
+                    lA = lora.loraA; lB = lora.loraB
+                } else if let dora = lin as? DoraLinear {
+                    lA = dora.loraA; lB = dora.loraB
+                } else { continue }
+                eval(lA, lB)
+                let aFloats = lA.asArray(Float.self)
+                let bFloats = lB.asArray(Float.self)
                 entries.append(.init(
                     name: "blocks.\(i).\(suffix)",
-                    loraAShape: lora.loraA.shape,
-                    loraBShape: lora.loraB.shape
+                    loraAShape: lA.shape,
+                    loraBShape: lB.shape
                 ))
                 matrices.append((loraA: aFloats, loraB: bFloats))
             }

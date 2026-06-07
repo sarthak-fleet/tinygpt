@@ -19,6 +19,13 @@ public struct HuggingFaceConfig {
     public let numHiddenLayers: Int        // a.k.a. n_layers
     public let numAttentionHeads: Int      // a.k.a. n_heads (query heads)
     public let numKeyValueHeads: Int       // for GQA; defaults to numAttentionHeads
+    /// Per-head channel count. When the config sets `head_dim` explicitly
+    /// (Qwen3, Llama-3.1+) the value can be DIFFERENT from
+    /// `hidden_size / num_attention_heads` — Qwen3-0.6B for example has
+    /// hidden_size=1024, num_attention_heads=16, head_dim=128. Falls back
+    /// to `hidden_size / num_attention_heads` when absent (Phi-3, Llama-2,
+    /// Mistral 7B v0.1).
+    public let headDim: Int
     public let maxPositionEmbeddings: Int  // a.k.a. context_length
 
     // Norm + activation
@@ -53,6 +60,12 @@ public struct HuggingFaceConfig {
         let arch = (d["architectures"] as? [String]) ?? []
         let numHeads = try req("num_attention_heads", Int.self)
         let nkvh = (d["num_key_value_heads"] as? Int) ?? numHeads
+        let hidden = try req("hidden_size", Int.self)
+        // Explicit `head_dim` overrides the derived `hidden_size / num_heads`.
+        // Qwen3-0.6B: hidden_size=1024, num_heads=16, head_dim=128 — Q out
+        // is num_heads*head_dim=2048, NOT hidden_size. Phi-3 / Llama-2
+        // omit the field and the fallback gives the canonical value.
+        let hd = (d["head_dim"] as? Int) ?? (hidden / numHeads)
         let normEps = (d["rms_norm_eps"] as? Double).map(Float.init)
             ?? (d["layer_norm_eps"] as? Double).map(Float.init)
             ?? 1e-5
@@ -64,6 +77,7 @@ public struct HuggingFaceConfig {
         let known: Set<String> = [
             "architectures", "vocab_size", "hidden_size", "intermediate_size",
             "num_hidden_layers", "num_attention_heads", "num_key_value_heads",
+            "head_dim",
             "max_position_embeddings", "rms_norm_eps", "layer_norm_eps",
             "hidden_act", "rope_theta", "rope_scaling", "tie_word_embeddings",
             "model_type", "torch_dtype", "transformers_version",
@@ -73,11 +87,12 @@ public struct HuggingFaceConfig {
         return HuggingFaceConfig(
             architectures: arch,
             vocabSize: try req("vocab_size", Int.self),
-            hiddenSize: try req("hidden_size", Int.self),
+            hiddenSize: hidden,
             intermediateSize: try req("intermediate_size", Int.self),
             numHiddenLayers: try req("num_hidden_layers", Int.self),
             numAttentionHeads: numHeads,
             numKeyValueHeads: nkvh,
+            headDim: hd,
             maxPositionEmbeddings: try req("max_position_embeddings", Int.self),
             rmsNormEps: normEps,
             hiddenAct: act,
@@ -96,14 +111,14 @@ public struct HuggingFaceConfig {
             && hiddenAct != "gelu_pytorch_tanh" {
             return "hidden activation '\(hiddenAct)' isn't in our shortlist (silu / gelu)"
         }
-        if numAttentionHeads != numKeyValueHeads {
-            return "Grouped Query Attention (heads=\(numAttentionHeads), kv_heads=\(numKeyValueHeads)) — not yet wired into TinyGPTModel"
-        }
+        // GQA (numAttentionHeads != numKeyValueHeads) is wired into the
+        // attention path via cfg.nKvHeads + MLX-Fast SDPA's native head-
+        // broadcast. No blocker here.
         if ropeScaling != nil {
             return "RoPE scaling configuration present — needs the long-context variant"
         }
-        if hiddenSize % numAttentionHeads != 0 {
-            return "hidden_size \(hiddenSize) doesn't divide by num_attention_heads \(numAttentionHeads)"
+        if numAttentionHeads % numKeyValueHeads != 0 {
+            return "num_attention_heads \(numAttentionHeads) isn't divisible by num_key_value_heads \(numKeyValueHeads)"
         }
         return nil
     }

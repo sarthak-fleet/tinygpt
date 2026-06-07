@@ -57,6 +57,8 @@ public enum HFWeightMapping {
         case "self_attn.v_proj.bias":   return "blocks.\(layerN).attn.v_proj.bias"
         case "self_attn.o_proj.weight": return "blocks.\(layerN).attn.o_proj.weight"
         case "self_attn.o_proj.bias":   return "blocks.\(layerN).attn.o_proj.bias"
+        case "self_attn.q_norm.weight": return "blocks.\(layerN).attn.q_norm.weight"
+        case "self_attn.k_norm.weight": return "blocks.\(layerN).attn.k_norm.weight"
         case "mlp.down_proj.weight":    return "blocks.\(layerN).mlp.fc_out.weight"
         case "mlp.down_proj.bias":      return "blocks.\(layerN).mlp.fc_out.bias"
         case "mlp.up_proj.weight":      return "blocks.\(layerN).mlp.fc_in.weight"

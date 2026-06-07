@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spokenText", "pointAtLabel", "clickLabel"],
+  "properties": {
+    "spokenText": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 300
+    },
+    "pointAtLabel": {
+      "type": "string",
+      "description": "Empty string for 'no target'. Otherwise the natural-language label from the element list (e.g. 'save button', 'file menu').",
+      "maxLength": 100
+    },
+    "clickLabel": {
+      "type": "string",
+      "description": "Same shape as pointAtLabel. Empty string when no click is requested.",
+      "maxLength": 100
+    }
+  }
+}

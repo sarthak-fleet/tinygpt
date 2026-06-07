@@ -7,6 +7,7 @@ import Foundation
 ///   - `{"type": "object", "properties": {...}, "required": [...]}`
 ///   - `{"type": "string"}` (any string)
 ///   - `{"type": "string", "enum": ["a", "b"]}` (closed enum)
+///   - string `minLength`, `maxLength`
 ///   - `{"type": "number"}` / `{"type": "integer"}`
 ///   - `{"type": "boolean"}`
 ///   - `{"type": "null"}`
@@ -15,7 +16,7 @@ import Foundation
 ///
 /// NOT supported (silently ignored, treated as no constraint):
 ///   - `$ref`, `oneOf`, `anyOf`, `allOf`, `not`
-///   - string `pattern`, `format`, `minLength`, `maxLength`
+///   - string `pattern`, `format`
 ///   - number `minimum`, `maximum`, `multipleOf`
 ///   - object `additionalProperties: <schema>`, `patternProperties`
 ///   - tuple-form `items: [s1, s2, ...]`
@@ -38,7 +39,7 @@ public enum JSONSchemaError: Error, CustomStringConvertible {
 /// or `from(data:)` to parse one out of a JSON Schema file.
 public indirect enum JSONSchemaNode: Sendable {
     case object(properties: [(String, JSONSchemaNode)], required: Set<String>)
-    case string(enumValues: [String]?)
+    case string(enumValues: [String]?, minLength: Int?, maxLength: Int?)
     case number(integer: Bool)
     case boolean
     case null
@@ -71,7 +72,13 @@ public indirect enum JSONSchemaNode: Sendable {
         // it to string anyway, and we don't yet support typed-enum mixes.
         if let enumArr = dict["enum"] as? [Any] {
             let strings = enumArr.compactMap { $0 as? String }
-            if !strings.isEmpty { return .string(enumValues: strings) }
+            if !strings.isEmpty {
+                return .string(
+                    enumValues: strings,
+                    minLength: dict["minLength"] as? Int,
+                    maxLength: dict["maxLength"] as? Int
+                )
+            }
         }
         guard let type = dict["type"] as? String else { return .any }
         switch type {
@@ -87,7 +94,11 @@ public indirect enum JSONSchemaNode: Sendable {
             let req = Set((dict["required"] as? [String]) ?? [])
             return .object(properties: props, required: req)
         case "string":
-            return .string(enumValues: nil)
+            return .string(
+                enumValues: nil,
+                minLength: dict["minLength"] as? Int,
+                maxLength: dict["maxLength"] as? Int
+            )
         case "number":
             return .number(integer: false)
         case "integer":

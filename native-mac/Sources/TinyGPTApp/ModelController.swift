@@ -18,10 +18,19 @@ final class ModelController: ObservableObject {
     @Published var tokensPerSec: Double = 0
     @Published var evalResult: String? = nil
     @Published var isEvaluating: Bool = false
-    /// Completed completions in this session. New runs append a fresh
-    /// HistoryItem; the live in-flight buffer is `generated` above.
-    /// Cleared via `clearHistory()` or naturally on app restart.
+    /// Completed completions across ALL models in this session. New runs
+    /// append a fresh HistoryItem; the live in-flight buffer is
+    /// `generated` above. Cleared via `clearHistory()` or naturally on
+    /// app restart. Each entry carries `modelId` so views can scope to
+    /// the currently-loaded model via `historyForCurrentModel`.
     @Published var history: [HistoryItem] = []
+
+    /// History scoped to the loaded model. Views should use this, not
+    /// `history` directly — otherwise chat from other models bleeds in.
+    var historyForCurrentModel: [HistoryItem] {
+        guard let id = loadedItem?.id else { return [] }
+        return history.filter { $0.modelId == id }
+    }
 
     /// One past prompt + completion + the sampler settings that produced
     /// it. Reproducible at a click. Codable so the session-list persists
@@ -48,6 +57,11 @@ final class ModelController: ObservableObject {
     private var model: TinyGPTModel? = nil
     private var modelConfig: ModelConfig? = nil
     private var generationTask: Task<Void, Never>? = nil
+    /// When the loaded checkpoint pinned a BPE tokenizer (e.g. SmolLM2,
+    /// what N02 was trained against), this holds the loaded tokenizer
+    /// so encode/decode operate on token ids rather than bytes. nil for
+    /// byte-level gallery models (Shakespeare, code, chat, etc.).
+    private var tokenizer: HFTokenizer? = nil
 
     init() {
         deviceName = "\(Device.defaultDevice())"
@@ -84,21 +98,46 @@ final class ModelController: ObservableObject {
         do {
             let file = try TinyGPTFileReader.read(url)
             let h = file.header.config
+            // Honour the manifest's vocabSize. Byte-level legacy models
+            // (Shakespeare, code, etc.) omit vocabSize → default to 256.
+            // BPE-trained models (N02, theme, future user runs) carry the
+            // real vocab (49152 for SmolLM2) — without this, generate
+            // treats output ids as raw bytes and produces gibberish.
             let cfg = ModelConfig(
-                vocabSize: 256,
+                vocabSize: h.vocabSize ?? 256,
                 contextLength: h.ctx ?? 256,
                 nLayers: h.layers ?? 12,
                 nHeads: h.heads ?? 8,
                 dModel: h.dModel ?? 256,
-                dMlp: h.dMlp ?? 1024
+                dMlp: h.dMlp ?? 1024,
+                tokenizerSource: h.tokenizerSource
             )
             let m = TinyGPTModel(cfg)
             try TinyGPTWeightLoader.load(file, into: m)
+
+            // Load the pinned BPE tokenizer if the model declared one.
+            // Falls back gracefully — byte-level remains the default.
+            self.tokenizer = nil
+            if let tokSource = h.tokenizerSource {
+                let tokURL = URL(fileURLWithPath: (tokSource as NSString).expandingTildeInPath)
+                if FileManager.default.fileExists(atPath: tokURL.path) {
+                    do {
+                        self.tokenizer = try HFTokenizer.loadBlocking(from: tokURL)
+                    } catch {
+                        // Non-fatal — model will sample as bytes. Surface
+                        // the issue in status so users see the
+                        // mis-tokenized output isn't a model bug.
+                        fputs("warning: tokenizer \(tokSource) failed to load (\(error))\n", stderr)
+                    }
+                }
+            }
+
             self.model = m
             self.modelConfig = cfg
             self.loadedItem = item
             self.paramCount = m.numParameters()
-            self.status = "ready — \(formatParams(self.paramCount)) parameters on \(self.deviceName)"
+            let tokTag = self.tokenizer != nil ? " · BPE (vocab=\(cfg.vocabSize))" : " · byte-level"
+            self.status = "ready — \(formatParams(self.paramCount)) parameters on \(self.deviceName)\(tokTag)"
         } catch {
             self.status = "failed to load \(item.displayName): \(error)"
         }
@@ -118,18 +157,27 @@ final class ModelController: ObservableObject {
         status = "generating…"
 
         let item = loadedItem
+        let tok = self.tokenizer
         generationTask = Task {
             await runGenerate(model: model, cfg: cfg,
                               prompt: prompt, maxTokens: maxTokens,
                               temperature: temperature,
                               topK: topK,
                               repetitionPenalty: repetitionPenalty,
+                              tokenizer: tok,
                               archiveTo: item)
         }
     }
 
+    /// Clear history for the CURRENTLY LOADED model only. Other models'
+    /// history is preserved. (Earlier behavior was nuke-everything; that
+    /// surprised users who switched models mid-session.)
     func clearHistory() {
-        history.removeAll()
+        if let id = loadedItem?.id {
+            history.removeAll { $0.modelId == id }
+        } else {
+            history.removeAll()
+        }
         saveHistory()
     }
 
@@ -176,14 +224,30 @@ final class ModelController: ObservableObject {
     private func runGenerate(model: TinyGPTModel, cfg: ModelConfig,
                              prompt: String, maxTokens: Int, temperature: Float,
                              topK: Int, repetitionPenalty: Float,
+                             tokenizer: HFTokenizer?,
                              archiveTo item: GalleryItem?) async {
-        let promptBytes = [UInt8](prompt.utf8)
-        var idx = MLXArray(promptBytes.map { Int32($0) }, [1, promptBytes.count])
-        // Track recent tokens for the repetition-penalty pass. Bound the
-        // window so memory doesn't grow with the run; the last 256 tokens
-        // are what matter for byte-level repetition.
-        var recent: [Int32] = promptBytes.map { Int32($0) }
+        // Encode prompt — BPE path uses the loaded tokenizer; byte path
+        // (no tokenizer) treats prompt as raw UTF-8 bytes.
+        let promptIds: [Int32]
+        if let tok = tokenizer {
+            do {
+                promptIds = try tok.encode(prompt).map { Int32($0) }
+            } catch {
+                await MainActor.run { self.status = "tokenizer encode failed: \(error)" }
+                return
+            }
+        } else {
+            promptIds = [UInt8](prompt.utf8).map { Int32($0) }
+        }
+        var idx = MLXArray(promptIds, [1, promptIds.count])
+        var recent: [Int32] = promptIds
         let recentWindow = 256
+        // Streaming decode state for BPE: we re-decode the full generated
+        // tail every step so multi-byte tokens render correctly, then
+        // print the diff. Byte-level path renders one Unicode scalar
+        // per id and skips this.
+        var bpeGeneratedIds: [Int] = []
+        var bpeRenderedSoFar = ""
 
         let t0 = Date()
         var streamed = 0
@@ -245,11 +309,18 @@ final class ModelController: ObservableObject {
             idx = concatenated([idx, nextId.asType(idx.dtype)], axis: 1)
             streamed += 1
 
-            // Stream one token at a time to the UI; coalesce updates via
-            // an actor-isolated assign to avoid SwiftUI churn (re-render
-            // per token is fine at 100 tok/s).
+            // Stream one token at a time to the UI. BPE path re-decodes
+            // the full tail and emits only the diff (so multi-byte tokens
+            // like " word" render correctly when neighbours are known).
+            // Byte path emits one Unicode scalar per id.
             let glyph: String
-            if let scalar = UnicodeScalar(id), id >= 9 {
+            if let tok = tokenizer {
+                bpeGeneratedIds.append(id)
+                let nowRendered = tok.decode(bpeGeneratedIds)
+                let newPiece = String(nowRendered.dropFirst(bpeRenderedSoFar.count))
+                bpeRenderedSoFar = nowRendered
+                glyph = newPiece
+            } else if let scalar = UnicodeScalar(id), id >= 9 {
                 glyph = String(scalar)
             } else {
                 glyph = ""

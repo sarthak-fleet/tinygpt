@@ -25,6 +25,7 @@ enum HFLoad {
         var prompt = "The capital of France is"
         var maxTokens = 60
         var temperature: Float = 0.7
+        var loraPath: String?
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -32,6 +33,7 @@ enum HFLoad {
             case "--prompt":      prompt = args[i+1]; i += 2
             case "--tokens":      maxTokens = Int(args[i+1]) ?? maxTokens; i += 2
             case "--temperature": temperature = Float(args[i+1]) ?? temperature; i += 2
+            case "--lora":        loraPath = args[i+1]; i += 2
             case "-h", "--help":  exitUsage(0)
             default:
                 if args[i].hasPrefix("-") { fputs("unknown flag: \(args[i])\n", stderr); exitUsage() }
@@ -61,6 +63,21 @@ enum HFLoad {
           vocab:    \(cfg.vocabSize) (needs BPE tokenizer for real text)
           device:   \(Device.defaultDevice())
         """)
+
+        // Apply LoRA adapter (trained via `tinygpt sft <hf-dir>`).
+        // The HF reader injects LoraLinears + loads the saved A/B
+        // matrices in one pass. Architecture must match (validated by
+        // base config equality).
+        if let lp = loraPath {
+            print("applying LoRA adapter from \(lp)…")
+            do {
+                let adapter = try LoraAdapterReader.read(URL(fileURLWithPath: lp))
+                try LoraAdapterHFReader.apply(adapter, to: model)
+                print("✓ adapter applied (rank \(adapter.header.rank), \(adapter.header.entries.count) entries)")
+            } catch {
+                fputs("LoRA load failed: \(error)\n", stderr); exit(1)
+            }
+        }
 
         if doSample {
             sampleWithTokenizer(model: model, cfg: cfg, dir: dir,
@@ -182,6 +199,7 @@ enum HFLoad {
         --prompt "..."          Sampling prompt (default: "The capital of France is")
         --tokens N              Max new tokens (default 60)
         --temperature F         Sampling temperature (default 0.7)
+        --lora <path.lora>      Apply a LoRA adapter on top of the base before sampling
         """)
         exit(code)
     }

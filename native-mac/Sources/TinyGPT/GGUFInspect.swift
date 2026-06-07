@@ -85,9 +85,8 @@ enum GGUFInspect {
         print("""
         usage: tinygpt gguf-inspect <path.gguf> [--dequant <tensor-name>]
 
-        Print metadata + tensor inventory for a GGUF file. First-cut
-        recognises F32 / F16 / Q4_0 / Q8_0 tensor types; k-quants
-        (Q4_K / Q6_K / etc.) print as 'unsupported(N)'.
+        Print metadata + tensor inventory for a GGUF file. Recognises
+        F32 / F16 / Q4_0 / Q8_0 and K-quants Q4_K / Q5_K / Q6_K / Q8_K.
         """)
         exit(code)
     }

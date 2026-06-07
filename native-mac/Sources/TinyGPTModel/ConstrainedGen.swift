@@ -98,6 +98,8 @@ public final class JSONSchemaFSM {
         var state: StringState
         /// Closed set of permitted contents (nil = unconstrained).
         var enumValues: [String]?
+        var minLength: Int?
+        var maxLength: Int?
         /// What we've emitted into the body so far (used for enum
         /// prefix filtering AND for stashing object keys on pop).
         var content: String
@@ -395,9 +397,16 @@ public final class JSONSchemaFSM {
         case .array(let items):
             guard b == UInt8(ascii: "[") else { return .reject }
             return .push(.array(.init(items: items, phase: .afterOpen)))
-        case .string(let enumValues):
+        case .string(let enumValues, let minLength, let maxLength):
             guard b == UInt8(ascii: "\"") else { return .reject }
-            return .push(.string(.init(state: .body, enumValues: enumValues, content: "", isKey: false)))
+            return .push(.string(.init(
+                state: .body,
+                enumValues: enumValues,
+                minLength: minLength,
+                maxLength: maxLength,
+                content: "",
+                isKey: false
+            )))
         case .number(let integer):
             if b == UInt8(ascii: "-") {
                 return .push(.number(.init(state: .sign, integer: integer)))
@@ -425,7 +434,14 @@ public final class JSONSchemaFSM {
         case UInt8(ascii: "["):
             return .push(.array(.init(items: .any, phase: .afterOpen)))
         case UInt8(ascii: "\""):
-            return .push(.string(.init(state: .body, enumValues: nil, content: "", isKey: false)))
+            return .push(.string(.init(
+                state: .body,
+                enumValues: nil,
+                minLength: nil,
+                maxLength: nil,
+                content: "",
+                isKey: false
+            )))
         case UInt8(ascii: "-"):
             return .push(.number(.init(state: .sign, integer: false)))
         case UInt8(ascii: "t"):
@@ -461,6 +477,7 @@ public final class JSONSchemaFSM {
                 let allowedKeys = unemittedKeys(schema: of.schema, emitted: of.emitted)
                 if let keys = allowedKeys, keys.isEmpty { return .reject }
                 return .push(.string(.init(state: .body, enumValues: allowedKeys,
+                                            minLength: nil, maxLength: nil,
                                             content: "", isKey: true)))
             }
             return .reject
@@ -470,6 +487,7 @@ public final class JSONSchemaFSM {
                 let allowedKeys = unemittedKeys(schema: of.schema, emitted: of.emitted)
                 if let keys = allowedKeys, keys.isEmpty { return .reject }
                 return .push(.string(.init(state: .body, enumValues: allowedKeys,
+                                            minLength: nil, maxLength: nil,
                                             content: "", isKey: true)))
             }
             return .reject
@@ -564,6 +582,9 @@ public final class JSONSchemaFSM {
                 if let allowed = sf.enumValues, !allowed.contains(sf.content) {
                     return .reject
                 }
+                if let minLength = sf.minLength, sf.content.count < minLength {
+                    return .reject
+                }
                 return .popConsuming
             }
             if b == UInt8(ascii: "\\") {
@@ -576,6 +597,9 @@ public final class JSONSchemaFSM {
             // `content + char` as a prefix.
             var nf = sf
             let newPrefix = nf.content + String(UnicodeScalar(b))
+            if let maxLength = sf.maxLength, newPrefix.count > maxLength {
+                return .reject
+            }
             if let allowed = sf.enumValues {
                 let stillValid = allowed.contains { $0.hasPrefix(newPrefix) }
                 if !stillValid { return .reject }
@@ -591,11 +615,17 @@ public final class JSONSchemaFSM {
                 nf.state = .body
                 nf.content.append("\\")
                 nf.content.append(Character(UnicodeScalar(b)))
+                if let maxLength = sf.maxLength, nf.content.count > maxLength {
+                    return .reject
+                }
                 return .replace(.string(nf))
             case UInt8(ascii: "u"):
                 var nf = sf
                 nf.state = .unicodeEscape(digitsSeen: 0)
                 nf.content.append("\\u")
+                if let maxLength = sf.maxLength, nf.content.count > maxLength {
+                    return .reject
+                }
                 return .replace(.string(nf))
             default: return .reject
             }
@@ -603,6 +633,9 @@ public final class JSONSchemaFSM {
             if isHex(b) {
                 var nf = sf
                 nf.content.append(Character(UnicodeScalar(b)))
+                if let maxLength = sf.maxLength, nf.content.count > maxLength {
+                    return .reject
+                }
                 nf.state = (n + 1 == 4) ? .body : .unicodeEscape(digitsSeen: n + 1)
                 return .replace(.string(nf))
             }

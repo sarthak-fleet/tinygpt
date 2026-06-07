@@ -45,6 +45,14 @@ public final class CausalSelfAttention: Module {
     @ModuleInfo(key: "v_proj") public var vProj: Linear
     @ModuleInfo(key: "o_proj") public var oProj: Linear
 
+    /// Per-head RMSNorm on Q and K (after reshape + transpose, before
+    /// RoPE). Qwen3 family ships these as `q_norm.weight` /
+    /// `k_norm.weight`, shape `[headDim]`. Without them, attention
+    /// scores in long-context decode drift and base quality misses
+    /// the HF reference. nil for canonical Llama / Phi-3 architectures.
+    @ModuleInfo(key: "q_norm") public var qNorm: RMSNorm?
+    @ModuleInfo(key: "k_norm") public var kNorm: RMSNorm?
+
     /// QAT bit-width. `nil` (default) = no fake-quant. When set, every
     /// Q/K/V/O projection in this attention module routes through
     /// `QAT.linearForward(...)` so the forward sees the int-rounded
@@ -63,13 +71,24 @@ public final class CausalSelfAttention: Module {
         self.useRoPE = cfg.useRoPE
         self.slidingWindow = cfg.slidingWindow
         self.useALiBi = cfg.useALiBi
-        // Q goes from dModel to (nHeads * headDim) = dModel — unchanged
-        // K, V go to (nKvHeads * headDim) which is smaller for GQA models
+        // Q goes from dModel to (nHeads * headDim). For canonical configs
+        // (Phi-3, Llama-2, the from-scratch presets) headDim == dModel/nHeads
+        // so qDim == dModel. Qwen3 sets `head_dim` explicitly so qDim ≠ dModel
+        // — Qwen3-0.6B has nHeads=16, headDim=128, qDim=2048 vs dModel=1024.
+        // K, V go to (nKvHeads * headDim) — smaller still under GQA.
+        let qDim = cfg.nHeads * cfg.headDim
         let kvDim = cfg.nKvHeads * cfg.headDim
-        self._qProj.wrappedValue = Linear(cfg.dModel, cfg.dModel, bias: cfg.attnBias)
+        self._qProj.wrappedValue = Linear(cfg.dModel, qDim, bias: cfg.attnBias)
         self._kProj.wrappedValue = Linear(cfg.dModel, kvDim, bias: cfg.attnBias)
         self._vProj.wrappedValue = Linear(cfg.dModel, kvDim, bias: cfg.attnBias)
-        self._oProj.wrappedValue = Linear(cfg.dModel, cfg.dModel, bias: cfg.attnBias)
+        self._oProj.wrappedValue = Linear(qDim, cfg.dModel, bias: cfg.attnBias)
+        if cfg.useQKNorm {
+            self._qNorm.wrappedValue = RMSNorm(dimensions: cfg.headDim, eps: 1e-6)
+            self._kNorm.wrappedValue = RMSNorm(dimensions: cfg.headDim, eps: 1e-6)
+        } else {
+            self._qNorm.wrappedValue = nil
+            self._kNorm.wrappedValue = nil
+        }
         self.qatBits = cfg.qatBits
         super.init()
     }
@@ -152,6 +171,9 @@ public final class CausalSelfAttention: Module {
         var q = proj(qProj, x).reshaped([B, T, nHeads, headDim]).transposed(0, 2, 1, 3)
         var k = proj(kProj, x).reshaped([B, T, nKvHeads, headDim]).transposed(0, 2, 1, 3)
         let v = proj(vProj, x).reshaped([B, T, nKvHeads, headDim]).transposed(0, 2, 1, 3)
+        // QK-Norm (Qwen3 family): RMSNorm each head's Q and K before RoPE.
+        if let qn = qNorm { q = qn(q) }
+        if let kn = kNorm { k = kn(k) }
 
         // RoPE: rotate Q and K (not V) by position-dependent angles.
         // Standard transformers add learned absolute position embeddings
@@ -178,6 +200,8 @@ public final class CausalSelfAttention: Module {
         var q = proj(qProj, x).reshaped([B, T, nHeads, headDim]).transposed(0, 2, 1, 3)
         var k = proj(kProj, x).reshaped([B, T, nKvHeads, headDim]).transposed(0, 2, 1, 3)
         let v = proj(vProj, x).reshaped([B, T, nKvHeads, headDim]).transposed(0, 2, 1, 3)
+        if let qn = qNorm { q = qn(q) }
+        if let kn = kNorm { k = kn(k) }
         if useRoPE {
             q = MLXFast.RoPE(q, dimensions: headDim, traditional: false,
                               base: ropeBase, scale: 1.0, offset: 0)
@@ -198,6 +222,7 @@ public final class CausalSelfAttention: Module {
         let B = x.shape[0]
         let T = x.shape[1]
         var q = proj(qProj, x).reshaped([B, T, nHeads, headDim]).transposed(0, 2, 1, 3)
+        if let qn = qNorm { q = qn(q) }
         if useRoPE {
             q = MLXFast.RoPE(q, dimensions: headDim, traditional: false,
                               base: ropeBase, scale: 1.0, offset: 0)

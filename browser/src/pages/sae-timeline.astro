@@ -1,0 +1,357 @@
+---
+import Default from "../layouts/Default.astro";
+
+const layoutProps = {
+  title: "TinyGPT — SAE timeline",
+  description: "Drop a tinygpt SAE timeline JSONL to see reconstruction error and sparse-feature activity over checkpoints.",
+  ogType: "article",
+  ogTitle: "TinyGPT — SAE timeline",
+  ogDescription: "Browser viewer for tinygpt sae --checkpoint-dir --timeline-out JSONL files.",
+  twitterTitle: "TinyGPT — SAE timeline",
+  twitterDescription: "Watch SAE reconstruction and L0 activity evolve over training checkpoints.",
+  themeColor: "#0a0c10",
+  loadFonts: false,
+};
+
+const pageStyle = `
+  :root {
+    --bg: #0a0c10; --panel: #11141a; --line: #232733;
+    --fg: #e7e8ea; --muted: #c8cbd4; --faint: #787d88;
+    --accent: #48e5c2; --warn: #f5b14a; --bad: #ec6a5c;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.55 var(--font-sans);
+    margin: 0; padding: 0; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 48px 24px 80px; }
+  h1 { font-size: 28px; letter-spacing: 0; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0 0 28px; max-width: 760px; }
+  code { color: var(--accent); font-family: var(--font-mono); }
+  .drop {
+    border: 1.5px dashed var(--line); border-radius: 12px;
+    padding: 28px; text-align: center; cursor: pointer; transition: all 0.15s;
+    background: var(--panel);
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: rgba(72, 229, 194, 0.04); }
+  .drop input { display: none; }
+  .drop .big { font-size: 18px; font-weight: 500; }
+  .drop .small { color: var(--faint); margin-top: 4px; font-size: 13px; }
+  .status {
+    margin-top: 14px; display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; color: var(--faint); font: 12px/1.4 var(--font-mono);
+  }
+  .status button {
+    appearance: none; border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 10px; background: transparent; color: var(--muted);
+    font: 12px/1 var(--font-sans); cursor: pointer;
+  }
+  .status button:hover { border-color: var(--bad); color: var(--bad); }
+  .controls {
+    margin-top: 28px; display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .summary { display: flex; gap: 10px; flex-wrap: wrap; }
+  .pill {
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px;
+    color: var(--muted); background: rgba(255,255,255,0.02);
+    font: 12px/1 var(--font-mono);
+  }
+  .select-wrap { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  select {
+    color: var(--fg); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 9px; min-width: 220px;
+  }
+  .charts { margin-top: 20px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 22px; overflow: hidden;
+  }
+  .card.wide { grid-column: 1 / -1; }
+  .card h2 {
+    font-size: 14px; font-weight: 500; color: var(--muted); margin: 0 0 14px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .chart { width: 100%; height: 270px; display: block; }
+  .axis { stroke: var(--line); stroke-width: 1; }
+  .tick { fill: var(--faint); font-family: var(--font-mono); font-size: 11px; }
+  .grid { stroke: var(--line); stroke-dasharray: 2 4; stroke-width: 0.5; }
+  .line { fill: none; stroke-width: 1.8; }
+  .point { stroke: var(--panel); stroke-width: 1.5; }
+  .bar { fill: var(--accent); opacity: 0.82; }
+  .bar-label { fill: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+  .legend { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; }
+  .table-scroll { overflow-x: auto; padding-bottom: 4px; }
+  table { width: 100%; min-width: 780px; border-collapse: collapse; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+  .path { color: var(--faint); font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+  .empty {
+    text-align: center; color: var(--faint); padding: 42px 12px;
+    font-family: var(--font-mono); font-size: 13px;
+  }
+  .schema {
+    margin-top: 12px; color: var(--faint); font-family: var(--font-mono);
+    font-size: 12px; overflow-wrap: anywhere;
+  }
+  .foot { color: var(--faint); margin-top: 56px; font-size: 13px; text-align: center; }
+  .foot a { color: var(--accent); text-decoration: none; }
+  @media (max-width: 820px) {
+    .wrap { padding: 32px 16px 64px; }
+    .charts { grid-template-columns: 1fr; }
+  }
+`;
+---
+
+<Default {...layoutProps}>
+  <style is:global slot="head" set:html={pageStyle}></style>
+  <div class="wrap">
+    <h1>SAE timeline</h1>
+    <p class="sub">
+      Drop a <code>.jsonl</code> produced by
+      <code>tinygpt sae --checkpoint-dir … --timeline-out …</code>. The
+      page plots reconstruction MSE and L0 feature activity across training
+      checkpoints, with group-SAE rows filterable by layer group.
+    </p>
+
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".jsonl,application/jsonl,application/x-ndjson,text/plain" />
+      <div class="big">Drop an SAE timeline <code>.jsonl</code> here or click to choose</div>
+      <div class="small">Expected row keys: step, layer/layers, d_model, d_features, mse, l0_per_sample, l0_frac, sae_path, ckpt_path.</div>
+    </label>
+    <div class="status">
+      <div id="status">no file loaded</div>
+      <button id="clear" type="button">Clear</button>
+    </div>
+
+    <div class="controls">
+      <div class="summary" id="summary"></div>
+      <label class="select-wrap" id="group-wrap">
+        Layer group
+        <select id="group-select"></select>
+      </label>
+    </div>
+
+    <div class="charts" id="charts">
+      <section class="card">
+        <h2>Reconstruction MSE</h2>
+        <svg class="chart" id="mse-chart"></svg>
+      </section>
+      <section class="card">
+        <h2>L0 feature activity</h2>
+        <svg class="chart" id="l0-chart"></svg>
+      </section>
+      <section class="card wide">
+        <h2>Latest checkpoint summary</h2>
+        <svg class="chart" id="latest-chart"></svg>
+        <div class="legend" id="legend"></div>
+      </section>
+      <section class="card wide">
+        <h2>Timeline rows</h2>
+        <div id="table"></div>
+      </section>
+    </div>
+
+    <div class="empty" id="empty">
+      no SAE timeline loaded yet
+      <div class="schema">Drop JSONL rows with step, mse, l0_per_sample, l0_frac, sae_path, ckpt_path.</div>
+    </div>
+
+    <div class="foot">
+      B13 feature-emergence viewer · <a href="/training-dashboard">training dashboard</a> · <a href="/docs/interpretability">interp docs</a>
+    </div>
+  </div>
+
+  <script type="module" is:inline>
+    const COLORS = ["#48e5c2", "#7aa6ff", "#f5b14a", "#ec6a5c", "#c08eff", "#5cd178", "#ff8fb1", "#a7b4c7"];
+    const required = ["step", "d_model", "d_features", "mse", "l0_per_sample", "l0_frac", "sae_path", "ckpt_path"];
+    const state = { rows: [], fileName: "", skipped: 0, group: "" };
+    const $ = id => document.getElementById(id);
+    const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const fmt = v => Number.isFinite(v) ? (Math.abs(v) < 0.001 ? v.toExponential(2) : v.toFixed(4)) : "—";
+    const fmtPct = v => Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : "—";
+
+    function groupKey(row) {
+      const layers = Array.isArray(row.layers) && row.layers.length ? row.layers : [row.layer];
+      return layers.filter(v => v != null).join(",");
+    }
+
+    function validRow(obj) {
+      if (!obj || typeof obj !== "object") return false;
+      for (const k of required) if (!(k in obj)) return false;
+      return Number.isFinite(Number(obj.step))
+        && Number.isFinite(Number(obj.mse))
+        && Number.isFinite(Number(obj.l0_per_sample))
+        && Number.isFinite(Number(obj.l0_frac));
+    }
+
+    function parseJsonl(text) {
+      const rows = [];
+      let skipped = 0;
+      for (const raw of text.split("\n")) {
+        const line = raw.trim();
+        if (!line) continue;
+        let obj;
+        try { obj = JSON.parse(line); } catch { skipped++; continue; }
+        if (!validRow(obj)) { skipped++; continue; }
+        const layers = Array.isArray(obj.layers) ? obj.layers.map(Number).filter(Number.isFinite) : [];
+        rows.push({
+          ...obj,
+          step: Number(obj.step),
+          layer: Number.isFinite(Number(obj.layer)) ? Number(obj.layer) : (layers[0] ?? 0),
+          layers,
+          d_model: Number(obj.d_model),
+          d_features: Number(obj.d_features),
+          mse: Number(obj.mse),
+          l0_per_sample: Number(obj.l0_per_sample),
+          l0_frac: Number(obj.l0_frac),
+        });
+      }
+      rows.sort((a, b) => a.step - b.step);
+      return { rows, skipped };
+    }
+
+    function makeAxes(svg, xs, ys, fmtX, fmtY) {
+      svg.innerHTML = "";
+      const W = svg.clientWidth || 520, H = 270;
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      const padL = 58, padR = 18, padT = 14, padB = 34;
+      const x0 = padL, y0 = padT, w = W - padL - padR, h = H - padT - padB;
+      const xMin = Math.min(...xs), xMax = Math.max(...xs);
+      const rawYMin = Math.min(...ys), rawYMax = Math.max(...ys);
+      const yPad = Math.max(0.00001, (rawYMax - rawYMin) * 0.08);
+      const yMin = Math.max(0, rawYMin - yPad), yMax = rawYMax + yPad;
+      const xRange = xMax - xMin || 1, yRange = yMax - yMin || 1;
+      const sx = v => x0 + ((v - xMin) / xRange) * w;
+      const sy = v => y0 + h - ((v - yMin) / yRange) * h;
+      for (let i = 0; i <= 5; i++) {
+        const t = i / 5;
+        const yV = yMin + t * yRange, yPx = sy(yV);
+        const xV = xMin + t * xRange, xPx = sx(xV);
+        svg.insertAdjacentHTML("beforeend",
+          `<line class="grid" x1="${x0}" y1="${yPx.toFixed(1)}" x2="${x0 + w}" y2="${yPx.toFixed(1)}"/>` +
+          `<text class="tick" x="${x0 - 6}" y="${(yPx + 3).toFixed(1)}" text-anchor="end">${fmtY(yV)}</text>` +
+          `<text class="tick" x="${xPx.toFixed(1)}" y="${y0 + h + 18}" text-anchor="middle">${fmtX(xV)}</text>`);
+      }
+      svg.insertAdjacentHTML("beforeend",
+        `<line class="axis" x1="${x0}" y1="${y0}" x2="${x0}" y2="${y0 + h}"/>` +
+        `<line class="axis" x1="${x0}" y1="${y0 + h}" x2="${x0 + w}" y2="${y0 + h}"/>`);
+      return { sx, sy };
+    }
+
+    function drawLine(svg, rows, field, color, yFmt) {
+      if (rows.length === 0) { svg.innerHTML = ""; return; }
+      const xs = rows.map(r => r.step);
+      const ys = rows.map(r => r[field]);
+      const ax = makeAxes(svg, xs, ys, v => Math.round(v).toString(), yFmt);
+      const pts = rows.map(r => `${ax.sx(r.step).toFixed(1)},${ax.sy(r[field]).toFixed(1)}`).join(" ");
+      svg.insertAdjacentHTML("beforeend", `<polyline class="line" stroke="${color}" points="${pts}"/>`);
+      for (const r of rows) {
+        svg.insertAdjacentHTML("beforeend", `<circle class="point" cx="${ax.sx(r.step).toFixed(1)}" cy="${ax.sy(r[field]).toFixed(1)}" r="3" fill="${color}"/>`);
+      }
+    }
+
+    function drawLatest(rows) {
+      const svg = $("latest-chart");
+      svg.innerHTML = "";
+      if (rows.length === 0) return;
+      const latest = rows[rows.length - 1];
+      const W = svg.clientWidth || 980, H = 270;
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      const values = [
+        { label: "MSE", value: latest.mse, display: fmt(latest.mse), color: "#48e5c2" },
+        { label: "L0 frac", value: latest.l0_frac, display: fmtPct(latest.l0_frac), color: "#7aa6ff" },
+        { label: "L0 / sample", value: latest.l0_per_sample / Math.max(1, latest.d_features), display: latest.l0_per_sample.toFixed(1), color: "#f5b14a" },
+      ];
+      const x0 = 58, y0 = 24, w = W - 90, h = H - 64;
+      const maxV = Math.max(...values.map(v => v.value), 0.001);
+      values.forEach((v, i) => {
+        const bw = w / values.length - 36;
+        const x = x0 + i * (w / values.length) + 18;
+        const bh = Math.max(2, (v.value / maxV) * h);
+        const y = y0 + h - bh;
+        svg.insertAdjacentHTML("beforeend",
+          `<rect class="bar" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${v.color}"/>` +
+          `<text class="bar-label" x="${(x + bw / 2).toFixed(1)}" y="${(y - 8).toFixed(1)}" text-anchor="middle">${esc(v.display)}</text>` +
+          `<text class="tick" x="${(x + bw / 2).toFixed(1)}" y="${y0 + h + 20}" text-anchor="middle">${esc(v.label)}</text>`);
+      });
+      $("legend").innerHTML = `<span class="legend-item"><span class="swatch" style="background:#48e5c2"></span>latest step ${latest.step}</span>` +
+        `<span class="legend-item"><span class="swatch" style="background:#7aa6ff"></span>${latest.d_features} features</span>` +
+        `<span class="legend-item"><span class="swatch" style="background:#f5b14a"></span>${latest.sae_path}</span>`;
+    }
+
+    function renderTable(rows) {
+      if (rows.length === 0) return "";
+      return `<div class="table-scroll"><table>
+        <thead><tr><th class="num">step</th><th>layers</th><th class="num">mse</th><th class="num">l0</th><th class="num">l0 frac</th><th>sidecar</th></tr></thead>
+        <tbody>${rows.map(r => `<tr>
+          <td class="num">${r.step}</td>
+          <td>${esc(groupKey(r))}</td>
+          <td class="num">${fmt(r.mse)}</td>
+          <td class="num">${r.l0_per_sample.toFixed(1)} / ${r.d_features}</td>
+          <td class="num">${fmtPct(r.l0_frac)}</td>
+          <td><div class="path">${esc(r.sae_path)}</div></td>
+        </tr>`).join("")}</tbody>
+      </table></div>`;
+    }
+
+    function renderControls() {
+      const groups = [...new Set(state.rows.map(groupKey))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const wrap = $("group-wrap");
+      wrap.style.display = groups.length > 1 ? "flex" : "none";
+      if (!groups.includes(state.group)) state.group = groups[0] || "";
+      $("group-select").innerHTML = groups.map(g => `<option value="${esc(g)}"${g === state.group ? " selected" : ""}>${esc(g)}</option>`).join("");
+      $("summary").innerHTML =
+        `<span class="pill">${state.rows.length} rows</span>` +
+        `<span class="pill">${groups.length} layer group${groups.length === 1 ? "" : "s"}</span>` +
+        `<span class="pill">${state.rows.length ? `${state.rows[0].step}→${state.rows[state.rows.length - 1].step}` : "no steps"}</span>` +
+        `<span class="pill">${state.skipped} skipped</span>`;
+      $("status").textContent = state.fileName || "no file loaded";
+    }
+
+    function render() {
+      const selected = state.rows.filter(r => !state.group || groupKey(r) === state.group);
+      $("charts").style.display = selected.length ? "grid" : "none";
+      $("empty").style.display = selected.length ? "none" : "block";
+      renderControls();
+      drawLine($("mse-chart"), selected, "mse", COLORS[0], fmt);
+      drawLine($("l0-chart"), selected, "l0_frac", COLORS[1], fmtPct);
+      drawLatest(selected);
+      $("table").innerHTML = renderTable(selected);
+    }
+
+    async function addFile(f) {
+      const parsed = parseJsonl(await f.text());
+      state.rows = parsed.rows;
+      state.fileName = `${f.name} · ${parsed.rows.length} rows${parsed.skipped ? ` · skipped ${parsed.skipped}` : ""}`;
+      state.skipped = parsed.skipped;
+      state.group = "";
+      render();
+    }
+
+    $("file").addEventListener("change", async e => {
+      const f = e.target.files?.[0];
+      if (f) await addFile(f);
+      e.target.value = "";
+    });
+    const drop = $("drop");
+    drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", async e => {
+      e.preventDefault(); drop.classList.remove("over");
+      const f = e.dataTransfer.files?.[0];
+      if (f) await addFile(f);
+    });
+    $("clear").addEventListener("click", () => {
+      state.rows = []; state.fileName = ""; state.skipped = 0; state.group = ""; render();
+    });
+    $("group-select").addEventListener("change", e => { state.group = e.target.value; render(); });
+    render();
+  </script>
+</Default>

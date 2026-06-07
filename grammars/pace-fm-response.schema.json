@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spokenText", "pointAtElementId", "clickElementId"],
+  "properties": {
+    "spokenText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "pointAtElementId": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 999
+    },
+    "clickElementId": {
+      "type": "integer",
+      "minimum": -1,
+      "maximum": 999
+    }
+  }
+}

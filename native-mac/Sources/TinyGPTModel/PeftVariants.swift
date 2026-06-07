@@ -45,7 +45,7 @@ public enum PeftVariant: Sendable, Equatable {
     /// the zero-init LoRA at no extra param cost.
     case pissa
     /// LoftQ (Li et al., 2023) — quantization-aware init. Approximates
-    /// int4(W) ≈ W - (A·B) by setting A·B to compensate the quantization
+    /// quant(W) ≈ W - (A·B) by setting A·B to compensate the quantization
     /// error. We don't ship an int4 base here, so this is a "near-LoftQ":
     /// quantise-then-dequantise the base to a 4-bit grid, take SVD of
     /// the residual `W - W_q`, init A, B from its top-r factors. The
@@ -138,16 +138,24 @@ public enum TopRSVD {
 /// have introduced, so when you later DO swap in a quantized base, the
 /// adapter compensates.
 public enum LoftQQuant {
-    /// Per-output-row symmetric int4: scale = max(|w|) / 7, q = round(w/scale),
-    /// clip to [-8, 7], dequantize = q · scale.
-    public static func dequantize4bit(_ w: MLXArray) -> MLXArray {
+    /// Per-output-row symmetric quantization: scale = max(|w|) / qMax,
+    /// q = round(w/scale), clip to the signed range, dequantize = q · scale.
+    public static func dequantize(_ w: MLXArray, bits: Int) -> MLXArray {
+        let clampedBits = min(max(bits, 2), 8)
+        let qMax = Float((1 << (clampedBits - 1)) - 1)
+        let qMin = -Float(1 << (clampedBits - 1))
         let absW = MLX.abs(w)
         // [out, 1] — one scale per output row. eps guards a zero row.
-        let scale = (absW.max(axis: -1, keepDims: true) / MLXArray(Float(7.0)))
+        let scale = (absW.max(axis: -1, keepDims: true) / MLXArray(qMax))
             + MLXArray(Float(1e-8))
         let q = MLX.round(w / scale)
-        let qClamped = MLX.clip(q, min: MLXArray(Float(-8)), max: MLXArray(Float(7)))
+        let qClamped = MLX.clip(q, min: MLXArray(qMin), max: MLXArray(qMax))
         return qClamped * scale
+    }
+
+    /// Back-compat helper for existing call sites/tests.
+    public static func dequantize4bit(_ w: MLXArray) -> MLXArray {
+        dequantize(w, bits: 4)
     }
 }
 

@@ -34,6 +34,11 @@ extension CausalSelfAttention {
         var q = qProj(x).reshaped([B, T, nHeads, headDim]).transposed(0, 2, 1, 3)
         var kNew = kProj(x).reshaped([B, T, nKvHeads, headDim]).transposed(0, 2, 1, 3)
         let vNew = vProj(x).reshaped([B, T, nKvHeads, headDim]).transposed(0, 2, 1, 3)
+        // QK-Norm (Qwen3 family): match the training path. Without this,
+        // sample-time attention is mathematically wrong vs training and
+        // generates garbage. Applied BEFORE RoPE, same as training.
+        if let qn = qNorm { q = qn(q) }
+        if let kn = kNorm { kNew = kn(kNew) }
 
         // RoPE with the correct absolute-position offset. Q and K must
         // both be rotated; V is left alone. `offset` shifts the position

@@ -18,12 +18,9 @@ import TinyGPTModel
 ///                                   already validates)
 ///
 /// Companion to `tinygpt gguf-load` (the validator) and `tinygpt
-/// gguf-inspect` (the metadata browser). After this, the missing
-/// piece for end-to-end runnable loading is **weight materialization**
-/// (dequant the K-quants → write as safetensors so the existing HF
-/// loader picks them up). That's the natural follow-up; this CLI
-/// produces the tokenizer + config that the loader needs to even
-/// instantiate the model class.
+/// gguf-inspect` (the metadata browser). This command now also
+/// materializes weights: dequant GGUF tensors → write `model.safetensors`
+/// so the existing HF loader can consume the output directory.
 ///
 /// USAGE
 ///   tinygpt gguf-extract <input.gguf> --out-dir <dir>
@@ -300,8 +297,7 @@ enum GGUFExtract {
           config.json             HF-style model config
           gguf_manifest.json      tensor inventory back-pointer
 
-        Weight materialization to safetensors is the natural
-        follow-up; the manifest carries everything needed to do it.
+          model.safetensors        dequantized fp32 weights
         """)
         exit(code)
     }

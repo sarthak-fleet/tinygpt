@@ -49,7 +49,54 @@ enum GalleryDiscovery {
                 if found.last?.id == id { break }
             }
         }
+        // Locally-trained checkpoints — walk ~/.cache/tinygpt/runs/<name>/<name>.tinygpt.
+        // These are the user's own training runs (theme-completer, N02, etc.)
+        // and deserve a sidebar slot just like the curated gallery models.
+        found.append(contentsOf: discoverUserRuns())
         return found
+    }
+
+    /// Scan ~/.cache/tinygpt/runs/ for user-trained .tinygpt checkpoints
+    /// (one canonical per run directory). LoRA adapters (.lora files) are
+    /// NOT surfaced here — they need a base model and live in their own
+    /// flow (Sample tab's adapter picker, future feature).
+    private static func discoverUserRuns() -> [GalleryItem] {
+        let fm = FileManager.default
+        let runsDir = URL(fileURLWithPath: NSString("~/.cache/tinygpt/runs").expandingTildeInPath)
+        guard fm.fileExists(atPath: runsDir.path) else { return [] }
+        guard let entries = try? fm.contentsOfDirectory(at: runsDir,
+                                                        includingPropertiesForKeys: nil) else { return [] }
+        var out: [GalleryItem] = []
+        for runDir in entries.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            where (try? runDir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            let runName = runDir.lastPathComponent
+            // Canonical pattern: <runDir>/<runName>.tinygpt. Step history
+            // checkpoints (.step-N.tinygpt) are deliberately excluded —
+            // they'd flood the sidebar.
+            let canonical = runDir.appendingPathComponent("\(runName).tinygpt")
+            if fm.fileExists(atPath: canonical.path) {
+                out.append(GalleryItem(
+                    id: "run-\(runName)",
+                    displayName: runName,
+                    icon: "🧪",
+                    url: canonical,
+                    prompt: ""
+                ))
+                continue
+            }
+            // Fall back: first non-step .tinygpt file in the dir.
+            if let files = try? fm.contentsOfDirectory(at: runDir, includingPropertiesForKeys: nil),
+               let first = files.first(where: { $0.pathExtension == "tinygpt" && !$0.lastPathComponent.contains(".step-") }) {
+                out.append(GalleryItem(
+                    id: "run-\(runName)",
+                    displayName: runName,
+                    icon: "🧪",
+                    url: first,
+                    prompt: ""
+                ))
+            }
+        }
+        return out
     }
 
     /// Where to look. The first matching file wins.

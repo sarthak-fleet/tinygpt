@@ -42,6 +42,8 @@ import TinyGPTData
 enum FetchGitHub {
 
     static func run(args: [String]) {
+        fputs("[deprecated] fetch-github is now scripts/data-prep/prep_data.py --github <owner/repo> --kinds ... --out <jsonl>\n", stderr)
+
         var repoArg: String?
         var kind: GitHubCorpus.Kind = .issuesPRs
         var label: String?

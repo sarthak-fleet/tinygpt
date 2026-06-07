@@ -115,13 +115,23 @@ public enum LoraAdapterHFWriter {
                 ("mlp.down_proj", block.mlp.fcDown),
             ]
             for (suffix, lin) in attnLinears + mlpLinears {
-                guard let lora = lin as? LoraLinear else { continue }
-                eval(lora.loraA, lora.loraB)
+                // Accept both LoraLinear and DoraLinear. DoRA's `m`
+                // magnitude vector is v2 format work (see PRD
+                // factory-dora-serialization). v1 round-trips DoRA as
+                // LoRA without magnitude rescaling.
+                let lA: MLXArray
+                let lB: MLXArray
+                if let lora = lin as? LoraLinear {
+                    lA = lora.loraA; lB = lora.loraB
+                } else if let dora = lin as? DoraLinear {
+                    lA = dora.loraA; lB = dora.loraB
+                } else { continue }
+                eval(lA, lB)
                 entries.append(.init(name: "layers.\(i).\(suffix)",
-                                     loraAShape: lora.loraA.shape,
-                                     loraBShape: lora.loraB.shape))
-                matrices.append((lora.loraA.asArray(Float.self),
-                                 lora.loraB.asArray(Float.self)))
+                                     loraAShape: lA.shape,
+                                     loraBShape: lB.shape))
+                matrices.append((lA.asArray(Float.self),
+                                 lB.asArray(Float.self)))
             }
         }
         let header = LoraAdapter.Header(

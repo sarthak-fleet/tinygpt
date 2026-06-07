@@ -47,6 +47,7 @@ enum TrainSupport {
         model: TinyGPTModel, cfg: ModelConfig, step: Int, finalLoss: Float,
         weightTranspose: (String) -> Bool,
         manifestEntries: (ModelConfig) -> [TinyGPTHeader.TensorEntry],
+        optimizerMoments: [String: (m: MLXArray, v: MLXArray)] = [:],
         to url: URL
     ) throws {
         let tmpURL = URL(fileURLWithPath: url.path + ".tmp")
@@ -54,6 +55,7 @@ enum TrainSupport {
                              finalLoss: finalLoss,
                              weightTranspose: weightTranspose,
                              manifestEntries: manifestEntries,
+                             optimizerMoments: optimizerMoments,
                              to: tmpURL)
         // Atomic rename. POSIX rename(2) is atomic within a filesystem.
         // Same-volume guaranteed; cross-volume falls back to copy-then-rm
@@ -72,12 +74,14 @@ enum TrainSupport {
         model: TinyGPTModel, cfg: ModelConfig, step: Int, finalLoss: Float,
         weightTranspose: (String) -> Bool,
         manifestEntries: (ModelConfig) -> [TinyGPTHeader.TensorEntry],
+        optimizerMoments: [String: (m: MLXArray, v: MLXArray)] = [:],
         to url: URL
     ) throws {
         try writeCheckpoint(model: model, cfg: cfg, step: step,
                              finalLoss: finalLoss,
                              weightTranspose: weightTranspose,
                              manifestEntries: manifestEntries,
+                             optimizerMoments: optimizerMoments,
                              to: url)
     }
 
@@ -87,6 +91,7 @@ enum TrainSupport {
         model: TinyGPTModel, cfg: ModelConfig, step: Int, finalLoss: Float,
         weightTranspose: (String) -> Bool,
         manifestEntries: (ModelConfig) -> [TinyGPTHeader.TensorEntry],
+        optimizerMoments: [String: (m: MLXArray, v: MLXArray)],
         to url: URL
     ) throws {
         let entries = manifestEntries(cfg)
@@ -107,12 +112,27 @@ enum TrainSupport {
             eval(array)
             let floats: [Float] = array.asArray(Float.self)
             let weightData = floats.withUnsafeBufferPointer { Data(buffer: $0) }
-            let zeros = Data(count: weightData.count)
-            // Adam m/v omitted — MLX-Swift's AdamW state isn't externally
-            // readable. Resume restores weights + step but restarts Adam,
-            // causing a ~100-step loss warm-up that re-converges.
+            let momentData: (Data, Data)
+            if let moments = optimizerMoments[entry.name] {
+                var m = moments.m
+                var v = moments.v
+                if weightTranspose(entry.name) && m.shape.count == 2 {
+                    m = m.transposed()
+                    v = v.transposed()
+                }
+                eval(m, v)
+                let mf: [Float] = m.asArray(Float.self)
+                let vf: [Float] = v.asArray(Float.self)
+                momentData = (
+                    mf.withUnsafeBufferPointer { Data(buffer: $0) },
+                    vf.withUnsafeBufferPointer { Data(buffer: $0) }
+                )
+            } else {
+                let zeros = Data(count: weightData.count)
+                momentData = (zeros, zeros)
+            }
             tensors.append(TinyGPTTensor(
-                entry: entry, weight: weightData, adamM: zeros, adamV: zeros, dtype: .fp32
+                entry: entry, weight: weightData, adamM: momentData.0, adamV: momentData.1, dtype: .fp32
             ))
         }
         let header = TinyGPTHeader(
@@ -266,4 +286,3 @@ enum TrainSupport {
         return total / Float(nBatches)
     }
 }
-

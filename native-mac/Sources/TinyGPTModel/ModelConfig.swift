@@ -13,6 +13,13 @@ public struct ModelConfig: Sendable, Equatable {
     /// attention). Set to less than `nHeads` for Grouped Query Attention
     /// (e.g., Llama-3-8B: nHeads=32, nKvHeads=8). Must divide nHeads.
     public var nKvHeads: Int
+    /// Per-head channel count. When `nil` we fall back to `dModel / nHeads`
+    /// (the canonical value for from-scratch presets / Phi-3 / Llama-2).
+    /// HF configs MAY set `head_dim` explicitly to something different —
+    /// Qwen3-0.6B has dModel=1024, nHeads=16, head_dim=128 (so Q out =
+    /// nHeads*head_dim = 2048, NOT dModel). `headDim` (computed below)
+    /// returns this override when set.
+    public var explicitHeadDim: Int?
     public var dModel: Int
     public var dMlp: Int
     public var dropout: Float
@@ -223,7 +230,17 @@ public struct ModelConfig: Sendable, Equatable {
     /// with it on (the manifest entries would mismatch).
     public var useEmbeddingRMSNorm: Bool
 
-    public var headDim: Int { dModel / nHeads }
+    /// QK-Norm: apply RMSNorm to Q and K (after reshape into
+    /// per-head form, before RoPE). Qwen3 family + recent Llama
+    /// variants do this — stabilises long-context attention scores.
+    /// Adds two `headDim`-shaped weights per attention block (a few
+    /// hundred floats × nLayers; negligible RAM). When set, the
+    /// HF load path wires `self_attn.q_norm.weight` and
+    /// `self_attn.k_norm.weight` into these modules; otherwise the
+    /// loader silently drops them and base quality won't match HF.
+    public var useQKNorm: Bool
+
+    public var headDim: Int { explicitHeadDim ?? (dModel / nHeads) }
 
     /// DeepNorm α — multiplier on the *residual* (the running x) at
     /// every sub-layer (Wang et al., 2022). For an encoder-only or
@@ -287,7 +304,9 @@ public struct ModelConfig: Sendable, Equatable {
         useDeepNorm: Bool = false,
         lrLayerDecay: Float = 1.0,
         useEmbeddingRMSNorm: Bool = false,
-        qatBits: Int? = nil
+        qatBits: Int? = nil,
+        explicitHeadDim: Int? = nil,
+        useQKNorm: Bool = false
     ) {
         self.qatBits = qatBits
         self.kviBits = kviBits
@@ -299,6 +318,7 @@ public struct ModelConfig: Sendable, Equatable {
         self.useDeepNorm = useDeepNorm
         self.lrLayerDecay = lrLayerDecay
         self.useEmbeddingRMSNorm = useEmbeddingRMSNorm
+        self.useQKNorm = useQKNorm
         self.tokenizerSource = tokenizerSource
         self.nExperts = max(1, nExperts)
         self.moeTopK = max(1, min(moeTopK, max(1, nExperts)))
@@ -326,7 +346,13 @@ public struct ModelConfig: Sendable, Equatable {
         self.useRMSNorm = useRMSNorm
         self.useSwiGLU = useSwiGLU
         self.attnBias = attnBias
-        precondition(dModel % nHeads == 0, "d_model must be divisible by n_heads")
+        self.explicitHeadDim = explicitHeadDim
+        // Standard case: dModel partitions evenly into nHeads. When the
+        // model explicitly overrides head_dim (Qwen3 family), the Q
+        // projection's output is nHeads*headDim — independent of dModel.
+        if explicitHeadDim == nil {
+            precondition(dModel % nHeads == 0, "d_model must be divisible by n_heads")
+        }
         precondition(nHeads % self.nKvHeads == 0,
                      "n_heads (\(nHeads)) must be divisible by n_kv_heads (\(self.nKvHeads)) for GQA")
     }

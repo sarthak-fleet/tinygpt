@@ -1,0 +1,486 @@
+---
+import Default from "../layouts/Default.astro";
+
+const layoutProps = {
+  title: "TinyGPT — eval leaderboard",
+  description: "Drop E0 eval JSONL files to compare models, checkpoints, and tasks in the browser.",
+  ogType: "article",
+  ogTitle: "TinyGPT — eval leaderboard",
+  ogDescription: "Upload-driven viewer for tinygpt eval-compare JSONL rows.",
+  twitterTitle: "TinyGPT — eval leaderboard",
+  twitterDescription: "Drop eval JSONL files; see model, step, and task comparisons.",
+  themeColor: "#0a0c10",
+  loadFonts: false,
+};
+
+const pageStyle = `
+  :root {
+    --bg: #0a0c10; --panel: #11141a; --line: #232733;
+    --fg: #e7e8ea; --muted: #c8cbd4; --faint: #787d88;
+    --accent: #48e5c2; --warn: #f5b14a; --bad: #ec6a5c;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.55 var(--font-sans);
+    margin: 0; padding: 0; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 48px 24px 80px; }
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
+  h1 { font-size: 28px; letter-spacing: 0; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0; max-width: 720px; }
+  code { color: var(--accent); font-family: var(--font-mono); }
+  .seg {
+    display: inline-grid; grid-template-columns: repeat(3, 1fr);
+    border: 1px solid var(--line); border-radius: 10px; padding: 3px;
+    background: #0d1016; min-width: 260px;
+  }
+  .seg button {
+    appearance: none; border: 0; border-radius: 7px; padding: 8px 12px;
+    color: var(--muted); background: transparent; font: 600 13px/1 var(--font-sans);
+    cursor: pointer;
+  }
+  .seg button.active { background: var(--accent); color: #04120f; }
+  .drop {
+    border: 1.5px dashed var(--line); border-radius: 12px;
+    padding: 28px; text-align: center; cursor: pointer; transition: all 0.15s;
+    background: var(--panel);
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: rgba(72, 229, 194, 0.04); }
+  .drop input { display: none; }
+  .drop .big { font-size: 18px; font-weight: 500; }
+  .drop .small { color: var(--faint); margin-top: 4px; font-size: 13px; }
+  .status {
+    margin-top: 14px; display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; color: var(--faint); font: 12px/1.4 var(--font-mono);
+  }
+  .status button {
+    appearance: none; border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 10px; background: transparent; color: var(--muted);
+    font: 12px/1 var(--font-sans); cursor: pointer;
+  }
+  .status button:hover { border-color: var(--bad); color: var(--bad); }
+  .controls {
+    margin-top: 28px; display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+  }
+  .summary { display: flex; gap: 10px; flex-wrap: wrap; }
+  .pill {
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px;
+    color: var(--muted); background: rgba(255,255,255,0.02);
+    font: 12px/1 var(--font-mono);
+  }
+  .select-wrap { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  select {
+    color: var(--fg); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 9px; min-width: 220px;
+  }
+  .card {
+    margin-top: 18px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 22px; overflow: hidden;
+  }
+  .card h2 {
+    font-size: 14px; font-weight: 500; color: var(--muted); margin: 0 0 14px;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .table-scroll { overflow-x: auto; padding-bottom: 4px; }
+  table { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td { color: var(--fg); }
+  td.num, th.num { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+  .task-name { font-weight: 600; }
+  .metric { color: var(--faint); font-family: var(--font-mono); font-size: 12px; margin-top: 2px; }
+  .baseline {
+    display: inline-block; margin-left: 6px; border: 1px solid #48505f; border-radius: 999px;
+    padding: 2px 6px; color: #aab2c1; font: 11px/1 var(--font-sans);
+  }
+  .missing { color: var(--faint); }
+  .chart-wrap { width: 100%; overflow-x: auto; }
+  .chart { width: 100%; min-width: 720px; height: 320px; display: block; }
+  .axis { stroke: var(--line); stroke-width: 1; }
+  .tick { fill: var(--faint); font-family: var(--font-mono); font-size: 11px; }
+  .grid { stroke: var(--line); stroke-dasharray: 2 4; stroke-width: 0.5; }
+  .line { fill: none; stroke-width: 1.8; }
+  .point { stroke: var(--panel); stroke-width: 1.5; }
+  .legend { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .legend-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .swatch { width: 10px; height: 10px; border-radius: 50%; }
+  .rank-list { display: grid; gap: 14px; }
+  .rank-group { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .rank-head {
+    padding: 10px 12px; background: rgba(255,255,255,0.025);
+    display: flex; justify-content: space-between; gap: 12px;
+  }
+  .rank-title { font-weight: 600; }
+  .rank-meta { color: var(--faint); font-family: var(--font-mono); font-size: 12px; }
+  .rank-row {
+    display: grid; grid-template-columns: 56px minmax(180px, 1fr) 112px 92px;
+    gap: 12px; padding: 9px 12px; border-top: 1px solid var(--line);
+    align-items: center; font-size: 13px;
+  }
+  .rank { color: var(--faint); font-family: var(--font-mono); }
+  .model { overflow-wrap: anywhere; }
+  .score { text-align: right; font-family: var(--font-mono); }
+  .n { text-align: right; color: var(--faint); font-family: var(--font-mono); font-size: 12px; }
+  .empty {
+    text-align: center; color: var(--faint); padding: 42px 12px;
+    font-family: var(--font-mono); font-size: 13px;
+  }
+  .schema {
+    margin-top: 12px; color: var(--faint); font-family: var(--font-mono);
+    font-size: 12px; overflow-wrap: anywhere;
+  }
+  .foot { color: var(--faint); margin-top: 56px; font-size: 13px; text-align: center; }
+  .foot a { color: var(--accent); text-decoration: none; }
+  @media (max-width: 760px) {
+    .wrap { padding: 32px 16px 64px; }
+    .topbar { display: block; }
+    .seg { margin-top: 18px; width: 100%; min-width: 0; }
+    .rank-row { grid-template-columns: 42px minmax(130px, 1fr) 86px; }
+    .rank-row .n { display: none; }
+  }
+`;
+---
+
+<Default {...layoutProps}>
+  <style is:global slot="head" set:html={pageStyle}></style>
+  <div class="wrap">
+    <div class="topbar">
+      <div>
+        <h1>Eval leaderboard</h1>
+        <p class="sub">
+          Drop one or more E0-schema <code>.jsonl</code> eval files produced by
+          <code>tinygpt run-lm-eval</code>, <code>eval-bfcl</code>, or another
+          wrapper. Files are parsed locally in this tab.
+        </p>
+      </div>
+      <div class="seg" role="tablist" aria-label="view mode">
+        <button class="active" data-view="model" type="button">Model</button>
+        <button data-view="step" type="button">Step</button>
+        <button data-view="task" type="button">Task</button>
+      </div>
+    </div>
+
+    <label class="drop" id="drop">
+      <input type="file" id="file" multiple accept=".jsonl,application/jsonl,application/x-ndjson,text/plain" />
+      <div class="big">Drop eval <code>.jsonl</code> here or click to choose</div>
+      <div class="small">Rows missing required schema keys are ignored; malformed lines are skipped.</div>
+    </label>
+    <div class="status">
+      <div id="status">no files loaded</div>
+      <button id="clear" type="button">Clear</button>
+    </div>
+
+    <div class="controls">
+      <div class="summary" id="summary"></div>
+      <label class="select-wrap" id="model-select-wrap">
+        Model
+        <select id="model-select"></select>
+      </label>
+    </div>
+
+    <section class="card">
+      <h2 id="view-title">Model comparison</h2>
+      <div id="view"></div>
+    </section>
+
+    <div class="foot">
+      E0 eval schema viewer · <a href="/training-dashboard">training dashboard</a> · <a href="/docs/lm_eval_integration">eval docs</a>
+    </div>
+  </div>
+
+  <script type="module" is:inline>
+    const COLORS = ["#48e5c2", "#7aa6ff", "#f5b14a", "#ec6a5c", "#c08eff", "#5cd178", "#ff8fb1", "#a7b4c7", "#8bd3dd", "#d9b8ff"];
+    const required = ["run_id", "model_path", "model_name", "baseline", "task", "metric", "score", "n_examples", "wall_seconds", "timestamp"];
+    const state = {
+      rows: [],
+      files: new Map(),
+      view: new URLSearchParams(location.search).get("view") || "model",
+      selectedModel: "",
+      skipped: 0,
+    };
+
+    const $ = id => document.getElementById(id);
+    const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const fmtScore = v => Number.isFinite(v) ? v.toFixed(3) : "—";
+    const fmtN = v => `n=${Math.round(v || 0)}`;
+    const keyOf = r => `${r.task}::${r.metric}`;
+    const labelOf = key => {
+      const [task, metric] = key.split("::");
+      return { task, metric };
+    };
+
+    function validRow(obj) {
+      if (!obj || typeof obj !== "object") return false;
+      for (const k of required) if (!(k in obj)) return false;
+      return typeof obj.model_name === "string"
+        && typeof obj.task === "string"
+        && typeof obj.metric === "string"
+        && typeof obj.score === "number"
+        && Number.isFinite(obj.score);
+    }
+
+    function parseJsonl(text) {
+      const rows = [];
+      let skipped = 0;
+      for (const raw of text.split("\n")) {
+        const line = raw.trim();
+        if (!line) continue;
+        let obj;
+        try { obj = JSON.parse(line); } catch { skipped++; continue; }
+        if (!validRow(obj)) { skipped++; continue; }
+        const step = Number(obj.model_step);
+        rows.push({
+          ...obj,
+          n_examples: Number.isFinite(obj.n_examples) ? obj.n_examples : 0,
+          model_step: Number.isFinite(step) ? step : null,
+          subtask: obj.subtask || null,
+        });
+      }
+      return { rows, skipped };
+    }
+
+    // Weighted aggregate. BFCL subtasks and stderr-like secondary rows can
+    // explode a view; v1 aggregates by task+metric and uses n_examples as
+    // weight when present.
+    function aggregate(rows, groupFns) {
+      const groups = new Map();
+      for (const r of rows) {
+        const parts = groupFns.map(fn => fn(r));
+        if (parts.some(v => v == null || v === "")) continue;
+        const id = parts.join("||");
+        const weight = Math.max(1, Number(r.n_examples) || 0);
+        const g = groups.get(id) || { parts, sum: 0, n: 0, rows: [], baselines: 0 };
+        g.sum += r.score * weight;
+        g.n += weight;
+        g.rows.push(r);
+        if (r.baseline) g.baselines++;
+        groups.set(id, g);
+      }
+      return [...groups.values()].map(g => ({
+        parts: g.parts,
+        score: g.n ? g.sum / g.n : NaN,
+        n: g.n,
+        rows: g.rows,
+        baseline: g.baselines > 0,
+      }));
+    }
+
+    function latestRowsByModelTask(rows) {
+      const latest = new Map();
+      for (const r of rows) {
+        const step = r.model_step ?? -1;
+        const id = `${r.model_name}||${keyOf(r)}||${r.subtask ?? ""}`;
+        const prev = latest.get(id);
+        if (!prev || step >= (prev.model_step ?? -1)) latest.set(id, r);
+      }
+      return [...latest.values()];
+    }
+
+    function modelsSorted(rows) {
+      const baselineByModel = new Map();
+      for (const r of rows) baselineByModel.set(r.model_name, (baselineByModel.get(r.model_name) || false) || r.baseline);
+      return [...new Set(rows.map(r => r.model_name))].sort((a, b) => {
+        const ab = baselineByModel.get(a) || false;
+        const bb = baselineByModel.get(b) || false;
+        if (ab !== bb) return ab ? -1 : 1;
+        return a.localeCompare(b);
+      });
+    }
+
+    function renderSummary() {
+      const models = new Set(state.rows.map(r => r.model_name));
+      const tasks = new Set(state.rows.map(r => r.task));
+      const steps = state.rows.filter(r => r.model_step != null).length;
+      $("summary").innerHTML =
+        `<span class="pill">${state.files.size} file${state.files.size === 1 ? "" : "s"}</span>` +
+        `<span class="pill">${state.rows.length} rows</span>` +
+        `<span class="pill">${models.size} models</span>` +
+        `<span class="pill">${tasks.size} tasks</span>` +
+        `<span class="pill">${steps} checkpoint rows</span>`;
+      $("status").textContent = state.files.size === 0
+        ? "no files loaded"
+        : `${[...state.files.keys()].join(", ")}${state.skipped ? ` · skipped ${state.skipped} malformed/missing-schema lines` : ""}`;
+    }
+
+    function renderModelSelect() {
+      const select = $("model-select");
+      const wrap = $("model-select-wrap");
+      const counts = new Map();
+      for (const r of state.rows) if (r.model_step != null) counts.set(r.model_name, (counts.get(r.model_name) || 0) + 1);
+      const models = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([m]) => m);
+      wrap.style.display = state.view === "step" && models.length > 0 ? "flex" : "none";
+      if (!models.includes(state.selectedModel)) state.selectedModel = models[0] || "";
+      select.innerHTML = models.map(m => `<option value="${esc(m)}"${m === state.selectedModel ? " selected" : ""}>${esc(m)}</option>`).join("");
+    }
+
+    function emptyView(message) {
+      return `<div class="empty">${esc(message)}<div class="schema">Required keys: ${required.join(", ")}</div></div>`;
+    }
+
+    function renderModelView() {
+      $("view-title").textContent = "Model comparison";
+      if (state.rows.length === 0) return emptyView("no eval rows loaded yet");
+      const rows = latestRowsByModelTask(state.rows);
+      const models = modelsSorted(rows);
+      const taskKeys = [...new Set(rows.map(keyOf))].sort();
+      const aggs = aggregate(rows, [r => keyOf(r), r => r.model_name]);
+      const lookup = new Map(aggs.map(g => [`${g.parts[0]}||${g.parts[1]}`, g]));
+      const baselineModels = new Set(rows.filter(r => r.baseline).map(r => r.model_name));
+      return `<div class="table-scroll"><table>
+        <thead><tr><th>Task</th>${models.map(m => `<th class="num">${esc(m)}${baselineModels.has(m) ? '<span class="baseline">baseline</span>' : ""}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${taskKeys.map(k => {
+            const { task, metric } = labelOf(k);
+            return `<tr><td><div class="task-name">${esc(task)}</div><div class="metric">${esc(metric)}</div></td>` +
+              models.map(m => {
+                const g = lookup.get(`${k}||${m}`);
+                return g
+                  ? `<td class="num">${fmtScore(g.score)} <span class="missing">(${fmtN(g.n)})</span></td>`
+                  : `<td class="num missing">—</td>`;
+              }).join("") + `</tr>`;
+          }).join("")}
+        </tbody>
+      </table></div>`;
+    }
+
+    function makeAxes(svg, xs, ys, fmtX, fmtY) {
+      svg.innerHTML = "";
+      const W = svg.clientWidth || 920, H = 320;
+      svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+      const padL = 56, padR = 18, padT = 14, padB = 34;
+      const x0 = padL, y0 = padT, w = W - padL - padR, h = H - padT - padB;
+      const xMin = Math.min(...xs), xMax = Math.max(...xs);
+      const rawYMin = Math.min(...ys), rawYMax = Math.max(...ys);
+      const yPad = Math.max(0.005, (rawYMax - rawYMin) * 0.08);
+      const yMin = Math.max(0, rawYMin - yPad), yMax = Math.min(1, rawYMax + yPad);
+      const xRange = xMax - xMin || 1, yRange = yMax - yMin || 1;
+      const sx = v => x0 + ((v - xMin) / xRange) * w;
+      const sy = v => y0 + h - ((v - yMin) / yRange) * h;
+      for (let i = 0; i <= 5; i++) {
+        const t = i / 5;
+        const yV = yMin + t * yRange, yPx = sy(yV);
+        const xV = xMin + t * xRange, xPx = sx(xV);
+        svg.insertAdjacentHTML("beforeend",
+          `<line class="grid" x1="${x0}" y1="${yPx.toFixed(1)}" x2="${x0 + w}" y2="${yPx.toFixed(1)}"/>` +
+          `<text class="tick" x="${x0 - 6}" y="${(yPx + 3).toFixed(1)}" text-anchor="end">${fmtY(yV)}</text>` +
+          `<text class="tick" x="${xPx.toFixed(1)}" y="${y0 + h + 18}" text-anchor="middle">${fmtX(xV)}</text>`);
+      }
+      svg.insertAdjacentHTML("beforeend",
+        `<line class="axis" x1="${x0}" y1="${y0}" x2="${x0}" y2="${y0 + h}"/>` +
+        `<line class="axis" x1="${x0}" y1="${y0 + h}" x2="${x0 + w}" y2="${y0 + h}"/>`);
+      return { sx, sy };
+    }
+
+    function drawLine(svg, ax, points, color) {
+      const pts = points.map(p => `${ax.sx(p.step).toFixed(1)},${ax.sy(p.score).toFixed(1)}`).join(" ");
+      svg.insertAdjacentHTML("beforeend", `<polyline class="line" stroke="${color}" points="${pts}"/>`);
+      for (const p of points) {
+        svg.insertAdjacentHTML("beforeend", `<circle class="point" cx="${ax.sx(p.step).toFixed(1)}" cy="${ax.sy(p.score).toFixed(1)}" r="3" fill="${color}"/>`);
+      }
+    }
+
+    function renderStepView() {
+      $("view-title").textContent = "Checkpoint emergence";
+      const model = state.selectedModel;
+      if (!model) return emptyView("no rows with model_step loaded yet");
+      const mine = state.rows.filter(r => r.model_name === model && r.model_step != null);
+      const aggs = aggregate(mine, [r => keyOf(r), r => r.model_step]);
+      const series = new Map();
+      for (const g of aggs) {
+        const [taskKey, stepRaw] = g.parts;
+        const step = Number(stepRaw);
+        if (!Number.isFinite(step)) continue;
+        series.set(taskKey, [...(series.get(taskKey) || []), { step, score: g.score, n: g.n }]);
+      }
+      const entries = [...series.entries()].map(([k, pts]) => [k, pts.sort((a, b) => a.step - b.step)]).filter(([, pts]) => pts.length > 0);
+      if (entries.length === 0) return emptyView("no checkpoint rows for the selected model");
+      setTimeout(() => {
+        const svg = $("step-chart");
+        const xs = entries.flatMap(([, pts]) => pts.map(p => p.step));
+        const ys = entries.flatMap(([, pts]) => pts.map(p => p.score));
+        const ax = makeAxes(svg, xs, ys, v => Math.round(v).toString(), v => v.toFixed(3));
+        entries.forEach(([k, pts], idx) => drawLine(svg, ax, pts, COLORS[idx % COLORS.length]));
+      }, 0);
+      return `<div class="chart-wrap"><svg class="chart" id="step-chart"></svg></div>
+        <div class="legend">${entries.map(([k], idx) => {
+          const { task, metric } = labelOf(k);
+          return `<span class="legend-item"><span class="swatch" style="background:${COLORS[idx % COLORS.length]}"></span>${esc(task)} <span class="metric">${esc(metric)}</span></span>`;
+        }).join("")}</div>`;
+    }
+
+    function renderTaskView() {
+      $("view-title").textContent = "Task rankings";
+      if (state.rows.length === 0) return emptyView("no eval rows loaded yet");
+      const rows = latestRowsByModelTask(state.rows);
+      const aggs = aggregate(rows, [r => keyOf(r), r => r.model_name, r => r.model_step ?? "baseline"]);
+      const byTask = new Map();
+      for (const g of aggs) byTask.set(g.parts[0], [...(byTask.get(g.parts[0]) || []), g]);
+      const taskKeys = [...byTask.keys()].sort();
+      return `<div class="rank-list">${taskKeys.map(k => {
+        const { task, metric } = labelOf(k);
+        const ranked = byTask.get(k).sort((a, b) => b.score - a.score);
+        return `<div class="rank-group">
+          <div class="rank-head"><div><div class="rank-title">${esc(task)}</div><div class="metric">${esc(metric)}</div></div><div class="rank-meta">${ranked.length} rows</div></div>
+          ${ranked.map((g, idx) => {
+            const [, model, step] = g.parts;
+            const stepText = step && step !== "baseline" ? ` · step ${step}` : "";
+            return `<div class="rank-row">
+              <div class="rank">#${idx + 1}</div>
+              <div class="model">${esc(model)}${stepText}${g.baseline ? '<span class="baseline">baseline</span>' : ""}</div>
+              <div class="score">${fmtScore(g.score)}</div>
+              <div class="n">${fmtN(g.n)}</div>
+            </div>`;
+          }).join("")}
+        </div>`;
+      }).join("")}</div>`;
+    }
+
+    function render() {
+      document.querySelectorAll(".seg button").forEach(btn => btn.classList.toggle("active", btn.dataset.view === state.view));
+      renderSummary();
+      renderModelSelect();
+      const view = $("view");
+      if (state.view === "model") view.innerHTML = renderModelView();
+      else if (state.view === "step") view.innerHTML = renderStepView();
+      else view.innerHTML = renderTaskView();
+    }
+
+    async function addFile(f) {
+      const id = `${f.name}-${f.size}-${f.lastModified}`;
+      if (state.files.has(id)) return;
+      const parsed = parseJsonl(await f.text());
+      state.files.set(id, f.name);
+      state.rows.push(...parsed.rows);
+      state.skipped += parsed.skipped;
+      render();
+    }
+
+    $("file").addEventListener("change", async e => {
+      for (const f of e.target.files) await addFile(f);
+      e.target.value = "";
+    });
+    const drop = $("drop");
+    drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", async e => {
+      e.preventDefault(); drop.classList.remove("over");
+      for (const f of e.dataTransfer.files) await addFile(f);
+    });
+    $("clear").addEventListener("click", () => {
+      state.rows = []; state.files.clear(); state.skipped = 0; state.selectedModel = ""; render();
+    });
+    $("model-select").addEventListener("change", e => { state.selectedModel = e.target.value; render(); });
+    document.querySelectorAll(".seg button").forEach(btn => btn.addEventListener("click", () => {
+      state.view = btn.dataset.view;
+      history.replaceState(null, "", `?view=${state.view}`);
+      render();
+    }));
+
+    if (!["model", "step", "task"].includes(state.view)) state.view = "model";
+    render();
+  </script>
+</Default>

@@ -1,0 +1,40 @@
+# Pace tool-tag grammar — constrained decoding guarantees well-formed
+# action + pointing tags in Pace planner specialist outputs.
+#
+# Reference: clickyLocal/evals/fixtures/*.json, AGENTS.md
+#
+# Format: llama.cpp GBNF / LM Studio compatible. Pass via `--grammar`
+# in tinygpt synthesize / serve.
+
+root ::= response
+response ::= sentence (" " sentence)* " " tag
+
+# Free-form natural language (the spoken reply). Tags are appended at
+# the end as per Pace's prompt convention.
+sentence ::= [a-z] [a-zA-Z0-9 ,.'?!]{2,200}
+
+# Exactly one tag at the end of the response.
+tag ::= point-tag | action-tag
+
+# Pointing: either coordinates+label or explicit "none"
+point-tag ::= "[POINT:" ( coords ":" label | "none" ) "]"
+coords ::= [0-9]{1,4} "," [0-9]{1,4}
+label ::= [a-zA-Z][a-zA-Z0-9 _\-]{0,40}
+
+# Action tags (only when EnableActions=true)
+action-tag ::= click-tag | type-tag | scroll-tag | key-tag | open-tag
+
+click-tag    ::= "[CLICK:" coords ":" label "]"
+type-tag     ::= "[TYPE:" [a-zA-Z0-9 _\-.,!?'\"]{1,200} "]"
+scroll-tag   ::= "[SCROLL:" ("up" | "down" | "left" | "right") ":" [0-9]{1,4} "]"
+key-tag      ::= "[KEY:" [a-zA-Z+]{1,30} "]"
+open-tag     ::= "[OPEN_APP:" [a-zA-Z][a-zA-Z0-9 ]{0,30} "]"
+
+# Notes:
+# - This v1 grammar enforces the SHAPE of each tag, not the SEMANTICS
+#   (coordinates could still be wrong). Use for format-compliance, not
+#   accuracy.
+# - The `sentence` rule is permissive on punctuation by design — Pace
+#   needs to sound natural.
+# - DOUBLE_CLICK, VOLUME, BRIGHTNESS not yet covered (low frequency
+#   in fixtures); add when needed.

@@ -34,6 +34,8 @@ enum SFT {
         var nefTuneAlpha: Float = 0
         var gradClipNorm: Float = 1.0
         var loraPlusRatio: Float = 1.0
+        var qlora = false
+        var qloraBits = 4
         // Curated-recipe default: DoRA on. 5-10% better than vanilla LoRA
         // at same rank for a modest compute cost. Pass `--no-dora` to fall
         // back to vanilla LoRA. See docs/audit_2026.md "PEFT — KEEP".
@@ -68,6 +70,17 @@ enum SFT {
             case "--neftune-alpha": nefTuneAlpha = Float(args[i+1]) ?? nefTuneAlpha; i += 2
             case "--grad-clip":     gradClipNorm = Float(args[i+1]) ?? gradClipNorm; i += 2
             case "--lora-plus-ratio": loraPlusRatio = Float(args[i+1]) ?? loraPlusRatio; i += 2
+            case "--qlora":
+                qlora = true
+                peftVariant = .loftq
+                useDora = false
+                i += 1
+            case "--qlora-bits":
+                qlora = true
+                qloraBits = Int(args[i+1]) ?? qloraBits
+                peftVariant = .loftq
+                useDora = false
+                i += 2
             case "--pack":          packSequences = true; i += 1
             case "--pack-mode":     packMode = args[i+1]; i += 2
             case "--length-bucket": lengthBuckets = Int(args[i+1]) ?? lengthBuckets; i += 2
@@ -104,6 +117,10 @@ enum SFT {
         guard let template = PromptTemplate(name: templateName) else {
             fputs("unknown template '\(templateName)'. Options: chatml, alpaca, llama, plain\n", stderr); exit(2)
         }
+        if qlora && qloraBits != 4 && qloraBits != 8 {
+            fputs("--qlora-bits must be 4 or 8\n", stderr)
+            exit(2)
+        }
 
         print("loading base from \(basePath)…")
         let load: ModelLoader.LoadResult
@@ -127,10 +144,14 @@ enum SFT {
         // Inject LoRA (or DoRA / one of the PEFT variants).
         let loraCfg = LoraConfig(
             rank: rank, alpha: alpha,
-            targetSuffixes: ["q_proj", "v_proj"],
+            targetSuffixes: qlora
+                ? ["q_proj", "k_proj", "v_proj", "o_proj", "fc_in", "fc_out",
+                   "gate_proj", "up_proj", "down_proj"]
+                : ["q_proj", "v_proj"],
             useDora: useDora,
             variant: peftVariant,
-            adaLoraTargetRank: adaLoraTargetRank
+            adaLoraTargetRank: adaLoraTargetRank,
+            quantizationBits: qloraBits
         )
         LayerDropState.probability = layerDropProb
         defer { LayerDropState.disable() }
@@ -200,6 +221,7 @@ enum SFT {
         \(useDora ? "DoRA" : "LoRA"):           rank=\(rank) alpha=\(alpha) targets=q_proj,v_proj
         LayerDrop:      \(layerDropProb > 0 ? "p=\(layerDropProb)" : "off")
         trainable:      \(formatNum(nTrainable))  /  total \(formatNum(nTotal))  (\(String(format: "%.2f%%", 100 * Float(nTrainable) / Float(nTotal))))
+        QLoRA:          \(qlora ? "on (simulated int\(qloraBits) base via LoftQ init; packed train-time base pending)" : "off")
         steps:          \(steps)
         batch / lr:     \(B) / \(lr)
         NEFTune:        \(nefTuneAlpha > 0 ? "alpha=\(nefTuneAlpha)" : "off")
@@ -369,6 +391,14 @@ enum SFT {
         --grad-clip F            Global L2 grad-norm cap (default 1.0). Pass 0 to disable.
         --lora-plus-ratio F      LoRA+ B-matrix LR multiplier (Hayou et al., 2024).
                                    1.0 (default) = standard LoRA; 16.0 is the recipe.
+        --qlora                  QLoRA-style recipe: simulated int4 base + LoRA
+                                   adapter training. Uses the repo's LoftQ path:
+                                   the wrapped base weights are quantize-then-
+                                   dequantized in memory, and the adapter trains
+                                   against that frozen approximation. This is
+                                   algorithmically useful but does not yet provide
+                                   packed-int memory savings.
+        --qlora-bits 4|8         Quantization grid for --qlora (default 4).
         --pack                   Alias for --pack-mode sequence (back-compat).
         --pack-mode MODE         How to construct each batch (default none):
                                    none     — uniform random pick (one example per row)

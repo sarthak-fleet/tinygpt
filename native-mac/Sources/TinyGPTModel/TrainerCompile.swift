@@ -74,6 +74,36 @@ public final class CompiledAdamW: Optimizer, LearningRateMutable {
         [lrArray] + stateStorage.flattenedValues().flatMap { $0.innerState() }
     }
 
+    /// Export named Adam moments for checkpoint sidecars. MLX-Swift's
+    /// built-in AdamW keeps the same data behind package-internal storage;
+    /// this project-owned optimizer can expose it safely.
+    public func exportMoments() -> [(name: String, m: MLXArray, v: MLXArray)] {
+        stateStorage.flattened().map { name, state in
+            (name: name, m: state.a, v: state.b)
+        }
+    }
+
+    /// Restore named Adam moments. Returns false on any missing parameter
+    /// or shape mismatch, leaving the previous optimizer state untouched.
+    public func importMoments(
+        _ moments: [(name: String, m: MLXArray, v: MLXArray)],
+        matching model: Module
+    ) -> Bool {
+        let paramMap = Dictionary(uniqueKeysWithValues: model.parameters().flattened())
+        var restored: [(String, PairState)] = []
+        restored.reserveCapacity(moments.count)
+
+        for moment in moments {
+            guard let param = paramMap[moment.name],
+                  param.shape == moment.m.shape,
+                  param.shape == moment.v.shape
+            else { return false }
+            restored.append((moment.name, PairState(moment.m, moment.v)))
+        }
+        stateStorage = NestedDictionary.unflattened(restored)
+        return true
+    }
+
     public func update(model: Module, gradients: ModuleParameters) {
         let modelParams = model.parameters()
         let (p, s) = gradients.mapValues(modelParams, stateStorage) {

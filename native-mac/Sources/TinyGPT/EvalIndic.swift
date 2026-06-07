@@ -474,10 +474,10 @@ enum EvalIndic {
                 if golds.isEmpty { skipped += 1; return true }
 
                 let prompt = "Context: \(ctx)\nQuestion: \(q)\nAnswer:"
-                let out = greedyGenerate(model: model, cfg: cfg,
-                                          tokenizer: tokenizer,
-                                          prompt: prompt,
-                                          maxNewTokens: maxNewTokens)
+                let out = GenerationUtils.greedyGenerate(model: model, cfg: cfg,
+                                                          tokenizer: tokenizer,
+                                                          prompt: prompt,
+                                                          maxNewTokens: maxNewTokens)
                 seen += 1
                 let pred = normalizeAnswer(out)
                 let hit = golds.contains(where: { normalizeAnswer($0) == pred && !pred.isEmpty })
@@ -547,49 +547,6 @@ enum EvalIndic {
         return [UInt8](text.utf8).map { Int($0) }
     }
 
-    /// Greedy generation — mirrors `Score.greedyGenerate` (kept private
-    /// there). Same simple O(n²) form: re-feed the full window each step.
-    /// Acceptable for short answers (XQuAD: 32 tokens cap).
-    private static func greedyGenerate(model: AnyModel, cfg: ModelConfig,
-                                        tokenizer: HFTokenizer?,
-                                        prompt: String,
-                                        maxNewTokens: Int) -> String {
-        let promptIds = encode(text: prompt, tokenizer: tokenizer).map { Int32($0) }
-        // Left-truncate to ctx so a long context doesn't trip the kernel.
-        let ctx = cfg.contextLength
-        let seed: [Int32]
-        if promptIds.count > ctx {
-            seed = Array(promptIds[(promptIds.count - ctx)..<promptIds.count])
-        } else {
-            seed = promptIds
-        }
-        var idx = MLXArray(seed, [1, seed.count])
-        var generated: [Int32] = []
-        for _ in 0..<maxNewTokens {
-            let T = idx.shape.last!
-            let lo = max(0, T - ctx)
-            let cond = idx[0..., lo..<T]
-            let logits = model(cond)
-            let last = logits[0..., logits.shape[1] - 1, 0...]
-            let next = MLX.argMax(last, axis: -1).reshaped([1, 1])
-            eval(next)
-            let id = Int32(next.item(Int32.self))
-            generated.append(id)
-            idx = concatenated([idx, next.asType(idx.dtype)], axis: 1)
-        }
-        if let tok = tokenizer {
-            return tok.decode(generated.map { Int($0) })
-        }
-        // Byte-level: print only valid bytes.
-        var s = ""
-        for id in generated {
-            if let scalar = UnicodeScalar(Int(id)), id >= 9 {
-                s.append(Character(scalar))
-            }
-        }
-        return s
-    }
-
     // MARK: - Usage
 
     private static func exitUsage(_ code: Int32 = 2) -> Never {
@@ -615,4 +572,3 @@ enum EvalIndic {
         exit(code)
     }
 }
-

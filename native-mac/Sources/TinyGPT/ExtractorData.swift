@@ -119,6 +119,10 @@ enum ExtractorData {
             }
         }
 
+        if bfclPath != nil || tauBenchDir != nil {
+            fputs("[note] consider scripts/data-prep/prep_data.py for parallel + dedup\n", stderr)
+        }
+
         // Load the tool catalog (defines the label set).
         let toolNames: [String]
         if let tools = toolsPath {
@@ -150,6 +154,18 @@ enum ExtractorData {
                                                      withIntermediateDirectories: true)
             return dir.appendingPathComponent("router_data.jsonl")
         }()
+
+        if (bfclPath != nil || tauBenchDir != nil) && !synth {
+            if runPrepDataShim(
+                bfclPath: bfclPath,
+                tauBenchDir: tauBenchDir,
+                toolsPath: toolsPath,
+                outURL: outURL,
+                dryRun: dryRun
+            ) {
+                return
+            }
+        }
 
         // Collected (query, tool) pairs. Counts per-tool so we know who
         // needs synth backfill.
@@ -236,6 +252,54 @@ enum ExtractorData {
     }
 
     // MARK: - BFCL ingest
+
+    static func runPrepDataShim(
+        bfclPath: String?,
+        tauBenchDir: String?,
+        toolsPath: String?,
+        outURL: URL,
+        dryRun: Bool
+    ) -> Bool {
+        guard let script = findPrepDataScript() else {
+            fputs("extractor-data: prep-data shim not found; falling back to Swift parser\n", stderr)
+            return false
+        }
+        var argv = ["python3", script.path]
+        if let bfclPath { argv += ["--bfcl", bfclPath] }
+        if let tauBenchDir { argv += ["--tau-bench", tauBenchDir] }
+        if let toolsPath { argv += ["--tools", toolsPath] }
+        argv += ["--dedup", "--quality-filter"]
+        if dryRun {
+            argv.append("--dry-run")
+        } else {
+            argv += ["--out", outURL.path]
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = argv
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        do {
+            try process.run()
+            process.waitUntilExit()
+            exit(process.terminationStatus)
+        } catch {
+            fputs("extractor-data: failed to launch prep-data shim: \(error)\n", stderr)
+            return false
+        }
+    }
+
+    static func findPrepDataScript() -> URL? {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let candidates = [
+            cwd.appendingPathComponent("scripts/data-prep/prep_data.py"),
+            cwd.appendingPathComponent("../scripts/data-prep/prep_data.py"),
+            cwd.appendingPathComponent("../../scripts/data-prep/prep_data.py"),
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
 
     /// BFCL rows have varied shapes across the leaderboard (single-call,
     /// multi-turn, parallel, irrelevance). For the router we only need

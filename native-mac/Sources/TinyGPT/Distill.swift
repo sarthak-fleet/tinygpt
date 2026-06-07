@@ -45,6 +45,8 @@ enum Distill {
         var lr: Float = 3e-4
         var temperature: Float = 4.0
         var alpha: Float = 0.7
+        var alphaWasExplicit = false
+        var mode = "soft"
         var batchSize: Int? = nil
         var ctxOverride: Int? = nil
         var gradClipNorm: Float = 1.0
@@ -53,14 +55,17 @@ enum Distill {
         while i < args.count {
             switch args[i] {
             case "--teacher":     teacherPath = args[i+1]; i += 2
-            case "--corpus":      corpusPath = args[i+1]; i += 2
+            case "--corpus", "--data":
+                                  corpusPath = args[i+1]; i += 2
             case "--tokenizer":   tokenizerDir = args[i+1]; i += 2
             case "--out":         outPath = args[i+1]; i += 2
             case "--steps":       steps = Int(args[i+1]) ?? steps; i += 2
             case "--lr":          lr = Float(args[i+1]) ?? lr; i += 2
             case "--temperature", "--temp":
                                   temperature = Float(args[i+1]) ?? temperature; i += 2
-            case "--alpha":       alpha = Float(args[i+1]) ?? alpha; i += 2
+            case "--alpha", "--kl-weight":
+                                  alpha = Float(args[i+1]) ?? alpha; alphaWasExplicit = true; i += 2
+            case "--mode":        mode = args[i+1].lowercased(); i += 2
             case "--batch":       batchSize = Int(args[i+1]); i += 2
             case "--ctx":         ctxOverride = Int(args[i+1]); i += 2
             case "--grad-clip":   gradClipNorm = Float(args[i+1]) ?? gradClipNorm; i += 2
@@ -71,24 +76,49 @@ enum Distill {
             }
         }
         guard let studentPath = studentPath else { fputs("missing <student> path\n", stderr); exitUsage() }
-        guard let teacherPath = teacherPath else { fputs("--teacher <path> required\n", stderr); exitUsage() }
         guard let corpusPath = corpusPath else { fputs("--corpus <text> required\n", stderr); exitUsage() }
         guard let outPath = outPath else { fputs("--out <path.tinygpt> required\n", stderr); exitUsage() }
+        switch mode {
+        case "soft":
+            break
+        case "hard":
+            if !alphaWasExplicit { alpha = 0 }
+        default:
+            fputs("--mode must be soft or hard\n", stderr)
+            exit(2)
+        }
+        guard alpha >= 0 && alpha <= 1 else {
+            fputs("--alpha/--kl-weight must be between 0 and 1\n", stderr)
+            exit(2)
+        }
+        guard temperature > 0 else {
+            fputs("--temperature must be > 0\n", stderr)
+            exit(2)
+        }
+        if alpha > 0 && teacherPath == nil {
+            fputs("--teacher <path> required when --mode soft or --kl-weight > 0\n", stderr)
+            exitUsage()
+        }
 
-        // Load student (the trainable target) and teacher (frozen).
+        // Load student (the trainable target) and, for soft KL, the frozen teacher.
         print("loading student from \(studentPath)…")
         let studentLoad: ModelLoader.LoadResult
         do { studentLoad = try ModelLoader.load(studentPath) }
         catch { fputs("student load failed: \(error)\n", stderr); exit(1) }
-        print("loading teacher from \(teacherPath)…")
-        let teacherLoad: ModelLoader.LoadResult
-        do { teacherLoad = try ModelLoader.load(teacherPath) }
-        catch { fputs("teacher load failed: \(error)\n", stderr); exit(1) }
+        let teacherLoad: ModelLoader.LoadResult?
+        if alpha > 0, let teacherPath {
+            print("loading teacher from \(teacherPath)…")
+            do { teacherLoad = try ModelLoader.load(teacherPath) }
+            catch { fputs("teacher load failed: \(error)\n", stderr); exit(1) }
+        } else {
+            teacherLoad = nil
+        }
         let scfg = studentLoad.config
-        let tcfg = teacherLoad.config
-        guard scfg.vocabSize == tcfg.vocabSize else {
-            fputs("vocab mismatch: student=\(scfg.vocabSize) teacher=\(tcfg.vocabSize) — distillation needs a shared tokenizer\n", stderr)
-            exit(2)
+        if let tcfg = teacherLoad?.config {
+            guard scfg.vocabSize == tcfg.vocabSize else {
+                fputs("vocab mismatch: student=\(scfg.vocabSize) teacher=\(tcfg.vocabSize) — distillation needs a shared tokenizer\n", stderr)
+                exit(2)
+            }
         }
         if let c = ctxOverride { /* override student ctx noted */ _ = c }
 
@@ -101,12 +131,12 @@ enum Distill {
             fputs("first-cut distill expects a from-scratch student (HF-student support is follow-up).\n", stderr)
             exit(2)
         }
-        let teacherAny = teacherLoad.model
+        let teacherAny = teacherLoad?.model
 
         // Load tokeniser + corpus. Reuses the TokenCache so a 30-minute
         // tokenize doesn't repeat for every distill experiment.
         let tokDir = tokenizerDir.map(URL.init(fileURLWithPath:))
-            ?? teacherLoad.hfTokenizerDir
+            ?? teacherLoad?.hfTokenizerDir
             ?? studentLoad.hfTokenizerDir
         guard let td = tokDir else {
             fputs("no tokenizer found — pass --tokenizer <hf-dir>\n", stderr); exit(2)
@@ -141,8 +171,9 @@ enum Distill {
         TinyGPT — knowledge distillation
         --------------------------------
         student:        \(studentPath)  (\(scfg.nLayers)L · d=\(scfg.dModel) · \(formatLargeInt(studentLoad.model.numParameters())) params)
-        teacher:        \(teacherPath)  (\(tcfg.nLayers)L · d=\(tcfg.dModel) · \(formatLargeInt(teacherLoad.model.numParameters())) params)
+        teacher:        \(teacherDescription(path: teacherPath, load: teacherLoad))
         vocab:          \(scfg.vocabSize) (shared)
+        mode:           \(mode)
         loss:           α · T² · KL + (1-α) · NLL    [α=\(alpha) T=\(temperature)]
         steps:          \(steps)
         batch / ctx:    \(B) / \(T)
@@ -215,7 +246,7 @@ enum Distill {
     /// rescale by T² to keep the gradient magnitude comparable to the
     /// unsoftened NLL term.
     private static func makeDistillStepFn(student: TinyGPTModel,
-                                           teacher: AnyModel,
+                                           teacher: AnyModel?,
                                            lr: Float,
                                            temperature: Float, alpha: Float,
                                            gradClipNorm: Float?)
@@ -230,6 +261,18 @@ enum Distill {
 
         let lossFn = { (m: TinyGPTModel, x: MLXArray, y: MLXArray) -> MLXArray in
             let sLogits = m(x)
+            let v = sLogits.shape.last!
+
+            // Hard-target NLL on the true next-token. Standard CE — keeps
+            // the student grounded in real data even if the teacher is
+            // wrong somewhere.
+            let nll = crossEntropy(
+                logits: sLogits.reshaped([-1, v]),
+                targets: y.reshaped([-1]),
+                reduction: .mean
+            )
+            guard let teacher else { return nll }
+
             // Teacher forward — no grad. The AnyModel-routed call is not
             // a `valueAndGrad` target so MLX treats its outputs as constants.
             let tLogits: MLXArray
@@ -237,7 +280,6 @@ enum Distill {
             case .fromScratch(let tm): tLogits = tm(x)
             case .huggingFace(let tm): tLogits = tm(x)
             }
-            let v = sLogits.shape.last!
 
             // Softened log-probs for both. `logSoftmax` is numerically
             // stable (subtracts the row max under the hood).
@@ -249,15 +291,6 @@ enum Distill {
             // so the cross-entropy form is Σ t · (logt - logs).
             let klPerTok = (tP * (tLogP - sLogP)).sum(axis: -1)   // [B, T]
             let klTerm = klPerTok.mean() * tSqA
-
-            // Hard-target NLL on the true next-token. Standard CE — keeps
-            // the student grounded in real data even if the teacher is
-            // wrong somewhere.
-            let nll = crossEntropy(
-                logits: sLogits.reshaped([-1, v]),
-                targets: y.reshaped([-1]),
-                reduction: .mean
-            )
 
             return alphaA * klTerm + oneMinusAlpha * nll
         }
@@ -287,16 +320,31 @@ enum Distill {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
+    private static func teacherDescription(
+        path: String?, load: ModelLoader.LoadResult?
+    ) -> String {
+        guard let path, let load else {
+            return "none (hard CE mode)"
+        }
+        let cfg = load.config
+        return "\(path)  (\(cfg.nLayers)L · d=\(cfg.dModel) · \(formatLargeInt(load.model.numParameters())) params)"
+    }
+
     private static func exitUsage(_ code: Int32 = 2) -> Never {
         print("""
         usage: tinygpt distill <student> --teacher <path> --corpus <text> [options]
 
-        --teacher <path>         Frozen teacher model (.tinygpt or HF dir) — required
+        --teacher <path>         Frozen teacher model (.tinygpt or HF dir);
+                                 required for --mode soft / --kl-weight > 0
         --corpus <text>          UTF-8 text to distill on — required
+        --data <text>            Alias for --corpus
         --out <path.tinygpt>     Where to save the distilled student — required
         --tokenizer <hf-dir>     Tokeniser dir (auto-detected from teacher/student if pinned)
+        --mode soft|hard         soft = KL teacher logits + NLL (default);
+                                 hard = NLL only, useful with teacher-generated text
         --temperature F          KL temperature (default 4.0; 4-8 typical)
         --alpha F                KL weight in the mix (default 0.7; rest goes to NLL)
+        --kl-weight F            Alias for --alpha
         --steps N                Training steps (default 1000)
         --lr F                   Learning rate (default 3e-4)
         --batch N                Batch size (default by student size)

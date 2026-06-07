@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MLX
 import MLXRandom
@@ -8,8 +9,7 @@ import TinyGPTModel
 ///
 /// Long-run features (Tier 0 safety nets):
 ///   --resume <path.tinygpt>     Resume weights + step from a checkpoint
-///                               (Adam state restarts — 100-step warmup,
-///                                see `docs/training_phases_roadmap.md`)
+///                               and Adam state when present/supported.
 ///   --save-every N              Atomic checkpoint every N steps. A crash
 ///                               leaves the last successful checkpoint
 ///                               intact (write-to-.tmp then rename).
@@ -27,6 +27,7 @@ import TinyGPTModel
 ///   --decay-steps N             WSD decay window (default: 10% of steps).
 ///   --val-split 0.0-0.2         Hold out last fraction of corpus for val.
 ///   --val-every N               Eval val loss every N steps (default 200).
+///   --eval-every N              Spawn lightweight E3 evals at checkpointed steps.
 ///
 /// Ctrl-C is cooperative: the next step finishes, a final checkpoint is
 /// flushed, and the process exits cleanly.
@@ -78,6 +79,7 @@ enum Train {
         // (and future interp-on-checkpoints tools) to replay training
         // dynamics. Disk-hungry on long runs; off by default.
         var saveHistory: Bool = false
+        var saveOptState: Bool = true
         // Curated-recipe default: cosine + warmup 500. Standard transformer
         // schedule; constant LR is rarely the right choice past a smoke test.
         // `wsd` (warmup-stable-decay) is the MiniCPM/SmolLM alternative — the
@@ -97,6 +99,10 @@ enum Train {
         // JSONL log emitter (C10 training dashboard). One JSON object per
         // step appended to the file; consumed by browser/src/pages/training-dashboard.
         var logJsonlPath: String? = nil
+        // E8 train-time eval hook. Slow evals are skipped rather than queued.
+        var evalEvery: Int? = nil
+        var evalTasks: String = "arc_easy,gsm8k"
+        var evalLimit: Int = 50
         // C9 determinism: --seed N seeds MLXRandom early so model init +
         // any GPU-side dropout/noise is reproducible. Batch sampling via
         // Swift's stdlib `Int.random` is NOT covered yet — v2 will replace
@@ -187,6 +193,20 @@ enum Train {
         // to ~10% on huge with large micro-batches. See
         // `docs/cpu_speedup_results.md`.
         var prefetchBatches: Bool = false
+        // Sustained-load controls. `throttle=1` means no sleep; 0.5 means
+        // sleep roughly one step-time after each step, halving average load.
+        var throttle: Double = 1.0
+        var maxStepRate: Double = 0
+        var throttleFilePath: String? = nil
+        var userSpecifiedOut = false
+        var domainAdapt = false
+        var explicitLRSchedule = false
+        var explicitWarmup = false
+        var explicitMaxLR = false
+        var explicitMinLR = false
+        var explicitDecaySteps = false
+        var explicitLayerDecay = false
+        let cliArgsSnapshot = args
 
         var i = 0
         while i < args.count {
@@ -195,22 +215,31 @@ enum Train {
             case "--depth":       depthOverride = Int(args[i+1]); i += 2
             case "--steps":       steps = Int(args[i+1]) ?? steps; i += 2
             case "--corpus":      corpusPath = args[i+1]; i += 2
-            case "--out":         outPath = args[i+1]; i += 2
+            case "--out":         outPath = args[i+1]; userSpecifiedOut = true; i += 2
             case "--dtype":       dtype = args[i+1]; i += 2
             case "--batch":       batchSize = Int(args[i+1]); i += 2
             case "--sample-every": sampleEvery = Int(args[i+1]) ?? sampleEvery; i += 2
-            case "--resume":      resumePath = args[i+1]; i += 2
+            case "--throttle":    throttle = clampThrottle(Double(args[i+1]) ?? throttle); i += 2
+            case "--max-step-rate": maxStepRate = max(0, Double(args[i+1]) ?? maxStepRate); i += 2
+            case "--throttle-file": throttleFilePath = args[i+1]; i += 2
+            case "--resume", "--base":
+                                  resumePath = args[i+1]; i += 2
+            case "--domain-adapt": domainAdapt = true; i += 1
             case "--save-every":  saveEvery = Int(args[i+1]); i += 2
             case "--save-history": saveHistory = true; i += 1
-            case "--lr-schedule": lrSchedule = args[i+1]; i += 2
-            case "--warmup":      warmupSteps = Int(args[i+1]) ?? warmupSteps; i += 2
-            case "--max-lr":      maxLR = Float(args[i+1]) ?? maxLR; i += 2
-            case "--min-lr":      minLR = Float(args[i+1]) ?? minLR; i += 2
-            case "--decay-steps": decaySteps = Int(args[i+1]) ?? decaySteps; i += 2
+            case "--no-save-opt-state": saveOptState = false; i += 1
+            case "--lr-schedule": lrSchedule = args[i+1]; explicitLRSchedule = true; i += 2
+            case "--warmup":      warmupSteps = Int(args[i+1]) ?? warmupSteps; explicitWarmup = true; i += 2
+            case "--max-lr":      maxLR = Float(args[i+1]) ?? maxLR; explicitMaxLR = true; i += 2
+            case "--min-lr":      minLR = Float(args[i+1]) ?? minLR; explicitMinLR = true; i += 2
+            case "--decay-steps": decaySteps = Int(args[i+1]) ?? decaySteps; explicitDecaySteps = true; i += 2
             case "--no-spike-detect": spikeDetectEnabled = false; i += 1
             case "--spike-window": spikeWindow = max(2, Int(args[i+1]) ?? spikeWindow); i += 2
             case "--spike-factor": spikeFactor = max(1.01, Float(args[i+1]) ?? spikeFactor); i += 2
             case "--log-jsonl":   logJsonlPath = args[i+1]; i += 2
+            case "--eval-every":  evalEvery = Int(args[i+1]); i += 2
+            case "--eval-tasks":  evalTasks = args[i+1]; i += 2
+            case "--eval-limit":  evalLimit = Int(args[i+1]) ?? evalLimit; i += 2
             case "--seed":        rngSeed = UInt64(args[i+1]); i += 2
             case "--val-split":   valSplit = Double(args[i+1]) ?? valSplit; i += 2
             case "--val-every":   valEvery = Int(args[i+1]) ?? valEvery; i += 2
@@ -237,7 +266,7 @@ enum Train {
             case "--galore-update-every": galoreUpdateEvery = max(1, Int(args[i+1]) ?? 200); i += 2
             case "--z-loss-weight":      zLossWeight = max(0, Float(args[i+1]) ?? 0); i += 2
             case "--deep-norm":          useDeepNorm = true; i += 1
-            case "--lr-layer-decay":     lrLayerDecay = Float(args[i+1]) ?? 1.0; i += 2
+            case "--lr-layer-decay":     lrLayerDecay = Float(args[i+1]) ?? 1.0; explicitLayerDecay = true; i += 2
             case "--embedding-rmsnorm":  useEmbeddingRMSNorm = true; i += 1
             case "--bpe-dropout":    bpeDropout = Float(args[i+1]) ?? bpeDropout; i += 2
             case "--prefetch":
@@ -264,6 +293,31 @@ enum Train {
                 fputs("unknown flag: \(args[i])\n", stderr); exitUsage()
             }
         }
+        if let n = evalEvery, n <= 0 {
+            fputs("--eval-every must be a positive step interval\n", stderr); exitUsage()
+        }
+        if domainAdapt {
+            guard resumePath != nil else {
+                fputs("--domain-adapt requires --base <checkpoint.tinygpt> (alias of --resume)\n", stderr)
+                exit(2)
+            }
+            if !explicitLRSchedule { lrSchedule = "wsd" }
+            if !explicitWarmup { warmupSteps = 100 }
+            if !explicitMaxLR { maxLR = 1e-4 }
+            if !explicitMinLR { minLR = 1e-5 }
+            if !explicitDecaySteps { decaySteps = max(1, steps / 20) }
+            if !explicitLayerDecay { lrLayerDecay = 0.85 }
+        }
+        resolveOutputPaths(
+            preset: preset,
+            resumePath: resumePath,
+            userSpecifiedOut: userSpecifiedOut,
+            outPath: &outPath,
+            logJsonlPath: &logJsonlPath
+        )
+        if userSpecifiedOut, let out = outPath {
+            warnIfVolatileOutputPath(out)
+        }
 
         // C9: seed MLXRandom BEFORE any model construction or weight init.
         // Model parameter initialization (e.g., He/Xavier init) draws from
@@ -282,11 +336,13 @@ enum Train {
         var cfg: ModelConfig
         let model: TinyGPTModel
         var startStep: Int = 0
+        var resumeFile: TinyGPTFile? = nil
         if let r = resumePath {
             let url = URL(fileURLWithPath: r)
             let file: TinyGPTFile
             do { file = try TinyGPTFileReader.read(url) }
             catch { fputs("error reading resume file: \(error)\n", stderr); exit(1) }
+            resumeFile = file
             let h = file.header.config
             // Resume restores the tokenizer source the model was trained with;
             // ignore --tokenizer if the resumed checkpoint already pins one,
@@ -339,7 +395,7 @@ enum Train {
             do { try TinyGPTWeightLoader.load(file, into: model) }
             catch { fputs("error loading weights: \(error)\n", stderr); exit(1) }
             startStep = Int(file.step)
-            print("resuming from \(r) at step \(startStep) (Adam state restarts)")
+            print("resuming from \(r) at step \(startStep)")
         } else {
             cfg = configFor(preset)
             // nanochat-style single-knob: --depth N derives the GPT-2-shaped
@@ -669,12 +725,23 @@ enum Train {
                               lrLayerDecay: cfg.lrLayerDecay,
                               useCompiledLR: wantCompiledLR,
                               accumMicroBatches: wantCompiledAccum ? accumSteps : nil)
+        if let resumeFile {
+            restoreOptimizerStateIfPossible(from: resumeFile, into: trainer)
+        }
 
         let effB = B * accumSteps
+        let throttleURL = URL(fileURLWithPath: throttleFilePath ?? defaultThrottleFilePath(outPath: outPath))
+        let trainEval = makeTrainEvalConfig(
+            outPath: outPath,
+            evalEvery: evalEvery,
+            evalTasks: evalTasks,
+            evalLimit: evalLimit
+        )
         print("""
 
         TinyGPT — training run
         ---------------------
+        recipe:        \(domainAdapt ? "domain-adapt (continued pretrain defaults)" : "pretrain")
         preset:        \(preset) (\(cfg.nLayers)L · d=\(cfg.dModel) · ctx=\(cfg.contextLength))\(cfg.isMoE ? " · MoE(\(cfg.nExperts) experts, top-\(cfg.moeTopK))" : "")\(cfg.mtpHorizons > 1 ? " · MTP(\(cfg.mtpHorizons) horizons)" : "")\(cfg.slidingWindow.map { " · sliding-window=\($0)" } ?? "")\(cfg.useALiBi ? " · ALiBi" : "")
         params:        \(formatLargeInt(model.numParameters()))
         vocab:         \(formatLargeInt(cfg.vocabSize))\(cfg.tokenizerSource != nil ? " (BPE)" : " (byte-level)")
@@ -695,12 +762,36 @@ enum Train {
         embed RMSNorm: \(cfg.useEmbeddingRMSNorm ? "on" : "off")
         qat:           \(cfg.qatBits.map { "int\($0) fake-quant + STE on every Linear" } ?? "off")
         save-every:    \(saveEvery.map { "\($0) steps · atomic" } ?? "end only")
+        throttle:      \(String(format: "%.0f%%", throttle * 100))\(maxStepRate > 0 ? " · max \(String(format: "%.2f", maxStepRate)) step/s" : "") · control \(throttleURL.path)
+        eval:          \(trainEval.map { "every \($0.every) steps · tasks=\($0.tasks) · limit=\($0.limit) · out=\($0.outJsonl.path)" } ?? "off")
         compile:       \(compileLabel(canCompile: canCompile, wantCompiledLR: wantCompiledLR, wantCompiledAccum: wantCompiledAccum, galoreActive: galoreActive, useSchedule: useSchedule, accumSteps: accumSteps, optimizerKind: optimizerKind))
         prefetch:      \(prefetchBatches ? "on (background batch pipeline, capacity=2)" : "off")
         device:        \(Device.defaultDevice())
 
         """)
         fflush(stdout)
+
+        writeRunReadme(
+            runOutPath: outPath,
+            cliArgs: cliArgsSnapshot,
+            preset: preset,
+            cfg: cfg,
+            corpusPath: corpusPath,
+            steps: steps,
+            startStep: startStep
+        )
+
+        // Active-run lock — cleared on clean exit (SIGINT included).
+        if let out = outPath, let log = logJsonlPath {
+            let lock = RunLockFile(
+                pid: ProcessInfo.processInfo.processIdentifier,
+                logJsonlPath: log,
+                canonicalOutPath: out,
+                startedAt: ISO8601DateFormatter().string(from: Date()),
+                totalSteps: steps
+            )
+            try? RunLockFile.write(lock)
+        }
 
         // C10 training dashboard log emitter. Append-only JSONL stream
         // consumed by browser/src/pages/training-dashboard. Off unless
@@ -759,6 +850,7 @@ enum Train {
         }
         var stoppedEarly = false
         var lastStep = startStep
+        var activeTrainEval: Process? = nil
         // Pausable-training config — cooperative pause on thermal pressure
         // or battery discharge (despite AC). Polled every 50 steps to
         // avoid IOKit churn. When triggered: same path as SIGINT —
@@ -776,6 +868,7 @@ enum Train {
             window: spikeWindow, factor: spikeFactor
         )
         for step in startStep..<steps {
+            let stepStartedAt = Date()
             // LR schedule update. When `useCompiledLR` is on (AdamW +
             // schedule), this still works: `optimizer.learningRate =`
             // routes through `CompiledAdamW.learningRate.set` which
@@ -814,6 +907,22 @@ enum Train {
                 lastLoss = trainer.accumulatedStep(microBatches: micros)
             }
             lastStep = step + 1
+
+            if step == startStep || (step + 1) % 100 == 0 {
+                throttle = readThrottleControlFile(throttleURL) ?? throttle
+            }
+            applyThrottleSleep(
+                stepStartedAt: stepStartedAt,
+                throttle: throttle,
+                maxStepRate: maxStepRate
+            )
+            if (step == startStep || (step + 1) % 100 == 0) && (throttle < 0.999 || maxStepRate > 0) {
+                let elapsedStep = -stepStartedAt.timeIntervalSinceNow
+                if elapsedStep > 0 {
+                    fputs(String(format: "[throttle] effective rate %.2f step/s (%.0f%%)\n",
+                                 1.0 / elapsedStep, throttle * 100), stderr)
+                }
+            }
 
             // Loss-spike detector (observe-only v1). Logs a warning when
             // the new loss exceeds `spikeFactor × moving-average` over the
@@ -893,33 +1002,50 @@ enum Train {
                 fputs(String(format: "    val loss %.3f\n", lastValLoss!), stderr)
                 trainLog?.val(step: step + 1, valLoss: lastValLoss!)
             }
-            // Atomic checkpoint
-            if let n = saveEvery, let out = outPath, (step + 1) % n == 0 {
+            // Atomic checkpoint. `--eval-every` can force checkpoint writes
+            // even when --save-every is absent, because E3 evals need a stable
+            // on-disk .tinygpt file to serve.
+            let completedStep = step + 1
+            let saveDue = saveEvery.map { completedStep % $0 == 0 } ?? false
+            let evalDue = trainEval.map { completedStep % $0.every == 0 } ?? false
+            if let out = outPath, saveDue || evalDue {
                 do {
                     try TrainSupport.atomicSave(
-                        model: model, cfg: cfg, step: step + 1, finalLoss: lastLoss,
+                        model: model, cfg: cfg, step: completedStep, finalLoss: lastLoss,
                         weightTranspose: isLinearWeightName,
                         manifestEntries: manifestEntries,
+                        optimizerMoments: saveOptState ? optimizerMoments(from: trainer) : [:],
                         to: URL(fileURLWithPath: out)
                     )
-                    fputs("    ✓ checkpoint at step \(step + 1) → \(out)\n", stderr)
+                    fputs("    ✓ checkpoint at step \(completedStep) → \(out)\n", stderr)
                     // B13 history mode: also write `<out-stem>.step-N.tinygpt`.
                     // Cheap copy from the just-saved atomic file; we don't
                     // re-serialize the model. A copy failure is logged but
                     // doesn't abort training.
+                    var evalModelURL = URL(fileURLWithPath: out)
                     if saveHistory {
                         let outURL = URL(fileURLWithPath: out)
                         let stem = outURL.deletingPathExtension().path
-                        let histURL = URL(fileURLWithPath: "\(stem).step-\(step + 1).tinygpt")
+                        let histURL = URL(fileURLWithPath: "\(stem).step-\(completedStep).tinygpt")
                         do {
                             if FileManager.default.fileExists(atPath: histURL.path) {
                                 try FileManager.default.removeItem(at: histURL)
                             }
                             try FileManager.default.copyItem(at: outURL, to: histURL)
                             fputs("    ↳ history → \(histURL.lastPathComponent)\n", stderr)
+                            evalModelURL = histURL
                         } catch {
                             fputs("    ⚠ history copy failed: \(error)\n", stderr)
                         }
+                    }
+                    if evalDue, let trainEval {
+                        activeTrainEval = launchTrainEvalIfIdle(
+                            active: activeTrainEval,
+                            config: trainEval,
+                            checkpoint: evalModelURL,
+                            step: completedStep,
+                            tokenizer: cfg.tokenizerSource
+                        )
                     }
                 } catch {
                     fputs("    ⚠ checkpoint save failed: \(error)\n", stderr)
@@ -973,6 +1099,7 @@ enum Train {
                     model: model, cfg: cfg, step: lastStep, finalLoss: lastLoss,
                     weightTranspose: isLinearWeightName,
                     manifestEntries: manifestEntries,
+                    optimizerMoments: saveOptState ? optimizerMoments(from: trainer) : [:],
                     to: URL(fileURLWithPath: out)
                 )
                 print("✓ wrote \(out)")
@@ -980,7 +1107,194 @@ enum Train {
                 fputs("save failed: \(error)\n", stderr); exit(1)
             }
         }
+        RunLockFile.clear()
         if stoppedEarly { exit(130) }  // standard "killed by SIGINT" exit code
+    }
+
+    private struct TrainEvalConfig {
+        let every: Int
+        let tasks: String
+        let limit: Int
+        let outJsonl: URL
+        let modelName: String
+    }
+
+    private static func makeTrainEvalConfig(
+        outPath: String?, evalEvery: Int?, evalTasks: String, evalLimit: Int
+    ) -> TrainEvalConfig? {
+        guard let outPath, let evalEvery else { return nil }
+        let outURL = URL(fileURLWithPath: outPath)
+        let stem = outURL.deletingPathExtension()
+        let evalURL = URL(fileURLWithPath: "\(stem.path)-evals.jsonl")
+        return TrainEvalConfig(
+            every: evalEvery,
+            tasks: evalTasks,
+            limit: max(1, evalLimit),
+            outJsonl: evalURL,
+            modelName: stem.lastPathComponent
+        )
+    }
+
+    private static func clampThrottle(_ value: Double) -> Double {
+        min(1.0, max(0.01, value))
+    }
+
+    private static func defaultThrottleFilePath(outPath: String?) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let dir = home
+            .appendingPathComponent(".cache")
+            .appendingPathComponent("tinygpt")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let stem: String
+        if let outPath {
+            stem = URL(fileURLWithPath: outPath).deletingPathExtension().lastPathComponent
+        } else {
+            stem = "train"
+        }
+        return dir.appendingPathComponent("\(stem).throttle").path
+    }
+
+    private static func readThrottleControlFile(_ url: URL) -> Double? {
+        guard let raw = try? String(contentsOf: url, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let value = Double(raw)
+        else { return nil }
+        return clampThrottle(value)
+    }
+
+    private static func applyThrottleSleep(
+        stepStartedAt: Date,
+        throttle: Double,
+        maxStepRate: Double
+    ) {
+        let stepTime = -stepStartedAt.timeIntervalSinceNow
+        let throttleSleep: Double
+        if throttle < 0.999 {
+            throttleSleep = stepTime * (1.0 / max(0.01, throttle) - 1.0)
+        } else {
+            throttleSleep = 0
+        }
+        let rateSleep: Double
+        if maxStepRate > 0 {
+            rateSleep = max(0, (1.0 / maxStepRate) - stepTime)
+        } else {
+            rateSleep = 0
+        }
+        let sleep = max(throttleSleep, rateSleep)
+        if sleep > 0 {
+            Thread.sleep(forTimeInterval: sleep)
+        }
+    }
+
+    private static func launchTrainEvalIfIdle(
+        active: Process?,
+        config: TrainEvalConfig,
+        checkpoint: URL,
+        step: Int,
+        tokenizer: String?
+    ) -> Process? {
+        if let active, active.isRunning {
+            fputs("    ↳ eval skipped at step \(step): previous eval still running\n", stderr)
+            return active
+        }
+        guard let tokenizer else {
+            fputs("    ↳ eval skipped at step \(step): checkpoint has no tokenizerSource\n", stderr)
+            return nil
+        }
+
+        let fm = FileManager.default
+        let parent = config.outJsonl.deletingLastPathComponent()
+        try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+
+        let logURL = URL(fileURLWithPath: "\(config.outJsonl.deletingPathExtension().path).step-\(step).log")
+        fm.createFile(atPath: logURL.path, contents: nil)
+        let logHandle = try? FileHandle(forWritingTo: logURL)
+
+        let proc = Process()
+        let selfPath = CommandLine.arguments.first ?? "tinygpt"
+        var args: [String] = []
+        if selfPath.contains("/") {
+            proc.executableURL = URL(fileURLWithPath: selfPath)
+        } else {
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            args.append(selfPath)
+        }
+        let servePort = 8200 + (step % 100)
+        args.append(contentsOf: [
+            "run-lm-eval",
+            "--tinygpt-model", checkpoint.path,
+            "--tokenizer", tokenizer,
+            "--tasks", config.tasks,
+            "--limit", "\(config.limit)",
+            "--model-name", config.modelName,
+            "--model-step", "\(step)",
+            "--out", config.outJsonl.path,
+            "--serve-port", "\(servePort)",
+            "--work-dir", "/tmp/tinygpt-train-evals"
+        ])
+        proc.arguments = args
+        if let logHandle {
+            proc.standardOutput = logHandle
+            proc.standardError = logHandle
+        }
+
+        do {
+            try proc.run()
+            fputs("    ↳ eval spawned at step \(step) → \(config.outJsonl.path) (log \(logURL.path))\n", stderr)
+            return proc
+        } catch {
+            fputs("    ⚠ eval spawn failed at step \(step): \(error)\n", stderr)
+            return nil
+        }
+    }
+
+    private static func optimizerMoments(from trainer: Trainer) -> [String: (m: MLXArray, v: MLXArray)] {
+        guard let adam = trainer.optimizer as? CompiledAdamW else { return [:] }
+        return Dictionary(uniqueKeysWithValues: adam.exportMoments().map { ($0.name, (m: $0.m, v: $0.v)) })
+    }
+
+    private static func restoreOptimizerStateIfPossible(from file: TinyGPTFile, into trainer: Trainer) {
+        guard let adam = trainer.optimizer as? CompiledAdamW else {
+            fputs("[warn] optimizer state restore unsupported for \(trainer.optimizerKind.rawValue); resuming with fresh optimizer state\n", stderr)
+            return
+        }
+        let moments = optimizerMoments(from: file)
+        guard !moments.isEmpty else {
+            fputs("[warn] no optimizer state found, resuming with fresh Adam — small loss wobble expected\n", stderr)
+            return
+        }
+        if adam.importMoments(moments, matching: trainer.model) {
+            fputs("[resume] restored Adam state for \(moments.count) tensors\n", stderr)
+        } else {
+            fputs("[warn] optimizer state shape mismatch, resuming with fresh Adam — small loss wobble expected\n", stderr)
+        }
+    }
+
+    private static func optimizerMoments(from file: TinyGPTFile) -> [(name: String, m: MLXArray, v: MLXArray)] {
+        var out: [(name: String, m: MLXArray, v: MLXArray)] = []
+        out.reserveCapacity(file.tensors.count)
+        for tensor in file.tensors {
+            guard hasAnyNonZero(tensor.adamM) || hasAnyNonZero(tensor.adamV) else { continue }
+            let shape: [Int]
+            let m: MLXArray
+            let v: MLXArray
+            if isLinearWeightName(tensor.entry.name) && tensor.entry.shape.count == 2 {
+                shape = [tensor.entry.shape[1], tensor.entry.shape[0]]
+                m = MLXArray(tensor.adamM, shape, dtype: .float32).transposed()
+                v = MLXArray(tensor.adamV, shape, dtype: .float32).transposed()
+            } else {
+                shape = tensor.entry.shape
+                m = MLXArray(tensor.adamM, shape, dtype: .float32)
+                v = MLXArray(tensor.adamV, shape, dtype: .float32)
+            }
+            out.append((name: tensor.entry.name, m: m, v: v))
+        }
+        return out
+    }
+
+    private static func hasAnyNonZero(_ data: Data) -> Bool {
+        data.contains { $0 != 0 }
     }
 
     private static func printSample(model: TinyGPTModel, cfg: ModelConfig, tag: String) {
@@ -1146,6 +1460,109 @@ enum Train {
         return "on (\(bits.joined(separator: " + ")))"
     }
 
+    // MARK: - Persistent output paths (docs/prds/persistent-training-output.md)
+
+    private static func runsRoot() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cache/tinygpt/runs", isDirectory: true)
+    }
+
+    private static func autoRunName(preset: String) -> String {
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone.current
+        fmt.dateFormat = "yyyy-MM-dd-HHmmss"
+        return "\(preset)-\(fmt.string(from: Date()))"
+    }
+
+    /// Default `~/.cache/tinygpt/runs/<name>/<name>.tinygpt` when `--out`
+    /// is omitted. Resume-without-`--out` keeps writing to the resume path.
+    private static func resolveOutputPaths(
+        preset: String,
+        resumePath: String?,
+        userSpecifiedOut: Bool,
+        outPath: inout String?,
+        logJsonlPath: inout String?
+    ) {
+        if outPath == nil {
+            if let resume = resumePath {
+                outPath = resume
+            } else {
+                let name = autoRunName(preset: preset)
+                let dir = runsRoot().appendingPathComponent(name, isDirectory: true)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                outPath = dir.appendingPathComponent("\(name).tinygpt").path
+            }
+        }
+        guard let out = outPath else { return }
+        let outURL = URL(fileURLWithPath: out)
+        let runDir = outURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        if logJsonlPath == nil {
+            logJsonlPath = outURL.deletingPathExtension().path + ".jsonl"
+        }
+        _ = userSpecifiedOut  // used by caller for /tmp warning only
+    }
+
+    private static func warnIfVolatileOutputPath(_ path: String) {
+        guard path.hasPrefix("/tmp/") || path == "/tmp" else { return }
+        fputs("""
+        [warn] --out points at /tmp — this path is wiped on Mac reboot!
+        [warn] If you intend long training, use --out ~/.cache/tinygpt/runs/<name>/<name>.tinygpt
+        [warn] Continuing in 3s... (Ctrl-C to abort)
+
+        """, stderr)
+        Thread.sleep(forTimeInterval: 3)
+    }
+
+    private static func corpusSHA256(path: String?) -> String? {
+        guard let path,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func writeRunReadme(
+        runOutPath: String?,
+        cliArgs: [String],
+        preset: String,
+        cfg: ModelConfig,
+        corpusPath: String?,
+        steps: Int,
+        startStep: Int
+    ) {
+        guard let out = runOutPath else { return }
+        let runDir = URL(fileURLWithPath: out).deletingLastPathComponent()
+        let readme = runDir.appendingPathComponent("README.md")
+        let started = ISO8601DateFormatter().string(from: Date())
+        let corpusLine: String
+        if let p = corpusPath {
+            let hash = corpusSHA256(path: p) ?? "?"
+            corpusLine = "- corpus: `\(p)` (sha256: `\(hash.prefix(16))…`)"
+        } else {
+            corpusLine = "- corpus: (random bytes — no file)"
+        }
+        let body = """
+        # TinyGPT training run
+
+        - started: \(started)
+        - preset: `\(preset)`
+        - architecture: \(cfg.nLayers)L · d=\(cfg.dModel) · heads=\(cfg.nHeads) · ctx=\(cfg.contextLength)
+        - vocab: \(cfg.vocabSize)\(cfg.tokenizerSource.map { " · tokenizer `\($0)`" } ?? "")
+        - dtype: \(cfg.dtype)
+        - steps: \(startStep) → \(steps)
+        \(corpusLine)
+        - canonical output: `\(out)`
+
+        ## CLI flags
+
+        ```
+        tinygpt train \(cliArgs.joined(separator: " "))
+        ```
+        """
+        try? body.write(to: readme, atomically: true, encoding: .utf8)
+    }
+
     private static func defaultBatch(_ cfg: ModelConfig) -> Int {
         if cfg.dModel >= 1024 { return 2 }
         if cfg.dModel >= 512 { return 4 }
@@ -1183,10 +1600,19 @@ enum Train {
                                            ctx, vocab, dtype.
           --steps N                       Training steps (default: 500)
           --corpus path.txt               UTF-8 text file (default: random bytes)
-          --out path.tinygpt              Where to save the trained checkpoint
+          --out path.tinygpt              Checkpoint path (default:
+                                           ~/.cache/tinygpt/runs/<preset>-<ts>/<name>.tinygpt)
           --dtype bfloat16|float32|float16  Training dtype (default: bfloat16)
           --batch N                       Batch size (default: by preset)
           --sample-every N                Print a sample every N steps (default: 100)
+          --domain-adapt                  Continued-pretrain recipe for a domain corpus.
+                                           Requires --base <checkpoint.tinygpt>. Sets
+                                           conservative defaults unless explicitly
+                                           overridden: --lr-schedule wsd, --warmup 100,
+                                           --max-lr 1e-4, --min-lr 1e-5,
+                                           --decay-steps 5% of --steps, and
+                                           --lr-layer-decay 0.85.
+          --base <path.tinygpt>           Alias for --resume, named for domain-adapt.
           --tokenizer <hf-dir>            Use BPE/SentencePiece from a HF model dir
                                            (vocab size comes from config.json)
           --ctx N                         Override preset's context length
@@ -1274,11 +1700,19 @@ enum Train {
 
         Long-run safety nets:
           --resume <path.tinygpt>         Continue from a saved checkpoint
-                                           (Adam state restarts — 100-step warmup)
+                                           and restore Adam state when present
+          --throttle F                    Sustained-load fraction 0.01..1.0.
+                                           0.5 sleeps one step-time after each step.
+          --max-step-rate N               Absolute cap in steps/sec; combines with
+                                           --throttle by taking the slower setting.
+          --throttle-file PATH            Poll PATH every 100 steps for live throttle
+                                           updates (default ~/.cache/tinygpt/<run>.throttle)
           --save-every N                  Atomic checkpoint every N steps
           --save-history                  Also copy each save-every checkpoint to
                                            `<out-stem>.step-N.tinygpt` (B13
                                            interp-on-checkpoints). Disk-hungry.
+          --no-save-opt-state             Store zero Adam moments; smaller legacy
+                                           checkpoint, resume uses fresh Adam.
           --lr-schedule constant|cosine|wsd
                                           (default: cosine. `wsd` = warmup-stable-decay,
                                            MiniCPM/SmolLM-style; decay phase doubles as
@@ -1295,6 +1729,14 @@ enum Train {
                                            (one record per step + val + done event).
                                            Off by default; consumed by the in-house
                                            training dashboard at /training-dashboard.
+          --eval-every N                  Spawn a background run-lm-eval at checkpointed
+                                           steps divisible by N. If --save-history is on,
+                                           evaluates the step-N history checkpoint; otherwise
+                                           evaluates the current --out checkpoint. Skips if
+                                           the previous eval is still running.
+          --eval-tasks <csv>              Tasks for --eval-every (default: arc_easy,gsm8k).
+          --eval-limit N                  Example cap per task for --eval-every (default: 50).
+                                           Eval rows append to `<out-stem>-evals.jsonl`.
           --seed N                        Seed MLXRandom for reproducible model init +
                                            GPU-side dropout/noise. Two runs with the same
                                            seed produce identical INIT loss. Batch sampling

@@ -38,6 +38,7 @@ public final class LoraLinear: Linear {
     /// scale, the trainable-mask, and (for VeRA) which keys get
     /// unfrozen by `LoraInjection.freezeBase`.
     public let variant: PeftVariant
+    public let quantizationBits: Int
     /// Effective forward scale. RsLoRA uses α/√r (Kalajdzievski 2023);
     /// every other variant keeps the LoRA-paper default α/r.
     public var scale: Float {
@@ -50,11 +51,12 @@ public final class LoraLinear: Linear {
     /// Wrap an existing Linear with LoRA adapters. The base weight + bias
     /// are reused verbatim (no copy); the adapter matrices are fresh.
     public init(wrapping base: Linear, rank: Int = 4, alpha: Float = 8.0,
-                variant: PeftVariant = .lora) {
+                variant: PeftVariant = .lora, quantizationBits: Int = 4) {
         precondition(rank > 0, "LoRA rank must be > 0")
         self.rank = rank
         self.alpha = alpha
         self.variant = variant
+        self.quantizationBits = min(max(quantizationBits, 2), 8)
         let outFeatures = base.weight.shape[0]
         let inFeatures = base.weight.shape[1]
         // Effective forward scale. Mirrors `var scale` — duplicated here
@@ -113,7 +115,7 @@ public final class LoraLinear: Linear {
             // so the forward at init equals the QUANTIZED base + the
             // (now-compensating) adapter — exact reconstruction of W.
             eval(base.weight)
-            let wQ = LoftQQuant.dequantize4bit(base.weight)
+            let wQ = LoftQQuant.dequantize(base.weight, bits: self.quantizationBits)
             let residual = base.weight - wQ
             let (aRaw, bRaw) = TopRSVD.factors(weight: residual, rank: rank)
             let invSqrtScale = MLXArray(Float(1) / Foundation.sqrt(scale))
@@ -156,6 +158,7 @@ public final class LoraLinear: Linear {
         self.rank = rank
         self.alpha = alpha
         self.variant = .lora
+        self.quantizationBits = 4
         self.loraA = loraA
         self.loraB = loraB
         self.loraD = MLXArray.ones([rank])
@@ -268,12 +271,17 @@ public struct LoraConfig: Sendable {
     /// importance scores so the EFFECTIVE rank averages this target.
     /// Negative or zero means "no pruning, train full rank" (the default).
     public var adaLoraTargetRank: Int
+    /// Quantization grid used by LoftQ / QLoRA-style initialisation.
+    /// The current runtime stores the quantized base as dequantized
+    /// floating-point weights; this controls the grid, not packed storage.
+    public var quantizationBits: Int
 
     public init(rank: Int = 4, alpha: Float = 8.0,
                 targetSuffixes: [String] = ["q_proj", "v_proj"],
                 useDora: Bool = false,
                 variant: PeftVariant = .lora,
-                adaLoraTargetRank: Int = 0) {
+                adaLoraTargetRank: Int = 0,
+                quantizationBits: Int = 4) {
         self.rank = rank
         self.alpha = alpha
         self.targetSuffixes = targetSuffixes
@@ -283,6 +291,7 @@ public struct LoraConfig: Sendable {
         // drives everything downstream.
         self.variant = useDora ? .dora : variant
         self.adaLoraTargetRank = adaLoraTargetRank
+        self.quantizationBits = min(max(quantizationBits, 2), 8)
     }
 
     /// Conservative: just QV. Smaller adapter, faster training.
@@ -348,7 +357,8 @@ public func makeAdapterLinear(wrapping base: Linear, config: LoraConfig) -> Modu
         return DoraLinear(wrapping: base, rank: config.rank, alpha: config.alpha)
     default:
         return LoraLinear(wrapping: base, rank: config.rank,
-                          alpha: config.alpha, variant: config.variant)
+                          alpha: config.alpha, variant: config.variant,
+                          quantizationBits: config.quantizationBits)
     }
 }
 

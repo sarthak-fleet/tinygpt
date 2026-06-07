@@ -146,6 +146,20 @@ public final class TinyGPTModelHF: Module {
 /// matching what a TinyGPTModelHF expects.
 public enum HFConfigConverter {
     public static func toModelConfig(_ hf: HuggingFaceConfig) -> ModelConfig {
+        // Pass head_dim through ONLY when the HF config diverges from the
+        // canonical `hidden_size / num_attention_heads` ratio. For most
+        // models (Phi-3, Llama-2, Mistral) these match and we leave
+        // explicitHeadDim nil so the precondition stays active for
+        // from-scratch presets that derive head_dim from dModel/nHeads.
+        let canonical = hf.hiddenSize / hf.numAttentionHeads
+        let explicit: Int? = (hf.headDim != canonical) ? hf.headDim : nil
+        // Architectures that use QK-Norm (RMSNorm on Q/K before RoPE).
+        // Qwen3 family is the dominant one as of 2026; add others as we
+        // verify their attention path. Detected by architecture name so
+        // we don't need to peek at safetensors.
+        let needsQKNorm = hf.architectures.contains { arch in
+            arch.hasPrefix("Qwen3")
+        }
         return ModelConfig(
             modelName: hf.architectures.first ?? "hf-loaded",
             vocabSize: hf.vocabSize,
@@ -162,7 +176,9 @@ public enum HFConfigConverter {
             ropeBase: hf.ropeTheta,
             useRMSNorm: true,
             useSwiGLU: true,
-            attnBias: false  // HF Llama-family models don't use attention biases
+            attnBias: false,  // HF Llama-family models don't use attention biases
+            explicitHeadDim: explicit,
+            useQKNorm: needsQKNorm
         )
     }
 }

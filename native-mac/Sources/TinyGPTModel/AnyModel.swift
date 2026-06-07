@@ -214,6 +214,15 @@ public enum ModelLoader {
         var isDirectory: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
 
+        if url.pathExtension.lowercased() == "gguf" {
+            let materialized = try GGUFHFMaterializer.materializeIfNeeded(gguf: url)
+            let hfResult = try HFModelLoader.load(from: materialized)
+            return LoadResult(model: .huggingFace(hfResult.model),
+                              config: hfResult.config,
+                              hfTokenizerDir: materialized,
+                              lazyEmbedding: nil)
+        }
+
         if isDirectory.boolValue {
             // HF model directory — expects config.json inside.
             let configURL = url.appendingPathComponent("config.json")
