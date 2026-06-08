@@ -206,6 +206,10 @@ extension Serve {
         let promptCacheDir: URL?
         let traceDir: URL?
         let modelFingerprint: String
+        // Per-tokenizer, per-vocab bytes table. ServeTokenMasker used to
+        // rebuild this on every request (~230ms for 152k Qwen vocab); we
+        // compute it once at boot and share across grammar constraints.
+        let cachedTokenBytes: [[UInt8]]
         private let listenFd: Int32
         private let inferenceQueue: DispatchQueue
         private var running: Bool = true
@@ -216,7 +220,8 @@ extension Serve {
              toolsSystemPrompt: String?,
              eosTokenIds: Set<Int>, promptCacheDir: URL?,
              traceDir: URL?,
-             modelFingerprint: String)
+             modelFingerprint: String,
+             cachedTokenBytes: [[UInt8]])
         {
             self.listenFd = listenFd
             self.host = host
@@ -231,6 +236,7 @@ extension Serve {
             self.promptCacheDir = promptCacheDir
             self.traceDir = traceDir
             self.modelFingerprint = modelFingerprint
+            self.cachedTokenBytes = cachedTokenBytes
             self.inferenceQueue = DispatchQueue(label: "tinygpt.serve.inference")
         }
 
@@ -309,6 +315,17 @@ extension Serve {
 
             let (fd, boundPort) = try Self.bindListener(host: host, port: port)
             let maxCtx = min(maxContextOverride ?? cfg.contextLength, cfg.contextLength)
+            // Precompute the per-token-id byte table once. Required for
+            // grammar-constrained sampling; building it took ~230ms per
+            // request before (the dominant cost of TTFW).
+            let tokenBytesStart = Date()
+            var tokenBytes: [[UInt8]] = []
+            tokenBytes.reserveCapacity(cfg.vocabSize)
+            for id in 0..<cfg.vocabSize {
+                tokenBytes.append(Array(tok.decode([id]).utf8))
+            }
+            let tokenBytesMs = Date().timeIntervalSince(tokenBytesStart) * 1000
+            fputs("serve: token-bytes table built (\(cfg.vocabSize) entries, \(String(format: "%.0f", tokenBytesMs))ms)\n", stderr)
             let server = Server(listenFd: fd, host: host, port: boundPort,
                                  model: load.model, config: cfg, tokenizer: tok,
                                  maxContext: maxCtx, defaultGrammar: defaultGrammar,
@@ -316,7 +333,8 @@ extension Serve {
                                  eosTokenIds: eosIds,
                                  promptCacheDir: promptCacheURL,
                                  traceDir: traceURL,
-                                 modelFingerprint: fingerprint)
+                                 modelFingerprint: fingerprint,
+                                 cachedTokenBytes: tokenBytes)
             server.startAcceptLoop()
             return server
         }
@@ -1327,7 +1345,7 @@ extension Serve {
 
         private func makeConstraint(_ spec: ServeGrammarSpec?) throws -> ServeConstraint? {
             guard let spec else { return nil }
-            return ServeConstraint(spec: spec, tokenizer: tokenizer, vocabSize: config.vocabSize)
+            return ServeConstraint(spec: spec, tokenBytes: cachedTokenBytes)
         }
 
         private func sampleToken(from logits: MLXArray, temperature: Float,
@@ -1756,10 +1774,17 @@ protocol ServeByteFSM: AnyObject {
     var isComplete: Bool { get }
     func cloneForServe() -> ServeByteFSM
     func acceptBytes(_ bytes: [UInt8]) -> Bool
+    // Single-byte path. Concrete FSMs override for performance — the
+    // default in extension calls acceptBytes which does snapshot/restore.
+    // For the vocab-trie mask path the snapshot is wasted work since we
+    // discard the probe; JSONSchemaFSM provides a direct driveByte path.
+    func acceptByte(_ b: UInt8) -> Bool
 }
 
 extension JSONSchemaFSM: ServeByteFSM {
     func cloneForServe() -> ServeByteFSM { clone() }
+    // JSONSchemaFSM already declares public func acceptByte(_:) → driveByte.
+    // Conformance picks that up automatically; no shim needed.
 }
 
 struct ServeGrammarSpec {
@@ -1802,6 +1827,16 @@ final class ServeConstraint {
         }
     }
 
+    init(spec: ServeGrammarSpec, tokenBytes: [[UInt8]]) {
+        self.masker = ServeTokenMasker(tokenBytes: tokenBytes)
+        switch spec.kind {
+        case .jsonSchema(let node):
+            self.fsm = JSONSchemaFSM(rootSchema: node)
+        case .paceToolTags:
+            self.fsm = PaceToolTagFSM()
+        }
+    }
+
     func mask() -> [Float] {
         masker.mask(for: fsm)
     }
@@ -1813,6 +1848,12 @@ final class ServeConstraint {
 
 final class ServeTokenMasker {
     private let tokenBytes: [[UInt8]]
+    // Shared-prefix trie over the vocab. Computed once at construction
+    // and reused for every mask() call. nil iff feature-flagged off.
+    private let trie: VocabTrie?
+    // Optional shared-prefix trie path for future experiments.
+    // DEFAULT OFF: measurement showed it is slower than the legacy masker.
+    static var useTrie: Bool = false
 
     init(vocabSize: Int, decodeId: (Int) -> String) {
         var out: [[UInt8]] = []
@@ -1821,20 +1862,58 @@ final class ServeTokenMasker {
             out.append(Array(decodeId(id).utf8))
         }
         self.tokenBytes = out
+        self.trie = Self.useTrie ? VocabTrie(tokenBytes: out) : nil
+    }
+
+    init(tokenBytes: [[UInt8]]) {
+        self.tokenBytes = tokenBytes
+        self.trie = Self.useTrie ? VocabTrie(tokenBytes: tokenBytes) : nil
     }
 
     func mask(for fsm: ServeByteFSM) -> [Float] {
         var out = [Float](repeating: -.infinity, count: tokenBytes.count)
         if fsm.isComplete { return out }
+        if let trie = trie {
+            // Fast path: shared-prefix descent. Drives the FSM ~tens of
+            // bytes total instead of ~millions (152k × avg-token-len).
+            trie.mask(fsm: fsm, into: &out)
+        } else {
+            // Legacy per-token path. This is the production default after
+            // the trie experiment proved slower on warm steady-state masks.
+            for id in 0..<tokenBytes.count {
+                let bytes = tokenBytes[id]
+                if bytes.isEmpty { continue }
+                let probe = fsm.cloneForServe()
+                if probe.acceptBytes(bytes) {
+                    out[id] = 0
+                }
+            }
+        }
+        return out
+    }
+
+    /// Differential-test helper: compute mask via BOTH paths and verify
+    /// they agree bit-for-bit. Returns (passed, first_disagreement_id).
+    func differentialCheck(for fsm: ServeByteFSM) -> (Bool, Int) {
+        var trieOut = [Float](repeating: -.infinity, count: tokenBytes.count)
+        if let trie = trie {
+            trie.mask(fsm: fsm, into: &trieOut)
+        }
+        var legacyOut = [Float](repeating: -.infinity, count: tokenBytes.count)
         for id in 0..<tokenBytes.count {
             let bytes = tokenBytes[id]
             if bytes.isEmpty { continue }
             let probe = fsm.cloneForServe()
             if probe.acceptBytes(bytes) {
-                out[id] = 0
+                legacyOut[id] = 0
             }
         }
-        return out
+        for id in 0..<tokenBytes.count {
+            if trieOut[id] != legacyOut[id] {
+                return (false, id)
+            }
+        }
+        return (true, -1)
     }
 
     @discardableResult
@@ -1866,6 +1945,14 @@ final class PaceToolTagFSM: ServeByteFSM {
             candidate.append(byte)
             guard Self.isViable(candidate) else { return false }
         }
+        bytes = candidate
+        return true
+    }
+
+    func acceptByte(_ b: UInt8) -> Bool {
+        var candidate = bytes
+        candidate.append(b)
+        guard Self.isViable(candidate) else { return false }
         bytes = candidate
         return true
     }

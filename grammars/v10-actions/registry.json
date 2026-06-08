@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pace-v10-action-registry",
+  "version": "10.0.0",
+  "description": "Pace v10 action registry — single source of truth for what the planner can emit AND what the Pace executor implements. Planner constrained-decodes against the per-action args schemas. Executor validates incoming payloads against the same.",
+  "actions": [
+    {
+      "name": "AX.press",
+      "description": "Click / press a UI element by its AX identifier or label",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Element label (preferred — Pace resolves to AXUIElement) or stringified element_id",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    {
+      "name": "AX.setValue",
+      "description": "Set the value of a text-bearing AX element (text field, text area, etc). Used for body streaming, edit, dictate-to-field.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target", "value"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Label or 'focused' to write into whatever has keyboard focus",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "value": {
+            "type": "string",
+            "description": "The text content to write",
+            "maxLength": 8000
+          },
+          "range": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Optional — replace only this range. Used by voice-edit on a selection.",
+            "properties": {
+              "location": {"type": "integer", "minimum": 0},
+              "length":   {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "AX.scroll",
+      "description": "Scroll the focused scrollable element in a direction",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["direction"],
+        "properties": {
+          "direction": {
+            "type": "string",
+            "enum": ["up", "down", "left", "right", "top", "bottom"]
+          },
+          "amount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Scroll ticks. Default 3."
+          }
+        }
+      }
+    },
+    {
+      "name": "App.launch",
+      "description": "Launch an application (cold or warm activate)",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Display name (e.g. 'Mail', 'Safari') OR bundle identifier (com.apple.mail)",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      }
+    },
+    {
+      "name": "App.activate",
+      "description": "Bring an already-running application to the front without re-launching",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      }
+    },
+    {
+      "name": "Mail.draft",
+      "description": "Open Mail compose window with To: / subject populated and stream the body in. Pace's body-streaming flow consumes this.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["to"],
+        "properties": {
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Email address OR an __resolve:<contact-name> token Pace looks up via Contacts",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "minItems": 1,
+            "maxItems": 10
+          },
+          "cc": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+            "maxItems": 10
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "Compose body. Pace streams this into the compose window as it's emitted."
+          }
+        }
+      }
+    },
+    {
+      "name": "Cal.event",
+      "description": "Create a calendar event via EventKit",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "start"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 200},
+          "start": {
+            "type": "string",
+            "description": "ISO-8601 timestamp or natural-language ('tomorrow 3pm') that Pace resolves to ISO before dispatch",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "end": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "location": {"type": "string", "maxLength": 200},
+          "notes": {"type": "string", "maxLength": 2000}
+        }
+      }
+    },
+    {
+      "name": "Reminders.add",
+      "description": "Add a Reminder via EventKit. Different from Cal.event — no timeline, just a todo.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title"],
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 200},
+          "due":   {"type": "string", "maxLength": 100, "description": "ISO-8601 or natural language"},
+          "list":  {"type": "string", "maxLength": 100, "description": "Reminders list name; defaults to user's default"},
+          "priority": {
+            "type": "string",
+            "enum": ["none", "low", "medium", "high"]
+          }
+        }
+      }
+    },
+    {
+      "name": "Notes.create",
+      "description": "Create a new Apple Note. No first-party API; Pace uses AppleScript (or in-process AX automation against Notes.app).",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["body"],
+        "properties": {
+          "title": {"type": "string", "maxLength": 200, "description": "Optional title; inferred from first line if omitted"},
+          "body":  {"type": "string", "minLength": 1, "maxLength": 8000},
+          "folder": {"type": "string", "maxLength": 100, "description": "Folder name; default 'Notes'"}
+        }
+      }
+    },
+    {
+      "name": "Shortcut.run",
+      "description": "Run a user-installed Apple Shortcut by name. Last-mile fallback for things Pace doesn't have a first-class action for.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name":  {"type": "string", "minLength": 1, "maxLength": 200},
+          "input": {"type": "string", "maxLength": 2000, "description": "Optional stdin to the shortcut"}
+        }
+      }
+    },
+    {
+      "name": "Window.snap",
+      "description": "Snap the focused window to a screen position",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["position"],
+        "properties": {
+          "position": {
+            "type": "string",
+            "enum": [
+              "left", "right", "top", "bottom",
+              "full", "center",
+              "top-left", "top-right", "bottom-left", "bottom-right"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "Clipboard.read",
+      "description": "Read the current pasteboard contents. Used when a Skill / question needs to operate on what's in the clipboard.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    }
+  ]
+}

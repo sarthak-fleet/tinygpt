@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pace-fm-response-v10",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spokenText", "intent", "payload"],
+  "description": "Pace v10 planner response shape. Grammar enforces top-level shape + intent enum + payload-is-object. Inner payload schemas validated at runtime against intent-specific shape (see system prompt). Decoupled because nested union constraints are harder on streaming decoders.",
+  "properties": {
+    "spokenText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 400,
+      "description": "What TTS reads aloud. Short confirmation for actions; the answer text for answer intents; '(dictating)' or similar for dictate."
+    },
+    "intent": {
+      "type": "string",
+      "enum": ["action", "answer", "dictate", "edit"],
+      "description": "Top-level decision route."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Intent-specific payload. Shapes documented in v10 system prompt and validated at runtime.",
+      "properties": {
+        "name":      {"type": "string", "maxLength": 100, "description": "For intent=action: action name from registry"},
+        "args":      {"type": "object", "description": "For intent=action: action args matching registry schema"},
+        "calls":     {"type": "array",  "items": {"type": "object"}, "maxItems": 8, "description": "For intent=action with multiple parallel calls"},
+        "text":      {"type": "string", "maxLength": 4000, "description": "For intent=answer or dictate"},
+        "reference": {"type": "string", "maxLength": 200, "description": "For intent=edit: what to edit"},
+        "transform": {"type": "string", "maxLength": 100, "description": "For intent=edit: how to transform"},
+        "argument":  {"type": "string", "maxLength": 2000, "description": "For intent=edit: optional argument (e.g. replacement text)"}
+      }
+    }
+  }
+}

@@ -265,7 +265,9 @@ def parse_fixture(text: str) -> dict:
                                   ("EXPECT_POINT_ID", "EXPECT_CLICK_ID",
                                     "EXPECT_POINT_ID_ONE_OF", "EXPECT_CLICK_ID_ONE_OF",
                                     "SPOKEN_MUST_CONTAIN", "SPOKEN_MUST_NOT_CONTAIN",
-                                    "SPOKEN_MUST_MATCH_REGEX", "SPOKEN_MAX_WORDS")):
+                                    "SPOKEN_MUST_MATCH_REGEX", "SPOKEN_MAX_WORDS",
+                                    "BODY_MUST_CONTAIN", "BODY_MUST_BE_EMPTY",
+                                    "BODY_MUST_NOT_BE_EMPTY", "BODY_MIN_WORDS")):
             k, _, v = line.partition(":")
             out["expects"][k.strip()] = v.strip()
     return out
@@ -306,16 +308,18 @@ def score_response(response: str, expects: dict, elements: list[dict], free_text
     smart-extraction strategy: try JSON first, fall back to free-text."""
     reasons = []
 
-    # Extract spokenText + labels from the response.
+    # Extract spokenText + labels + bodyText from the response.
     spoken = response
     point_label = ""
     click_label = ""
+    body_text = ""
     try:
         parsed = json.loads(response)
         if isinstance(parsed, dict):
             spoken = parsed.get("spokenText", response)
             point_label = parsed.get("pointAtLabel", "")
             click_label = parsed.get("clickLabel", "")
+            body_text = parsed.get("bodyText", "")
     except Exception:
         # Free text — use the whole response as spokenText.
         pass
@@ -368,6 +372,27 @@ def score_response(response: str, expects: dict, elements: list[dict], free_text
         n_words = len(spoken.split())
         if n_words > max_w:
             reasons.append(f"spoken {n_words} words exceeds max {max_w}")
+
+    # Body-text checks (v9+ schema with bodyText field)
+    if "BODY_MUST_BE_EMPTY" in expects:
+        if body_text.strip():
+            reasons.append(f"bodyText not empty: {body_text[:80]!r}")
+
+    if "BODY_MUST_NOT_BE_EMPTY" in expects:
+        if not body_text.strip():
+            reasons.append("bodyText is empty (expected compose content)")
+
+    if "BODY_MUST_CONTAIN" in expects:
+        for needle in expects["BODY_MUST_CONTAIN"].split(","):
+            n = needle.strip().lower()
+            if n and n not in body_text.lower():
+                reasons.append(f"body missing {n!r}")
+
+    if "BODY_MIN_WORDS" in expects:
+        min_w = int(expects["BODY_MIN_WORDS"])
+        n_words = len(body_text.split())
+        if n_words < min_w:
+            reasons.append(f"body {n_words} words below min {min_w}")
 
     return len(reasons) == 0, reasons
 
