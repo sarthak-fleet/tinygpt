@@ -113,11 +113,34 @@ same template every time. A regex endpoint produces one template.
 real-model-contribution standard:
 
 1. Run the LoRA via `tinygpt serve` against fm-fixtures →
-   `lora_score / 19`
-2. The FakePace baseline is **19/19**
-3. **model_contribution = lora_score − 19**. If ≤ 0, the model isn't
-   doing useful work *on this eval*. Build new fixtures (axes 1-5
-   above) where FakePace fails.
+   `lora_score / N`
+2. The FakePace baseline depends on the fixture set:
+   - v1 (`clickyLocal/evals/fm-fixtures`): **19/19** — useless for
+     measuring model contribution; only format compliance
+   - v2 (`clickyLocal/evals/fm-fixtures-v2`): **1/15** (6.7%) — the
+     genuine baseline for model-required tasks
+3. **model_contribution = lora_score(v2) − 6.7%**. ≥85% on v2 is
+   the bar for "this model adds real capability."
+
+## v2 baseline shipped (2026-06-08)
+
+`clickyLocal/evals/fm-fixtures-v2/` — 15 fixtures across three axes:
+
+- **Semantic disambiguation (7)**: "open the app i use to write code"
+  → Xcode. Element labels don't contain function words; only the
+  model's world knowledge does.
+- **Multi-element reasoning (6)**: "click the cheapest plan" requires
+  parsing $0/$15/$99 in the element `text` field and picking the
+  minimum.
+- **Abstract reference resolution (2)**: "click the one for sending
+  money" → Transfer. User names a goal; model maps to action.
+
+FakePace result on v2: **1/15 (6.7%)** — the single pass is a lucky
+first-match-wins on `reason-cheapest-plan` (element 0 happened to
+be the answer). The eval is calibrated correctly to require real
+model capability.
+
+PR: <https://github.com/sarthakagrawal927/clicky/pull/new/eval/fm-fixtures-v2>
 
 ## What we should do next
 
