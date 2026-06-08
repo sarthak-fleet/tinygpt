@@ -58,6 +58,59 @@ targeting these specific failure shapes.
 
 Wall-clock: ~143 min on M5 Pro with other processes running.
 
+## Overfit check — held-out generalization (2026-06-08)
+
+After v8 trained, built `fm-fixtures-holdout/` (15 fixtures) using
+novel apps + products + scenarios that do NOT appear in v8's
+training corpus. Same three axes, different surface:
+
+  Semantic (5): Figma / Zoom / Slack / Notion / Lightroom
+  Reasoning (5): hotel prices, delivery times, car mileages,
+                 PR timestamps, game scores
+  Abstract (5): leave tip / undo / bookmark / flag spam / review
+
+The test: if v8 overfit to training patterns, holdout scores collapse.
+
+Result:
+
+| Set | FakePace | v8 LoRA | Δ |
+|---|---|---|---|
+| fm-fixtures-v2 (training-adjacent) | 1/15 (6.7%) | 11/15 (73.3%) | +66.7 pp |
+| fm-fixtures-holdout (novel) | 0/15 (0.0%) | 10/15 (66.7%) | +66.7 pp |
+
+**Generalization gap: 6.7 pp.** The Δ vs FakePace is IDENTICAL on
+both sets. v8 is doing model work, not memorizing the v2 shapes.
+
+v8 succeeded on novel apps it never saw in training:
+- Figma ("design a logo"), Zoom ("hop on a call"),
+  Slack ("work chat"), Lightroom ("retouch photo")
+- Hotels by price ("cheapest"), cars by mileage ("lowest")
+- Abstract goals (bookmark, leave tip, flag spam)
+
+The model learned the *pattern* (intent → app via world knowledge,
+parse element text + pick by superlative, goal → action), not
+specific memorizations.
+
+**What v8 misses on holdout (5 of 15) — same shapes as v2 failures:**
+- `reason-fastest-delivery` — parse "5-7 days" / "2 days" / "by 9pm"
+- `reason-newest-pr` — parse "4 hours ago" / "yesterday" / "last week"
+- `abstract-undo` — "take that back" idiom
+- `abstract-rate-experience` — "how I felt about it" idiom
+- `semantic-knowledge-base` — Notion = docs (not in training)
+
+All same root causes as v2 failures: numerical/temporal comparison
+remains hard, plus a few missing semantic + idiomatic mappings.
+
+**For v9**: target the underlying capability gaps, not the specific
+v2 fixtures. Adding examples that look like the 4 v2 failures would
+risk overfit; we'd be re-shaping training to match the test we're
+measuring against. Better:
+- Add 5-10 diverse "comparison reasoning" examples (numbers, dates,
+  durations) across many domains
+- Add 5-10 idiomatic phrasings of common actions
+- Skip the urge to add "pay electric bill" specifically — that's
+  test-tuning, not generalization
+
 All v2 results from `python3 scripts/eval_pace_v2.py` against the
 same fixture set, same grammar config, same serve harness.
 
