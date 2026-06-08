@@ -3,6 +3,122 @@
 A fresh-context agent should read this first, then `NIGHTLY.md` for the
 training cadence, then `docs/PLAN.md` for the long-term roadmap.
 
+---
+
+## ⚡ State as of 2026-06-08 (overnight session — read this first)
+
+The strategic picture changed last night. Three load-bearing
+findings that override anything older in this doc:
+
+### Finding 1 — ANE is energy-only
+
+The ANE moat is real but **narrow**: ANE = small-model inference at
+~3W, not a speedup over MLX at any scale. Validated empirically:
+
+- ANE chunked Qwen3-0.6B (Pace specialist): 25 tok/s (Swift orchestrator)
+- ANE chunked Qwen3-14B: 1.2 tok/s — unusable for foreground
+- MLX Qwen3-14B-4bit: 30 tok/s
+- MLX Qwen3-30B-A3B-4bit (MoE): 98 tok/s
+
+ANE's role is **concurrent low-power background workloads** (Pace
+specialist running on ANE while the user's GPU runs other things).
+Not a general speed story. Stop chasing tok/s on ANE.
+
+Shipped artifacts (all in tree, committed):
+- M6 bisect findings: `docs/learn/ane-research/m6-findings.md`
+- M8 per-block ANE export: `scripts/ane/m8_block_export.py`
+- M8 chained decode: `scripts/ane/m8_chained_decode.py`
+- Swift orchestrator: `native-mac/Sources/TinyGPTModel/Qwen3ANEChunked.swift`
+- CLI: `tinygpt coreml-chunked-smoke --chunked-dir <dir> --hf-dir <dir>`
+- Pace-baked bundle: `~/.cache/tinygpt/ane-pace-v5/m8-block-{0..27}.mlpackage`
+- Base Qwen3-0.6B bundle: `~/.cache/tinygpt/ane/m8-block-{0..27}.mlpackage`
+- M9 spec-dec experiment (negative result): `scripts/ane/m9_spec_decode.py`
+
+Critical precision fix learned the hard way: chunked ANE needs
+`compute_precision=ct.precision.FLOAT32` with `state=fp16`. fp16
+compute alone drifts to garbage at 28-layer chained depth. See
+m6-findings.md for the bisect.
+
+### Finding 2 — Spec dec doesn't beat the baseline with our model pairs
+
+Tested ANE 0.6B draft + MLX 14B verify (#9 milestone). Math doesn't
+work: draft per-token (~40ms) is SLOWER than verify per-token
+(~33ms with KV cache). Spec dec only helps when draft << verify.
+
+Tested vs Qwen3-30B-A3B-MoE verify: even worse — MoE makes verify
+~100 tok/s, so spec dec goes more backwards.
+
+Spec dec is **shelved for now**. Could be revived with: (a) a
+much faster draft (MLX 0.6B at ~50 tok/s), (b) a genuinely slow
+verify (dense 32B+ at low quantization), (c) tree-based "speculative
+speculative" decoding with custom MLX attention masks.
+
+### Finding 3 — THE GATE: evaluations may be measuring framework, not model
+
+The most important finding of the session. Owner ran an experiment
+showing that a deterministic endpoint (grammar enforcement + lookups
++ regex) passes fm-fixtures comparably to a "trained model" —
+suggesting the eval was testing format compliance, not capability.
+
+**This invalidates the comparisons we've been celebrating** between
+v3 / v5 / v6 / v6.1 / Pace specialist / teacher. Until evaluation
+methodology can isolate model contribution, every model-training
+decision is operating on noise.
+
+This is the **gate task #270**. Until it ships, do not:
+- Train new LoRAs (#265 v6.1, #268 specialist — both blocked on #270)
+- Claim any specialist beats any teacher
+- Compare v* artifacts
+- Ship Pace models based on fm-fixture scores
+
+What an honest eval looks like:
+1. Build a rule-based "fake Pace" endpoint (tokenizer + grammar +
+   element-list deterministic lookup + regex intent routing)
+2. Score it against fm-fixtures → `baseline_score`
+3. Score each LoRA artifact the same way → `lora_score`
+4. **Model contribution = lora_score - baseline_score**
+5. If ≤ 0, the model isn't doing useful work
+6. Design new fixtures where rule-based scores ≤50% but a real model
+   should reach ≥85% — held-out behavioral diversity, open-ended
+   generation, capability checks the grammar can't fake
+
+### Tasks updated to reflect overnight findings
+
+- #263 ANE moat for Pace: **completed** (M8 Swift orchestrator shipped)
+- #269 ANE M8 drift fix: **completed** (FLOAT32 compute solved it)
+- #270 Eval methodology overhaul: **new, P0, gates #265 and #268**
+- #265 v6.1 quality block: pending, **blocked on #270**
+- #268 specialist quality block: pending, **blocked on #270**
+- #266 VLM M4 full Qwen3-VL port: pending (real engineering, not eval-blocked)
+- #267 v7 SFT: pending, blocked on #270 (don't train without eval)
+
+### Honest read on what's worth working on tomorrow
+
+1. **#270 eval methodology overhaul** — the gate. Until it lands,
+   nothing else in the factory is meaningful.
+2. **#266 VLM M4 Qwen3-VL port** — real engineering, not eval-blocked
+   because it's about getting Qwen3-VL working at all, not comparing
+   to a baseline.
+3. **HTTP wrap of coreml-chunked-smoke** — `tinygpt coreml-chunked-serve
+   --chunked-dir <dir> --hf-dir <dir> --port N`. Makes the ANE moat
+   usable from Pace. Mechanical port of CoreMLServe.swift.
+
+Anything else (more LoRA training, more spec dec, more ANE work) is
+either pretend or eval-blocked.
+
+### Anomalies the next session should know about
+
+- **Remote URL outdated**: pushes work but redirect from
+  `sarthakagrawal927/tinygpt` → `sarthak-fleet/tinygpt`. Update with
+  `git remote set-url origin https://github.com/sarthak-fleet/tinygpt.git`
+- **v6.1 four-way SFT collapse** (10 → 8 → 2 → 0 of 19) — almost
+  certainly an eval-methodology artifact. Don't retry SFT.
+- **190 uncommitted files** caught up in 5 commits on 2026-06-08
+  (5 commits up to `ce86eca`). Heterogeneous; if something downstream
+  breaks, suspect the "session catch-up" commit first.
+
+---
+
 ## 🌙 Nightly training cadence
 
 Project shape changed: every night the Mac produces a training artifact.
