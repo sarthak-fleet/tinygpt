@@ -150,5 +150,5 @@ let package = Package(
             dependencies: ["TinyGPTServe", "TinyGPTModel"]
         ),
     ],
-    swiftLanguageModes: [.v6]
+    swiftLanguageModes: [.v5]
 )
