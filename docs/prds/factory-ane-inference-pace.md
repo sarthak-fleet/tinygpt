@@ -6,7 +6,7 @@ created: 2026-06-08
 priority: P0 — the structural moat, owner-prioritized
 size: 1-2 weeks (real engineering, not a wire-in)
 authorized-by: maintainer 2026-06-08 ("I want this, whatever it takes")
-milestones:
+milestones: |
   - M1 (bake-lora) — shipped 2026-06-08: `tinygpt bake-lora <base-hf-dir> <lora> --out <dir>`.
     Folds LoRA A/B into the safetensors directly (Accelerate sgemm, no MLX
     dep). Verified: base+lora vs baked produces identical argmax output on

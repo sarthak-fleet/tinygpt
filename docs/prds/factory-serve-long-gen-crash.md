@@ -2,7 +2,7 @@
 name: serve crashes silently during long LoRA-applied generations
 status: shipped-2026-06-07
 owner: factory
-priority: P1 — blocks Pace integration via HTTP (workaround: cap max_tokens ≤200)
+priority: "P1 — blocks Pace integration via HTTP (workaround: cap max_tokens ≤200)"
 ---
 
 ## Ship note (2026-06-07)

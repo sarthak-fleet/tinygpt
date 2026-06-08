@@ -3,7 +3,7 @@ name: vllm-mlx wrap — RECLASSIFIED to strategy doc (not a PRD)
 status: superseded-by-strategy-doc
 owner: n/a — see strategy doc
 created: 2026-06-06
-superseded: 2026-06-06 (same day — category error: this is a strategic adoption decision, not an elf-shippable task)
+superseded: "2026-06-06 (same day — category error: this is a strategic adoption decision, not an elf-shippable task)"
 ---
 
 # Not a PRD — strategic decision tracked elsewhere

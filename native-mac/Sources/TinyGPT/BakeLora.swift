@@ -561,7 +561,7 @@ enum BakeLora {
 /// Pared-down safetensors writer that lets each entry choose its own
 /// dtype (unlike `SafetensorsWriter` which is F32-only). Streams to disk
 /// so we don't double the model size in RAM during write.
-fileprivate enum ShardWriter {
+private enum ShardWriter {
     struct Entry {
         let name: String
         let dtype: String   // "F32", "F16", "BF16"

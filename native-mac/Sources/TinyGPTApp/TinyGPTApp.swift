@@ -18,7 +18,7 @@ struct TinyGPTApp: App {
             // to create a new instance of, so File→New would be a dead
             // entry. Everything else (Cmd-Q, window minimize/zoom, etc.)
             // stays at SwiftUI defaults.
-            CommandGroup(replacing: .newItem) { }
+            CommandGroup(replacing: .newItem) {}
         }
     }
 }
