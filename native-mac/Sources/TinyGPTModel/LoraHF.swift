@@ -100,7 +100,7 @@ public enum LoraAdapterHFWriter {
                               loraConfig: LoraConfig, finalLoss: Float?,
                               to url: URL) throws {
         var entries: [LoraAdapter.Entry] = []
-        var matrices: [(loraA: [Float], loraB: [Float])] = []
+        var matrices: [(loraA: [Float], loraB: [Float], m: [Float]?)] = []
 
         for (i, block) in model.blocks.enumerated() {
             let attnLinears: [(String, Linear)] = [
@@ -115,23 +115,29 @@ public enum LoraAdapterHFWriter {
                 ("mlp.down_proj", block.mlp.fcDown),
             ]
             for (suffix, lin) in attnLinears + mlpLinears {
-                // Accept both LoraLinear and DoraLinear. DoRA's `m`
-                // magnitude vector is v2 format work (see PRD
-                // factory-dora-serialization). v1 round-trips DoRA as
-                // LoRA without magnitude rescaling.
+                // Accept both LoraLinear and DoraLinear. v2 format
+                // preserves DoRA's magnitude vector (loraMShape + m
+                // bytes after loraB).
                 let lA: MLXArray
                 let lB: MLXArray
+                var mFloats: [Float]? = nil
+                var mShape: [Int]? = nil
                 if let lora = lin as? LoraLinear {
                     lA = lora.loraA; lB = lora.loraB
                 } else if let dora = lin as? DoraLinear {
                     lA = dora.loraA; lB = dora.loraB
+                    eval(dora.m)
+                    mFloats = dora.m.asArray(Float.self)
+                    mShape = dora.m.shape
                 } else { continue }
                 eval(lA, lB)
                 entries.append(.init(name: "layers.\(i).\(suffix)",
                                      loraAShape: lA.shape,
-                                     loraBShape: lB.shape))
+                                     loraBShape: lB.shape,
+                                     loraMShape: mShape))
                 matrices.append((lA.asArray(Float.self),
-                                 lB.asArray(Float.self)))
+                                 lB.asArray(Float.self),
+                                 mFloats))
             }
         }
         let header = LoraAdapter.Header(
@@ -154,9 +160,12 @@ public enum LoraAdapterHFWriter {
         var hl = UInt32(headerData.count).littleEndian
         withUnsafeBytes(of: &hl) { out.append(contentsOf: $0) }
         out.append(headerData)
-        for (a, b) in matrices {
+        for (a, b, m) in matrices {
             a.withUnsafeBufferPointer { out.append(Data(buffer: $0)) }
             b.withUnsafeBufferPointer { out.append(Data(buffer: $0)) }
+            if let m {
+                m.withUnsafeBufferPointer { out.append(Data(buffer: $0)) }
+            }
         }
         try out.write(to: url, options: .atomic)
     }
@@ -178,11 +187,21 @@ public enum LoraAdapterHFReader {
                           userInfo: [NSLocalizedDescriptionKey:
                             "adapter base config doesn't match loaded HF model"])
         }
-        let loraCfg = LoraConfig(rank: h.rank, alpha: h.alpha, targetSuffixes: h.targetSuffixes)
+        // Detect DoRA vs plain LoRA from saved entries. Mixed not supported.
+        let hasMagnitudes = adapter.matrices.allSatisfy { $0.m != nil }
+        let hasPureLora = adapter.matrices.allSatisfy { $0.m == nil }
+        guard hasMagnitudes || hasPureLora else {
+            throw NSError(domain: "TinyGPTLoRA", code: 5,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "mixed DoRA/LoRA entries in one adapter — not supported"])
+        }
+        let loraCfg = LoraConfig(rank: h.rank, alpha: h.alpha,
+                                  targetSuffixes: h.targetSuffixes,
+                                  useDora: hasMagnitudes)
         LoraInjectionHF.inject(model, config: loraCfg)
 
-        // Overwrite the freshly-injected LoraLinears' A/B with the saved
-        // values. Build a NestedDictionary of just the LoRA params.
+        // Overwrite the freshly-injected LoraLinear/DoraLinear params with
+        // the saved values. Build a NestedDictionary update.
         var layersList: [NestedItem<String, MLXArray>] = []
         var idx = 0
         for _ in model.blocks {
@@ -199,12 +218,15 @@ public enum LoraAdapterHFReader {
             ]
             for p in projs where p.target {
                 let entry = adapter.matrices[idx]
-                let aShape = h.entries[idx].loraAShape
-                let bShape = h.entries[idx].loraBShape
-                let child: NestedItem<String, MLXArray> = .dictionary([
-                    "loraA": .value(MLXArray(entry.loraA, aShape)),
-                    "loraB": .value(MLXArray(entry.loraB, bShape)),
-                ])
+                let hEntry = h.entries[idx]
+                var dict: [String: NestedItem<String, MLXArray>] = [
+                    "loraA": .value(MLXArray(entry.loraA, hEntry.loraAShape)),
+                    "loraB": .value(MLXArray(entry.loraB, hEntry.loraBShape)),
+                ]
+                if let m = entry.m, let mShape = hEntry.loraMShape {
+                    dict["m"] = .value(MLXArray(m, mShape))
+                }
+                let child: NestedItem<String, MLXArray> = .dictionary(dict)
                 if p.isAttn { attn[p.name] = child } else { mlp[p.name] = child }
                 idx += 1
             }

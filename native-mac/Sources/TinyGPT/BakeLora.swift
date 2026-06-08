@@ -100,6 +100,10 @@ enum BakeLora {
             fputs("lora read failed: \(error)\n", stderr); exit(1)
         }
         let scale = adapter.header.alpha / Float(adapter.header.rank)
+        if adapter.matrices.contains(where: { $0.m != nil }) {
+            fputs("bake-lora does not support DoRA adapter magnitudes yet; use a plain LoRA adapter or add magnitude-aware baking.\n", stderr)
+            exit(1)
+        }
         print("""
 
         tinygpt bake-lora
@@ -122,7 +126,9 @@ enum BakeLora {
         var loraByKey: [String: LoraSlot] = [:]
         loraByKey.reserveCapacity(adapter.header.entries.count)
         for (idx, entry) in adapter.header.entries.enumerated() {
-            let (a, b) = adapter.matrices[idx]
+            let matrix = adapter.matrices[idx]
+            let a = matrix.loraA
+            let b = matrix.loraB
             // Validate shape product matches buffer count — guards against
             // truncated / corrupt adapter files.
             precondition(a.count == entry.loraAShape.reduce(1, *),
