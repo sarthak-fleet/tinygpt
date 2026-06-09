@@ -70,7 +70,7 @@ def load_block(hf_dir: Path, block_index: int, max_seq: int):
 
 
 def convert_one_block(model: Qwen3SingleBlockModel, max_seq: int, out_path: Path,
-                       io_dtype: str = "fp32"):
+                       io_dtype: str = "fp32", quantize_weights: bool = False):
     import coremltools as ct
 
     model.eval()
@@ -121,9 +121,32 @@ def convert_one_block(model: Qwen3SingleBlockModel, max_seq: int, out_path: Path
         states=states,
         compute_precision=ct.precision.FLOAT32,
         compute_units=ct.ComputeUnit.CPU_AND_NE,
+        # int8 WEIGHT compression is supported from macOS13; only int8
+        # activations/IO need the macOS26 target. Keeping macOS15 here —
+        # the macOS26 target triggered an ANE "Unable to bind buffer to
+        # network" failure on this machine (coremltools 9 / macOS 26.0).
         minimum_deployment_target=ct.target.macOS15,
         convert_to="mlprogram",
     )
+
+    if quantize_weights:
+        # int8 weight quantization (per-channel linear-symmetric). Halves the
+        # weight bytes read per token — the dominant decode cost for a 0.6B
+        # on ANE (Draw Things' "8-bit S" result). Activations + compute stay
+        # as converted; only constant weights are repacked. macOS 26 target
+        # lets the ANE consume int8 arrays directly without promotion.
+        from coremltools.optimize.coreml import (
+            OpLinearQuantizerConfig, OptimizationConfig, linear_quantize_weights,
+        )
+        # per_block (block_size 32) over per_channel: the per_channel chain
+        # FAILED the numerics gate 2026-06-10 — per-block cosines ~0.9998 but
+        # 28-block cumulative drift flipped tokens on the math prompt
+        # (cos 0.41 by step 5). Finer scales cost a little size, buy accuracy.
+        op_cfg = OpLinearQuantizerConfig(mode="linear_symmetric", dtype="int8",
+                                          granularity="per_block", block_size=32)
+        mlpkg = linear_quantize_weights(
+            mlpkg, config=OptimizationConfig(global_config=op_cfg))
+
     mlpkg.save(str(out_path))
 
 
@@ -196,6 +219,9 @@ def main() -> None:
     parser.add_argument("--io-dtype", choices=["fp32", "fp16"], default="fp32",
                           help="hidden_state/hidden_out boundary dtype. fp16 enables "
                                "IOSurface outputBackings handoff in the Swift runner.")
+    parser.add_argument("--quantize-weights", action="store_true",
+                          help="int8 per-channel weight quantization (macOS 26 target). "
+                               "Halves weight bytes/token — the Phase B decode win.")
     args = parser.parse_args()
 
     hf_dir = Path(args.hf_dir).expanduser()
@@ -209,9 +235,11 @@ def main() -> None:
     print(f"[1/4] loading block {args.block_index} from {hf_dir.name}...", flush=True)
     model, config = load_block(hf_dir, args.block_index, args.max_seq)
 
-    print(f"[2/4] converting block {args.block_index} → mlpackage (io={args.io_dtype})...", flush=True)
+    print(f"[2/4] converting block {args.block_index} → mlpackage "
+            f"(io={args.io_dtype}, w8={args.quantize_weights})...", flush=True)
     t0 = time.time()
-    convert_one_block(model, args.max_seq, out_path, io_dtype=args.io_dtype)
+    convert_one_block(model, args.max_seq, out_path, io_dtype=args.io_dtype,
+                       quantize_weights=args.quantize_weights)
     convert_sec = time.time() - t0
     pkg_mb = sum(p.stat().st_size for p in out_path.rglob("*") if p.is_file()) / 1e6
     print(f"      convert OK in {convert_sec:.1f}s, .mlpackage size = {pkg_mb:.0f} MB",
