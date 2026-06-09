@@ -2,6 +2,7 @@ import Foundation
 import Accelerate
 #if canImport(CoreML)
 @preconcurrency import CoreML
+import CoreVideo
 import TinyGPTIO
 
 /// Per-block stateful CoreML inference for Qwen3-class models.
@@ -37,10 +38,25 @@ public final class Qwen3ANEChunked: @unchecked Sendable {
     public let embedTokensWeight: [Float]
     public let finalNormWeight: [Float]
     public let rmsNormEps: Float
+    /// True when the block mlpackages were exported with fp16 hidden_state /
+    /// hidden_out (m8_block_export.py --io-dtype fp16). Enables the
+    /// IOSurface ping-pong handoff in `forward` — the inter-chunk boundary
+    /// stays on-ANE instead of a fresh CPU MLMultiArray per block per token.
+    public let ioIsFP16: Bool
+
+    /// Decode-path (T==1) ping-pong buffers: two fp16 IOSurface-backed
+    /// CVPixelBuffer MLMultiArrays of shape [1, 1, H]. Block i reads one and
+    /// is offered the other as its output backing; roles flip each block.
+    /// Predictions are strictly sequential per forward, so no read/write
+    /// hazard. Lazily created on first decode forward.
+    private var pingPong: [MLMultiArray] = []
+    private var pingPongPixelBuffers: [CVPixelBuffer] = []
+    /// position_offset [1] int32 — reused across forwards (value rewritten).
+    private var posArrCache: MLMultiArray?
 
     public init(blocks: [MLModel], nLayers: Int, hiddenSize: Int, vocabSize: Int,
                 maxSeqLen: Int, embedTokensWeight: [Float], finalNormWeight: [Float],
-                rmsNormEps: Float) {
+                rmsNormEps: Float, ioIsFP16: Bool = false) {
         self.blocks = blocks
         self.nLayers = nLayers
         self.hiddenSize = hiddenSize
@@ -49,6 +65,7 @@ public final class Qwen3ANEChunked: @unchecked Sendable {
         self.embedTokensWeight = embedTokensWeight
         self.finalNormWeight = finalNormWeight
         self.rmsNormEps = rmsNormEps
+        self.ioIsFP16 = ioIsFP16
     }
 
     public enum LoadError: Error, CustomStringConvertible {
@@ -125,10 +142,18 @@ public final class Qwen3ANEChunked: @unchecked Sendable {
             loaded.append(m)
         }
 
+        // Detect boundary IO dtype from the first block. fp16 IO enables the
+        // IOSurface ping-pong handoff (exported via --io-dtype fp16).
+        var fp16IO = false
+        if let constraint = loaded[0].modelDescription
+            .inputDescriptionsByName["hidden_state"]?.multiArrayConstraint {
+            fp16IO = (constraint.dataType == .float16)
+        }
+
         return Qwen3ANEChunked(blocks: loaded, nLayers: nLayers, hiddenSize: hiddenSize,
                                 vocabSize: vocab, maxSeqLen: defaultMaxSeq,
                                 embedTokensWeight: embedFP32, finalNormWeight: normFP32,
-                                rmsNormEps: eps)
+                                rmsNormEps: eps, ioIsFP16: fp16IO)
     }
 
     /// Allocate fresh MLState for each block. Caller owns and reuses across
@@ -153,21 +178,58 @@ public final class Qwen3ANEChunked: @unchecked Sendable {
         let endStep = positionOffset + T
         precondition(endStep <= maxSeqLen, "endStep \(endStep) > maxSeqLen \(maxSeqLen)")
 
-        // 1. Embedding lookup → MLMultiArray of shape [1, T, H] fp32.
-        let hiddenArr = try MLMultiArray(
-            shape: [1, NSNumber(value: T), NSNumber(value: hiddenSize)],
-            dataType: .float32)
-        let hp = hiddenArr.dataPointer.assumingMemoryBound(to: Float.self)
-        for t in 0..<T {
-            let tokenId = Int(ids[t])
-            let srcBase = tokenId * hiddenSize
-            let dstBase = t * hiddenSize
-            for h in 0..<hiddenSize {
-                hp[dstBase + h] = embedTokensWeight[srcBase + h]
-            }
+        // 1. Embedding lookup → MLMultiArray of shape [1, T, H] in the
+        //    chain's boundary dtype. The fp16-IO decode path (T==1) writes
+        //    into the first ping-pong IOSurface buffer instead of a fresh
+        //    CPU array so the whole 28-block chain can hand off on-ANE.
+        let useFastPath = ioIsFP16 && T == 1
+        if useFastPath && pingPong.isEmpty {
+            try makePingPongBuffers()
         }
 
-        // 2. Causal mask [1, 1, T, endStep] fp32.
+        let hiddenArr: MLMultiArray
+        if useFastPath {
+            hiddenArr = pingPong[0]
+            let tokenId = Int(ids[0])
+            let srcBase = tokenId * hiddenSize
+            try writeFP16(into: pingPongPixelBuffers[0]) { dst in
+                for h in 0..<hiddenSize {
+                    dst[h] = Float16(embedTokensWeight[srcBase + h])
+                }
+            }
+        } else if ioIsFP16 {
+            // fp16-IO prefill (T > 1): plain fp16 array, no backings. Cold path.
+            let arr = try MLMultiArray(
+                shape: [1, NSNumber(value: T), NSNumber(value: hiddenSize)],
+                dataType: .float16)
+            let hp = arr.dataPointer.assumingMemoryBound(to: Float16.self)
+            for t in 0..<T {
+                let tokenId = Int(ids[t])
+                let srcBase = tokenId * hiddenSize
+                let dstBase = t * hiddenSize
+                for h in 0..<hiddenSize {
+                    hp[dstBase + h] = Float16(embedTokensWeight[srcBase + h])
+                }
+            }
+            hiddenArr = arr
+        } else {
+            let arr = try MLMultiArray(
+                shape: [1, NSNumber(value: T), NSNumber(value: hiddenSize)],
+                dataType: .float32)
+            let hp = arr.dataPointer.assumingMemoryBound(to: Float.self)
+            for t in 0..<T {
+                let tokenId = Int(ids[t])
+                let srcBase = tokenId * hiddenSize
+                let dstBase = t * hiddenSize
+                for h in 0..<hiddenSize {
+                    hp[dstBase + h] = embedTokensWeight[srcBase + h]
+                }
+            }
+            hiddenArr = arr
+        }
+
+        // 2. Causal mask [1, 1, T, endStep] fp32 (mask IO stays fp32 in both
+        //    export variants; tiny — ≤512B at maxSeq 128).
         let maskArr = try MLMultiArray(
             shape: [1, 1, NSNumber(value: T), NSNumber(value: endStep)],
             dataType: .float32)
@@ -181,19 +243,42 @@ public final class Qwen3ANEChunked: @unchecked Sendable {
             }
         }
 
-        // 3. position_offset [1] int32.
-        let posArr = try MLMultiArray(shape: [1], dataType: .int32)
+        // 3. position_offset [1] int32 — reused across forwards.
+        let posArr: MLMultiArray
+        if let cached = posArrCache {
+            posArr = cached
+        } else {
+            posArr = try MLMultiArray(shape: [1], dataType: .int32)
+            posArrCache = posArr
+        }
         posArr.dataPointer.assumingMemoryBound(to: Int32.self)[0] = Int32(positionOffset)
 
         // 4. Loop through N blocks. Each predict reads + writes its own MLState.
+        //    Fast path: offer the *other* ping-pong buffer as the output
+        //    backing so CoreML writes block i's hidden_out directly into the
+        //    IOSurface that block i+1 reads — no per-block CPU array. CoreML
+        //    may ignore the backing (it then returns its own array); we always
+        //    use the returned array as the next input, so correctness never
+        //    depends on the backing being honored.
         var current = hiddenArr
+        var backingIdx = 1   // hiddenArr is pingPong[0] on the fast path
         for i in 0..<nLayers {
             let provider = try MLDictionaryFeatureProvider(dictionary: [
                 "hidden_state": current,
                 "causal_mask": maskArr,
                 "position_offset": posArr,
             ])
-            let out = try await blocks[i].prediction(from: provider, using: states[i])
+            let out: MLFeatureProvider
+            if useFastPath {
+                let options = MLPredictionOptions()
+                options.outputBackings = ["hidden_out": pingPong[backingIdx]]
+                out = try await blocks[i].prediction(from: provider,
+                                                       using: states[i],
+                                                       options: options)
+                backingIdx = 1 - backingIdx
+            } else {
+                out = try await blocks[i].prediction(from: provider, using: states[i])
+            }
             guard let next = out.featureValue(for: "hidden_out")?.multiArrayValue else {
                 throw NSError(domain: "Qwen3ANEChunked", code: 1,
                               userInfo: [NSLocalizedDescriptionKey:
@@ -211,8 +296,11 @@ public final class Qwen3ANEChunked: @unchecked Sendable {
                 _ = memcpy(dst.baseAddress, cp + lastBase, hiddenSize * MemoryLayout<Float>.size)
             }
         } else if current.dataType == .float16 {
-            let cp = current.dataPointer.assumingMemoryBound(to: UInt16.self)
-            for i in 0..<hiddenSize { lastHidden[i] = Float(Float16(bitPattern: cp[lastBase + i])) }
+            // withUnsafeBufferPointer handles the CVPixelBuffer base-address
+            // lock when the array is IOSurface-backed (the fast path).
+            current.withUnsafeBufferPointer(ofType: Float16.self) { src in
+                for i in 0..<hiddenSize { lastHidden[i] = Float(src[lastBase + i]) }
+            }
         } else {
             for i in 0..<hiddenSize { lastHidden[i] = Float(truncating: current[lastBase + i]) }
         }
@@ -245,6 +333,51 @@ public final class Qwen3ANEChunked: @unchecked Sendable {
             }
         }
         return logits
+    }
+
+    // MARK: - IOSurface ping-pong (fp16-IO fast path)
+
+    /// Create the two [1, 1, H] fp16 IOSurface-backed buffers used for the
+    /// decode-path block handoff. CVPixelBuffer OneComponent16Half is the
+    /// only IOSurface pixel format CoreML accepts as an fp16 MLMultiArray
+    /// backing (the anemll-validated pattern). H=1024 × 2B = 2048B rows are
+    /// already 64-byte aligned, so stride == width and the array is
+    /// contiguous.
+    private func makePingPongBuffers() throws {
+        precondition(pingPong.isEmpty)
+        for _ in 0..<2 {
+            var pb: CVPixelBuffer?
+            let attrs: [CFString: Any] = [
+                kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+            ]
+            let status = CVPixelBufferCreate(
+                kCFAllocatorDefault, hiddenSize, 1,
+                kCVPixelFormatType_OneComponent16Half,
+                attrs as CFDictionary, &pb)
+            guard status == kCVReturnSuccess, let pixelBuffer = pb else {
+                throw NSError(domain: "Qwen3ANEChunked", code: 2,
+                              userInfo: [NSLocalizedDescriptionKey:
+                                "CVPixelBufferCreate failed (\(status))"])
+            }
+            pingPongPixelBuffers.append(pixelBuffer)
+            pingPong.append(MLMultiArray(
+                pixelBuffer: pixelBuffer,
+                shape: [1, 1, NSNumber(value: hiddenSize)]))
+        }
+    }
+
+    /// Write fp16 values into a pixel-buffer-backed array under the required
+    /// base-address lock.
+    private func writeFP16(into pixelBuffer: CVPixelBuffer,
+                            _ body: (UnsafeMutablePointer<Float16>) -> Void) throws {
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            throw NSError(domain: "Qwen3ANEChunked", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "pixel buffer has no base address"])
+        }
+        body(base.assumingMemoryBound(to: Float16.self))
     }
 
     // MARK: - Internal helpers

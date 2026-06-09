@@ -69,7 +69,8 @@ def load_block(hf_dir: Path, block_index: int, max_seq: int):
     return model, config
 
 
-def convert_one_block(model: Qwen3SingleBlockModel, max_seq: int, out_path: Path):
+def convert_one_block(model: Qwen3SingleBlockModel, max_seq: int, out_path: Path,
+                       io_dtype: str = "fp32"):
     import coremltools as ct
 
     model.eval()
@@ -93,22 +94,30 @@ def convert_one_block(model: Qwen3SingleBlockModel, max_seq: int, out_path: Path
     query_dim = ct.RangeDim(lower_bound=1, upper_bound=max_seq, default=1)
     end_dim = ct.RangeDim(lower_bound=1, upper_bound=max_seq, default=1)
     hidden_size = model.config["hidden_size"]
+    # io_dtype fp16 enables IOSurface-backed (CVPixelBuffer OneComponent16Half)
+    # outputBackings in the Swift runner — the inter-chunk handoff stays
+    # on-ANE instead of round-tripping through a fresh CPU MLMultiArray per
+    # block per token (28×/token). causal_mask stays fp32: it's a separate
+    # input, and -1e4 mask values are exactly representable either way but
+    # the M6 drift analysis was done with fp32 masks.
+    io_np = np.float16 if io_dtype == "fp16" else np.float32
     # FLOAT32 compute + FLOAT16 state — drops per-block fp16 error ~100×
     # (cos_sim 0.999995 → 1.0000000) at ~1.6× predict-time cost. Necessary
     # to keep 28-block chain drift under control. See m6-findings.md.
+    # io_dtype only changes the boundary tensors, not internal compute.
     mlpkg = ct.convert(
         traced,
         inputs=[
             ct.TensorType(name="hidden_state",
                             shape=(1, query_dim, hidden_size),
-                            dtype=np.float32),
+                            dtype=io_np),
             ct.TensorType(name="causal_mask",
                             shape=(1, 1, query_dim, end_dim),
                             dtype=np.float32),
             ct.TensorType(name="position_offset",
                             shape=(1,), dtype=np.int32),
         ],
-        outputs=[ct.TensorType(name="hidden_out", dtype=np.float32)],
+        outputs=[ct.TensorType(name="hidden_out", dtype=io_np)],
         states=states,
         compute_precision=ct.precision.FLOAT32,
         compute_units=ct.ComputeUnit.CPU_AND_NE,
@@ -184,6 +193,9 @@ def main() -> None:
     parser.add_argument("--max-seq", type=int, default=128)
     parser.add_argument("--out", default=None,
                           help="output .mlpackage path (default: ~/.cache/tinygpt/ane/m8-block-N.mlpackage)")
+    parser.add_argument("--io-dtype", choices=["fp32", "fp16"], default="fp32",
+                          help="hidden_state/hidden_out boundary dtype. fp16 enables "
+                               "IOSurface outputBackings handoff in the Swift runner.")
     args = parser.parse_args()
 
     hf_dir = Path(args.hf_dir).expanduser()
@@ -197,9 +209,9 @@ def main() -> None:
     print(f"[1/4] loading block {args.block_index} from {hf_dir.name}...", flush=True)
     model, config = load_block(hf_dir, args.block_index, args.max_seq)
 
-    print(f"[2/4] converting block {args.block_index} → mlpackage...", flush=True)
+    print(f"[2/4] converting block {args.block_index} → mlpackage (io={args.io_dtype})...", flush=True)
     t0 = time.time()
-    convert_one_block(model, args.max_seq, out_path)
+    convert_one_block(model, args.max_seq, out_path, io_dtype=args.io_dtype)
     convert_sec = time.time() - t0
     pkg_mb = sum(p.stat().st_size for p in out_path.rglob("*") if p.is_file()) / 1e6
     print(f"      convert OK in {convert_sec:.1f}s, .mlpackage size = {pkg_mb:.0f} MB",
