@@ -5,6 +5,84 @@ training cadence, then `docs/PLAN.md` for the long-term roadmap.
 
 ---
 
+## ⚡ State as of 2026-06-10 — read this FIRST (overrides everything below)
+
+**Pace handed off + released.** Pace v0.2.0 merged to main (PR #3) and tagged:
+agent loop, RAG layer, MCP, watch mode, voice pipeline, dictation Stage A.
+Canonical state doc: `docs/pace-handoff-2026-06-10.md`. Memory:
+`project-pace-handoff-2026-06-10`. Key reframe: **Pace's runtime planner is
+qwen3-30b-a3b via LM Studio, not our specialist** — any future planner eval
+needs a 30B comparison row.
+
+**Planner freeze**: v11 is ONE command away (`bash scripts/v11_pipeline.sh
+[--amplify]`, supersedes v10_pipeline.sh). One run, ship or fail, then the
+planner freezes for a month regardless. Gate: `docs/prds/pace-planner-v11-ship-gate.md`.
+
+**tinygpt is now a local-LLM research lab.** Four threads mapped with
+file:line plans (2026-06-10 research agents):
+1. int8 ANE handoff (#306) — Phase A: fp16 IOSurface outputBackings ping-pong
+   in `Qwen3ANEChunked.swift:188-203` (1d, macOS 15+); Phase B: int8 weights
+   via `linear_quantize_weights` + macOS26 target (the real 1.8×); Phase C
+   (int8 activations) gated/optional.
+2. VLM M4 port (#266) — UI-Venus is ALSO Qwen3-VL arch, one port serves both;
+   7 milestones w/ parity gates, 8-10d; run the A/B in Python (mlx_lm) first.
+3. Quantized inference (#305) — everything dequants to dense fp32 today
+   (`HFModel.swift:287-353`, GGUF too); serve `--quantize` is 0.5d; QLoRA
+   wrapper needed for LoRA-on-quantized (`Lora.swift:53-71`).
+4. Spec-decode in serve (#262) — B14 transfers (`SpeculativeDecode.swift`)
+   but is KV-cache-free; grammar masks must apply to draft tokens via FSM
+   clone (`Serve.swift:1782`); 3-5d.
+
+Fixed: `eval_bfcl.py` now exits nonzero on a missing category (was silently
+SKIPping — could have dropped Dim2 from the v11 ship gate).
+
+---
+
+## State as of 2026-06-09 morning (superseded)
+
+North Star locked: `result = (speed × accuracy) / cost`. ROI bar = ≥5% on
+formula per 2-week investment. Research-first doctrine: knowledge cutoff
+Jan 2026 is stale; verify current state before recommending any
+model/library.
+
+**Memory to load first**:
+- `feedback-tinygpt-north-star` (formula + ROI bar)
+- `feedback-research-first-doctrine` (verify before recommending)
+- `feedback-pace-doctrine-2026-06-08` (manifesto)
+- `project-dora-fix-shipped-2026-06-09` (TGLA v1→v2 with magnitudes)
+- `project-embedding-swap-2026-06-09` (mxbai → Qwen3-Embedding-0.6B)
+- `project-anemll-vs-m8-2026-06-09` (REJECTED, port macOS 26 int8 in-house)
+- `project-tinygrad-rejected-2026-06-09` (REJECTED — Ollama itself switched to MLX Mar 2026)
+- `project-competitive-teardown-2026-06-09` (Dottie attack vectors + landing-page lines)
+
+**Shipped this morning**:
+- DoRA serialization v1→v2 with magnitudes (Swift, validated end-to-end)
+- Embedding swap to Qwen3-Embedding-0.6B (faster on batches, same family as planner)
+- `scripts/score_formula.py` — canonical (speed × accuracy / cost) measurement
+- Pace landing-page draft at `pace/docs/landing/v1-draft.md`
+- v10 cascade at `scripts/v10_pipeline.sh` (auto-runs train+bake+eval+score)
+- PRDs: scope-narrowing, quantized-inference-swift, macos26-int8-ane-port
+
+**Models qualified**:
+- WhisperKit large-v3-turbo (voice, 2026-06-08)
+- Qwen3-Embedding-0.6B (RAG, 2026-06-09 — swapped from mxbai)
+
+**Rejected this morning** (don't re-propose):
+- anemll — no LoRA path + open Qwen3 bugs; port macOS 26 int8 ANE in-house instead (#306)
+- tinygrad — no measurable Pace benefit; Apple silicon island converged on MLX
+- Apple Foundation Models adapter — restricted to Apple's model, not Qwen
+
+**In-flight (next-steps if you pick this up cold)**:
+- v10 planner training pending — multiplier running OR ready to fire via `scripts/v10_pipeline.sh`
+- Qwen3-VL-2B downloaded (~2.8GB) for the UI-Venus A/B test on #266
+
+**Open eval mystery** (not blocking): v8 LoRA scores 33.3% reproducible on
+fm-fixtures-v2 in current env, not the documented 73.3%. Files unchanged.
+Treat 33% as working baseline. v9-LoRA + tightened v9-compose-v2 prompt
+matches v8 on non-compose AND adds 70% on new compose fixtures — ships.
+
+---
+
 ## ⚡ State as of 2026-06-08 (overnight session — read this first)
 
 The strategic picture changed last night. Three load-bearing

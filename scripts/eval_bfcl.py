@@ -338,8 +338,11 @@ def main() -> None:
                               max_per_category=args.max_per_category,
                               verbose=args.verbose)
         except FileNotFoundError as e:
-            print(f"  SKIP — {e}")
-            continue
+            # A missing category is a config error, not a soft skip — silently
+            # dropping one would let a ship-gate run (v11_pipeline.sh) report
+            # success while omitting a dimension.
+            print(f"  FATAL — {e}", file=sys.stderr)
+            sys.exit(2)
         overall["categories"][cat] = r
         print(f"  {r['pass']}/{r['n']} ({r['pass_rate']*100:.1f}%) · parse_err {r['parse_errors']} · p50 lat {r['median_latency_ms']:.0f}ms")
         total_pass += r["pass"]
