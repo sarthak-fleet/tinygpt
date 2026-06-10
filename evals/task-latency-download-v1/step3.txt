@@ -1,0 +1,8 @@
+USER: download all three reports from this page. Q1 Report.pdf and Q2 Report.pdf are already downloaded
+ELEMENT: [0] link|180,240|Q1 Report.pdf|Downloaded ✓
+ELEMENT: [1] link|180,300|Q2 Report.pdf|Downloaded ✓
+ELEMENT: [2] link|180,360|Q3 Report.pdf|Download Q3 financial report
+ELEMENT: [3] button|640,80|Sign out|
+ELEMENT: [4] link|320,80|Pricing|
+EXPECT_CLICK_ID: 2
+SPOKEN_MAX_WORDS: 14
