@@ -72,7 +72,10 @@ caffeinate -i "$TINYGPT" sft \
   --alpha 64 \
   --steps 3000 \
   --lr 1e-4 \
-  --batch 4 > "$LOG" 2>&1
+  --batch 4 \
+  --no-dora > "$LOG" 2>&1
+  # --no-dora is REQUIRED, not optional: sft defaults useDora=true, so
+  # merely omitting --dora still trains DoRA (discovered 2026-06-10).
 
 if [ ! -f "$LORA" ]; then
   echo "ERROR: training failed"; tail -20 "$LOG"; exit 1

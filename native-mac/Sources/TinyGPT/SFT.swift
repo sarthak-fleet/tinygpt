@@ -55,6 +55,11 @@ enum SFT {
         // for backwards compat.
         var packMode = "none"
         var lengthBuckets = 0
+        // MLX's Metal allocator keeps every freed buffer as cache, so RSS
+        // sits at the run's high-water mark (~30 GB observed on the 709-row
+        // v11 run). Capping the cache trades a little throughput for the
+        // machine staying usable during long background trainings.
+        var metalCacheGB: Double = 8
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -100,6 +105,7 @@ enum SFT {
                 useDora = false
                 adaLoraTargetRank = Int(args[i+1]) ?? adaLoraTargetRank; i += 2
             case "--layer-drop":    layerDropProb = Float(args[i+1]) ?? layerDropProb; i += 2
+            case "--metal-cache-gb": metalCacheGB = Double(args[i+1]) ?? metalCacheGB; i += 2
             case "--optimizer":
                 guard let k = parseOptimizerKind(args[i+1]) else {
                     fputs("unknown --optimizer '\(args[i+1])'. Pick adamw|lion|sophia|muon|adafactor.\n", stderr); exit(2)
@@ -120,6 +126,10 @@ enum SFT {
         if qlora && qloraBits != 4 && qloraBits != 8 {
             fputs("--qlora-bits must be 4 or 8\n", stderr)
             exit(2)
+        }
+        if metalCacheGB > 0 {
+            Memory.cacheLimit = Int(metalCacheGB * 1_073_741_824)
+            print("metal cache capped at \(metalCacheGB) GB (--metal-cache-gb 0 to disable)")
         }
 
         print("loading base from \(basePath)…")
