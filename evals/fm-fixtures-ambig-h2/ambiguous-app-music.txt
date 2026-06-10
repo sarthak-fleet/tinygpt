@@ -1,0 +1,6 @@
+USER: open my music thing
+ELEMENT: [0] dock_icon|24,1000|Music|player
+ELEMENT: [1] dock_icon|72,1000|Spotify|player
+ELEMENT: [2] dock_icon|120,1000|GarageBand|daw
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which app

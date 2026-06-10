@@ -1,0 +1,3 @@
+USER: jot that down before i forget
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: content

@@ -1,0 +1,5 @@
+USER: print it on the usual printer
+ELEMENT: [0] menu_item|100,100|Office HP|printer
+ELEMENT: [1] menu_item|100,150|Home Canon|printer
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which printer

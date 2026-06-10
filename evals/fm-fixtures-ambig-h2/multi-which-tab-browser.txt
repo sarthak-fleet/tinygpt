@@ -1,0 +1,6 @@
+USER: get rid of the store page
+ELEMENT: [0] tab|100,50|Zara — new arrivals|shopping
+ELEMENT: [1] tab|200,50|Uniqlo — sale|shopping
+ELEMENT: [2] tab|300,50|Linear — sprint board|work
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which tab

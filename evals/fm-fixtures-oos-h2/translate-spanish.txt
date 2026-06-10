@@ -1,0 +1,3 @@
+USER: how do you say good morning in spanish
+EXPECT_INTENT: out_of_scope
+REASON: Translation is a pure knowledge query

@@ -1,0 +1,3 @@
+USER: any breaking news this morning
+EXPECT_INTENT: out_of_scope
+REASON: News needs the web
