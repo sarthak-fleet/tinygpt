@@ -58,7 +58,11 @@ lms unload --all 2>/dev/null || true
 echo ""
 
 # Step 3: train
-echo "[3/6] Training v11 (DoRA, rank 32, alpha 64, 3000 steps)..."
+# Plain LoRA, NOT DoRA: the DoRA inference path is broken end-to-end as of
+# 2026-06-10 (serve-apply degenerates generations, bake-lora rejects
+# magnitudes). v9 shipped on plain LoRA; stay there until the DoRA gate task
+# is fixed and verified.
+echo "[3/6] Training v11 (plain LoRA, rank 32, alpha 64, 3000 steps)..."
 caffeinate -i "$TINYGPT" sft \
   "$BASE" \
   --data "$DATA" \
@@ -68,8 +72,7 @@ caffeinate -i "$TINYGPT" sft \
   --alpha 64 \
   --steps 3000 \
   --lr 1e-4 \
-  --batch 4 \
-  --dora > "$LOG" 2>&1
+  --batch 4 > "$LOG" 2>&1
 
 if [ ! -f "$LORA" ]; then
   echo "ERROR: training failed"; tail -20 "$LOG"; exit 1
