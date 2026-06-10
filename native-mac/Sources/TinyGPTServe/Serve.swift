@@ -1,6 +1,7 @@
 import Foundation
 import Darwin
 import MLX
+import MLXNN
 import MLXRandom
 import TinyGPTIO
 import TinyGPTModel
@@ -44,6 +45,8 @@ public enum Serve {
         var port: UInt16 = 8080
         var maxContext: Int? = nil
         var loraPath: String? = nil
+        var quantizeBits: Int? = nil
+        var quantizeGroup: Int = 64
         var grammarPath: String? = nil
         var toolsPath: String? = nil
         var promptCacheDir: String? = nil
@@ -64,6 +67,17 @@ public enum Serve {
             case "--lora":
                 guard i + 1 < args.count else { exitUsage() }
                 loraPath = args[i + 1]; i += 2
+            case "--quantize":
+                guard i + 1 < args.count else { exitUsage() }
+                switch args[i + 1] {
+                case "int4", "4bit", "4":  quantizeBits = 4
+                case "int8", "8bit", "8":  quantizeBits = 8
+                default: fputs("--quantize must be int4 or int8\n", stderr); exitUsage()
+                }
+                i += 2
+            case "--quantize-group":
+                guard i + 1 < args.count, let g = Int(args[i + 1]) else { exitUsage() }
+                quantizeGroup = g; i += 2
             case "--grammar":
                 guard i + 1 < args.count else { exitUsage() }
                 grammarPath = args[i + 1]; i += 2
@@ -106,6 +120,8 @@ public enum Serve {
             let server = try Server.boot(modelPath: modelPath, host: host, port: port,
                                           maxContextOverride: maxContext,
                                           loraPath: loraPath,
+                                          quantizeBits: quantizeBits,
+                                          quantizeGroup: quantizeGroup,
                                           grammarText: grammarText,
                                           toolsSpec: toolsSpec,
                                           promptCacheDir: promptCacheDir,
@@ -114,10 +130,20 @@ public enum Serve {
             print("tinygpt serve — listening on http://\(host):\(server.port)")
             print("model: \(modelPath)  ·  ctx=\(server.maxContext)  ·  vocab=\(server.config.vocabSize)")
             if let lp = loraPath { print("lora:  \(lp)") }
+            if let qb = quantizeBits, loraPath == nil {
+                print("quantized: int\(qb) (group=\(quantizeGroup))")
+            }
             if let gp = grammarPath { print("grammar: \(gp)") }
             if let tp = toolsPath { print("tools: \(tp)") }
             if let dir = promptCacheDir { print("prompt cache: \(dir)") }
-            if let dir = traceDir { print("inference traces: \(dir)") }
+            if let dir = traceDir {
+                print("inference traces: \(dir)")
+                print("  → after a request, render latency heatmap with:")
+                print("      tinygpt infer-heatmap '\(dir)/*.json' --html /tmp/heatmap.html && open /tmp/heatmap.html")
+                print("  → for a single trace: tinygpt infer-heatmap <trace.json> --summary")
+            } else {
+                print("tip: pass --trace-infer to record per-request latency traces (renderable via `tinygpt infer-heatmap`)")
+            }
             // Block forever — the listener thread runs detached.
             dispatchMain()
         } catch {
@@ -147,6 +173,11 @@ public enum Serve {
                                like MMLU-Pro where the harness sometimes overshoots)
         --lora <path.lora>    Apply a LoRA adapter on top of the base before serving.
                               Works for both .tinygpt and HF-dir bases.
+        --quantize int4|int8  Quantize Linear/Embedding weights in-memory after
+                              load (MLX QuantizedLinear). ~4-8× memory savings.
+                              Ignored when --lora is in play (would discard the
+                              adapter delta — quantize the base offline instead).
+        --quantize-group N    Quantization group size (default: 64).
         --grammar <path>      Constrain generated text. Supports JSON Schema files
                               and the Pace tool-tag GBNF subset used by
                               grammars/pace-tool-tags.gbnf.
@@ -242,6 +273,8 @@ extension Serve {
 
         static func boot(modelPath: String, host: String, port: UInt16,
                           maxContextOverride: Int?, loraPath: String? = nil,
+                          quantizeBits: Int? = nil,
+                          quantizeGroup: Int = 64,
                           grammarText: String? = nil,
                           toolsSpec: ServeToolsSpec? = nil,
                           promptCacheDir: String? = nil,
@@ -271,6 +304,17 @@ extension Serve {
                     try LoraAdapterReader.apply(adapter, to: m)
                 case .huggingFace(let m):
                     try LoraAdapterHFReader.apply(adapter, to: m)
+                }
+            }
+            // In-memory quantization — same semantics as Sample.swift:
+            // skipped under --lora because quantizing a LoraLinear (a
+            // Linear subclass) discards the adapter delta.
+            if let bits = quantizeBits {
+                if loraPath != nil {
+                    fputs("warning: --quantize ignored when --lora is in play (would discard the adapter delta). Skipping.\n", stderr)
+                } else {
+                    MLXNN.quantize(model: load.model.module, groupSize: quantizeGroup, bits: bits)
+                    fputs("serve: quantized to int\(bits) (group=\(quantizeGroup))\n", stderr)
                 }
             }
             let tok: TokenizerBox
@@ -310,7 +354,9 @@ extension Serve {
             }
             let fingerprint = [
                 "model:\(modelPath):\(KVCachePersist.fingerprint(of: modelPath))",
-                loraPath.map { "lora:\($0):\(KVCachePersist.fingerprint(of: $0))" } ?? "lora:none"
+                loraPath.map { "lora:\($0):\(KVCachePersist.fingerprint(of: $0))" } ?? "lora:none",
+                (quantizeBits != nil && loraPath == nil)
+                    ? "quant:int\(quantizeBits!):g\(quantizeGroup)" : "quant:none"
             ].joined(separator: "|")
 
             let (fd, boundPort) = try Self.bindListener(host: host, port: port)
