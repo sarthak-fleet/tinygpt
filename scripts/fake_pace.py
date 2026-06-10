@@ -320,6 +320,22 @@ def score_response(response: str, expects: dict, elements: list[dict], free_text
             point_label = parsed.get("pointAtLabel", "")
             click_label = parsed.get("clickLabel", "")
             body_text = parsed.get("bodyText", "")
+            # v10/v11 shape: {spokenText, intent, payload}. Map the payload
+            # back onto the legacy fields these fixtures score against:
+            # AX.press target ≙ click+point label; Mail.draft / Notes.create
+            # body ≙ bodyText. Without this mapping every v11 response
+            # scores 0 on ID/body checks regardless of model quality.
+            payload = parsed.get("payload")
+            if "intent" in parsed and isinstance(payload, dict):
+                calls = [payload]
+                calls += [c for c in payload.get("calls", []) if isinstance(c, dict)]
+                for call in calls:
+                    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                    if call.get("name") == "AX.press" and args.get("target"):
+                        click_label = click_label or args["target"]
+                        point_label = point_label or args["target"]
+                    if call.get("name") in ("Mail.draft", "Notes.create") and args.get("body"):
+                        body_text = body_text or args["body"]
     except Exception:
         # Free text — use the whole response as spokenText.
         pass
