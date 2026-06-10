@@ -60,6 +60,10 @@ enum SFT {
         // v11 run). Capping the cache trades a little throughput for the
         // machine staying usable during long background trainings.
         var metalCacheGB: Double = 8
+        // Per-step duty cycle: 0.25 sleeps three step-times after each step.
+        // Sub-second GPU bursts stay under the fan controller's reaction
+        // time, unlike external SIGSTOP windows which still spike fans.
+        var throttle: Double = 1.0
         var i = 0
         while i < args.count {
             switch args[i] {
@@ -106,6 +110,8 @@ enum SFT {
                 adaLoraTargetRank = Int(args[i+1]) ?? adaLoraTargetRank; i += 2
             case "--layer-drop":    layerDropProb = Float(args[i+1]) ?? layerDropProb; i += 2
             case "--metal-cache-gb": metalCacheGB = Double(args[i+1]) ?? metalCacheGB; i += 2
+            case "--throttle":
+                throttle = min(1.0, max(0.05, Double(args[i+1]) ?? 1.0)); i += 2
             case "--optimizer":
                 guard let k = parseOptimizerKind(args[i+1]) else {
                     fputs("unknown --optimizer '\(args[i+1])'. Pick adamw|lion|sophia|muon|adafactor.\n", stderr); exit(2)
@@ -257,6 +263,7 @@ enum SFT {
         var stoppedEarly = false
         var lastStep = 0
         for step in 0..<steps {
+            let stepStartedAt = Date()
             let (x, y, m): (MLXArray, MLXArray, MLXArray)
             switch packMode {
             case "sequence":
@@ -283,6 +290,10 @@ enum SFT {
                 fputs("\n[SIGINT] saving adapter at step \(lastStep)…\n", stderr)
                 stoppedEarly = true
                 break
+            }
+            if throttle < 0.999 {
+                let stepTime = -stepStartedAt.timeIntervalSinceNow
+                Thread.sleep(forTimeInterval: stepTime * (1.0 / throttle - 1.0))
             }
         }
         let elapsed = -t0.timeIntervalSinceNow
