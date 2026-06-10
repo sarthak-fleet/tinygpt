@@ -114,10 +114,15 @@ now emit the {n} variations:"""
 
 
 def call_teacher(teacher_url: str, model: str, prompt: str,
-                  max_tokens: int = 4000, temperature: float = 0.7) -> str:
+                  max_tokens: int = 2000, temperature: float = 0.7,
+                  disable_thinking: bool = True) -> str:
+    # /no_think disables Qwen3's chain-of-thought reasoning tokens. Cuts
+    # latency 3-5× per call. Lossless for data-augmentation use cases
+    # where we don't need the model to "think out loud."
+    user_content = ("/no_think\n" + prompt) if disable_thinking else prompt
     body = {
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": user_content}],
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -181,8 +186,10 @@ def main() -> None:
                      help="cap number of seeds to multiply (for quick runs)")
     p.add_argument("--only-new", action="store_true",
                      help="multiply only the v10 new seeds (intent in dictate/edit/non-answer-action), not the v9-converted rows")
-    p.add_argument("--retries", type=int, default=2,
-                     help="how many times to retry a seed if the teacher returns invalid output")
+    p.add_argument("--retries", type=int, default=1,
+                     help="how many times to retry a seed if the teacher returns invalid output (default 1; bad seeds shouldn't burn time)")
+    p.add_argument("--cooldown-seconds", type=float, default=0.0,
+                     help="sleep N seconds between seeds to let the GPU cool. 0 = full throttle. 10 = noticeable cooling. 30 = aggressive cool.")
     args = p.parse_args()
 
     if not args.seeds_in.exists():
@@ -210,21 +217,32 @@ def main() -> None:
     if args.max_seeds:
         seeds = seeds[:args.max_seeds]
 
-    print(f"multiplying {len(seeds)} seeds × {args.variations_per_seed} variations each")
-    print(f"teacher: {args.teacher_url} ({args.teacher_model})")
-    print(f"target: ~{len(seeds) * args.variations_per_seed} rows")
+    print(f"multiplying {len(seeds)} seeds × {args.variations_per_seed} variations each", flush=True)
+    print(f"teacher: {args.teacher_url} ({args.teacher_model})", flush=True)
+    print(f"target: ~{len(seeds) * args.variations_per_seed} rows", flush=True)
 
-    # Verify teacher reachable
+    # Smoke-test teacher latency before unleashing on all seeds. If the
+    # smoke call takes >30s, abort — the script will not finish in
+    # reasonable time and the user should diagnose teacher config first.
+    print("smoke-testing teacher latency (1 real call with /no_think)...", flush=True)
+    smoke_start = time.time()
     try:
-        body = {"model": args.teacher_model, "messages": [{"role": "user", "content": "say ok"}], "max_tokens": 5}
+        smoke_prompt = "/no_think\nreply with the single character: 1"
+        body = {"model": args.teacher_model,
+                "messages": [{"role": "user", "content": smoke_prompt}],
+                "max_tokens": 50, "temperature": 0.0}
         req = urllib.request.Request(args.teacher_url, data=json.dumps(body).encode(),
                                       headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             r.read()
-        print("teacher reachable: yes")
+        smoke_ms = (time.time() - smoke_start) * 1000
+        print(f"teacher latency: {smoke_ms:.0f}ms — proceeding", flush=True)
+        if smoke_ms > 30_000:
+            print(f"  WARNING: teacher latency {smoke_ms:.0f}ms is too high. Try a smaller teacher.", flush=True)
+            print(f"  expected total wall: ~{smoke_ms * args.variations_per_seed * len(seeds) / 1000 / 60:.0f} min", flush=True)
     except Exception as e:
-        print(f"TEACHER UNREACHABLE: {e}")
-        print("hint: start LM Studio + load a 14B+ model, or change --teacher-url/--teacher-model")
+        print(f"TEACHER UNREACHABLE: {e}", flush=True)
+        print("hint: start LM Studio + load a 4B+ model, or change --teacher-url/--teacher-model", flush=True)
         return
 
     all_multiplied: list[dict] = []
@@ -257,7 +275,19 @@ def main() -> None:
                 break
         elapsed = time.time() - t0
         all_multiplied.extend(variations)
-        print(f"  seed {i}/{len(seeds)}: +{len(variations)} variations ({elapsed:.1f}s, total {len(all_multiplied)})")
+        print(f"  seed {i}/{len(seeds)}: +{len(variations)} variations ({elapsed:.1f}s, total {len(all_multiplied)})",
+              flush=True)
+        # Incremental save every 10 seeds — if the run is killed, we don't
+        # lose all work like the 2026-06-09 hour-long waste.
+        if i % 10 == 0:
+            partial_out = args.out.with_suffix(".partial.jsonl")
+            write_jsonl(partial_out, seeds + all_multiplied)
+            print(f"    (saved partial: {partial_out})", flush=True)
+        # Cooldown: let the GPU breathe between seeds. Doesn't cap peak
+        # temp per call, but cuts sustained thermal load by adding idle
+        # time. 10-30s is a good range; 0 = no cooldown.
+        if args.cooldown_seconds > 0 and i < len(seeds):
+            time.sleep(args.cooldown_seconds)
 
     print(f"\ninvalid (rejected) variations: {n_invalid}")
     # Merge: keep original seeds + multiplied

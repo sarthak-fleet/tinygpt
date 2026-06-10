@@ -5,6 +5,17 @@
 **Companion**: `eval-methodology-2026-06-08.md` (the gate finding +
 the v2 fixture set)
 
+> **2026-06-09 ADDENDUM — numbers below are not reproducible in current env.**
+> Re-running the same eval against the same v8 baked-hf + same fixtures in
+> the current setup now yields **5/15 (33.3%)** for v8, not 11/15 (73.3%).
+> Files unchanged since the original measurement (verified via git status).
+> Open mystery — root cause unidentified. Treat 33% as the working
+> reproducible baseline going forward; v9-LoRA + tightened compose-v2
+> prompt matches that 33% on non-compose **and** scores 70% on the new
+> fm-fixtures-compose suite. See `project_v9_eval_disaster_2026_06_08.md`
+> and `project_v9_root_cause_2026_06_08.md` in memory for the diagnosis
+> chain.
+
 ## The full matrix
 
 | System | v1 (`fm-fixtures`) | v2 (`fm-fixtures-v2`) | v2 Δ vs FakePace |

@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// Seven workspaces. Train internally has sub-modes
-/// (pretrain / fine-tune / DPO / distill). Modalities surfaces
-/// what we ship today + the queued multi-modal arcs.
+/// (pretrain / fine-tune / DPO / distill). Roadmap surfaces
+/// what's shipped, in-flight, queued, and rejected — anchored to the
+/// (speed × accuracy) / cost formula per the North Star.
 enum AppTab: Hashable {
     case sample      // chat + A/B compare for currently loaded model
     case gallery     // browse loadable models — click → opens chat
@@ -11,7 +12,7 @@ enum AppTab: Hashable {
     case trace       // inference heatmap
     case interp      // mech-interp power tools
     case serve       // HTTP endpoint
-    case modalities  // text / code / tool-calls (shipped) + vision/voice/image (queued)
+    case roadmap     // shipped / in-flight / queued / rejected — project state
     case learn       // markdown viewer
 }
 
@@ -57,7 +58,7 @@ struct ContentView: View {
                         case .trace:      InferenceHeatmapView()
                         case .interp:     InterpView()
                         case .serve:      ServerView()
-                        case .modalities: ModalitiesView()
+                        case .roadmap:    RoadmapView()
                         case .learn:      LearnView()
                         }
                     }
@@ -221,7 +222,7 @@ struct ContentView: View {
                     navRow(.trace,      icon: "chart.bar.xaxis",                   label: "Trace")
                     navRow(.interp,     icon: "scope",                             label: "Interp")
                     navRow(.serve,      icon: "antenna.radiowaves.left.and.right", label: "Serve")
-                    navRow(.modalities, icon: "square.stack.3d.up",                label: "Modalities")
+                    navRow(.roadmap,    icon: "map",                              label: "Roadmap")
                     navRow(.learn,      icon: "graduationcap",                     label: "Learn")
 
                     // Inference section — live `tinygpt serve` processes
