@@ -131,7 +131,11 @@ def call_teacher(teacher_url: str, model: str, prompt: str,
                                    method="POST")
     with urllib.request.urlopen(req, timeout=120) as r:
         resp = json.loads(r.read())
-    return resp["choices"][0]["message"]["content"]
+    choice = resp["choices"][0]
+    if choice.get("finish_reason") == "length":
+        print(f"  WARNING: teacher output truncated at max_tokens={max_tokens}; "
+              "JSON is likely incomplete and will fail to parse", flush=True)
+    return choice["message"]["content"]
 
 
 def parse_teacher_output(content: str) -> list[dict]:
@@ -236,13 +240,21 @@ def main() -> None:
         with urllib.request.urlopen(req, timeout=60) as r:
             r.read()
         smoke_ms = (time.time() - smoke_start) * 1000
-        print(f"teacher latency: {smoke_ms:.0f}ms — proceeding", flush=True)
         if smoke_ms > 30_000:
-            print(f"  WARNING: teacher latency {smoke_ms:.0f}ms is too high. Try a smaller teacher.", flush=True)
-            print(f"  expected total wall: ~{smoke_ms * args.variations_per_seed * len(seeds) / 1000 / 60:.0f} min", flush=True)
+            # One call produces ALL variations for a seed, so total wall is
+            # roughly smoke latency × number of seeds.
+            print(f"  ERROR: teacher latency {smoke_ms:.0f}ms exceeds 30s. Try a smaller teacher.", flush=True)
+            print(f"  expected total wall: ~{smoke_ms * len(seeds) / 1000 / 60:.0f} min — aborting", flush=True)
+            sys.exit(1)
+        print(f"teacher latency: {smoke_ms:.0f}ms — proceeding", flush=True)
     except Exception as e:
-        print(f"TEACHER UNREACHABLE: {e}", flush=True)
-        print("hint: start LM Studio + load a 4B+ model, or change --teacher-url/--teacher-model", flush=True)
+        timed_out = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+        if timed_out:
+            print("TEACHER TOO SLOW: teacher responded too slowly (>60s)", flush=True)
+            print("hint: use a smaller/faster teacher model, or check GPU load", flush=True)
+        else:
+            print(f"TEACHER UNREACHABLE: {e}", flush=True)
+            print("hint: start LM Studio + load a 4B+ model, or change --teacher-url/--teacher-model", flush=True)
         return
 
     all_multiplied: list[dict] = []
@@ -258,7 +270,11 @@ def main() -> None:
         variations: list[dict] = []
         for attempt in range(args.retries + 1):
             try:
-                content = call_teacher(args.teacher_url, args.teacher_model, prompt)
+                # Scale max_tokens with variation count: each variation repeats
+                # the full instruction text, so 10 variations easily exceed a
+                # fixed 2000-token budget and truncate mid-JSON.
+                content = call_teacher(args.teacher_url, args.teacher_model, prompt,
+                                       max_tokens=max(2000, 350 * args.variations_per_seed))
             except Exception as e:
                 print(f"  seed {i}: teacher call failed ({e}); skipping")
                 break

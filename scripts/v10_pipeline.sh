@@ -35,7 +35,7 @@ echo ""
 
 # Step 1: Unload LM Studio Qwen3-14B if loaded (free GPU for training)
 echo "[1/5] Unloading LM Studio models..."
-lms unload --all 2>/dev/null || lms ps 2>&1 | head
+lms unload --all 2>/dev/null || lms ps 2>&1 | head || true
 echo ""
 
 # Step 2: Train v10 with DoRA (now persists magnitudes via #248)
@@ -75,6 +75,10 @@ echo "[4/5] Starting serve with v10 + v9-grammar..."
 pkill -f "tinygpt serve" 2>/dev/null || true
 sleep 2
 mkdir -p /tmp/tinygpt-cache-v10
+# Kill the serve process on ANY exit (eval failure under set -e included),
+# not just the happy path.
+SERVE_PID=""
+trap '[ -n "${SERVE_PID:-}" ] && kill "$SERVE_PID" 2>/dev/null || true' EXIT
 "$TINYGPT" serve \
   "$BASE" --lora "$LORA" \
   --grammar /Users/sarthak/Desktop/fleet/tinygpt/grammars/pace-fm-label-response-v9.schema.json \
@@ -85,13 +89,20 @@ echo $SERVE_PID > $RUN_DIR/serve.pid
 echo "  serve pid=$SERVE_PID"
 
 # Wait for readiness
+SERVE_READY=0
 for i in $(seq 1 90); do
   if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8765/v1/models 2>/dev/null | grep -q "200"; then
     echo "  ready after $((i * 2 / 10)).$((i * 2 % 10))s"
+    SERVE_READY=1
     break
   fi
   sleep 0.2
 done
+if [ "$SERVE_READY" -ne 1 ]; then
+  echo "ERROR: serve never became ready on port 8765; see /tmp/serve-v10.log"
+  tail -20 /tmp/serve-v10.log
+  exit 1
+fi
 echo ""
 
 # Step 5: Eval suite

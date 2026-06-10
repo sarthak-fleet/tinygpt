@@ -13,7 +13,7 @@ Read these in order — the curriculum is designed as a single arc from
 basic math to modern transformer training. Each session is self-contained
 but builds on the last.
 
-- [Curriculum overview](./curriculum.md) — the 7-session plan, what each session covers, what you need before starting.
+- [Curriculum overview](./curriculum.md) — the 8-session plan, what each session covers, what you need before starting.
 - [Session 1 — From a line to a learned line](./session-01-neural-net-basics.md)
 - [Session 2 — Gradient descent](./session-02-gradient-descent.md)
 - [Session 3 — Non-linearities](./session-03-non-linearities.md)

@@ -61,7 +61,7 @@ struct RoadmapView: View {
                           desc: "punctuation + capitalization + code-mode on Whisper output.",
                           status: .queued),
                     .init(icon: "tray.and.arrow.down", name: "RAG layer (#293)",
-                          desc: "mxbai/Qwen3-Embedding + SQLite-vec over Mail/Notes/files/past sessions.",
+                          desc: "Qwen3-Embedding + SQLite-vec over Mail/Notes/files/past sessions.",
                           status: .queued),
                     .init(icon: "wrench.adjustable", name: "Tool-call specialist (#289)",
                           desc: "Pace Skills routing — folded into v10 unless BFCL gap remains.",
