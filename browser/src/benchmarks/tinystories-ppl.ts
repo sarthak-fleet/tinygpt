@@ -80,14 +80,15 @@ export const tinyStoriesPpl: Benchmark = {
     for (const story of holdout.stories) {
       const ids = model.encode(story);
       if (ids.length < 2) continue;
-      // Chunk to context length. For each chunk, score every position
-      // 1..end (position 0's target would be the byte before the start,
-      // which is undefined; the engine just skips it).
+      // Chunk with one-token overlap so every interior byte gets scored
+      // exactly once. Without the overlap, each chunk boundary loses the
+      // transition from the last token of the previous chunk to the first
+      // token of the next chunk.
       const ctx = model.contextLength;
       let storyNll = 0;
       let storyToks = 0;
       for (let chunkStart = 0; chunkStart < ids.length; chunkStart += ctx) {
-        const chunk = ids.slice(chunkStart, Math.min(chunkStart + ctx, ids.length));
+        const chunk = ids.slice(chunkStart, Math.min(chunkStart + ctx + 1, ids.length));
         if (chunk.length < 2) break;
         // Forward returns row-major [T, vocab].
         const logits = await model.forwardLogits(chunk);
