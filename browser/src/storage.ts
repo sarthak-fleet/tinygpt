@@ -17,6 +17,7 @@ export interface RunSnapshot {
   savedAt: string;
   config: unknown;
   lossHistory: { step: number; trainLoss: number; valLoss?: number }[];
+  corpus?: string;
 }
 
 /** Ask the browser to keep our storage across eviction, and report the quota. */

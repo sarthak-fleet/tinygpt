@@ -858,7 +858,12 @@ byId<HTMLButtonElement>("reset").addEventListener("click", () => {
 
   // Clear OPFS-saved model + history.
   void saveState(new Uint8Array(0));
-  void saveRun({ savedAt: new Date().toISOString(), config: DEFAULT_CONFIG, lossHistory: [] });
+  void saveRun({
+    savedAt: new Date().toISOString(),
+    config: DEFAULT_CONFIG,
+    lossHistory: [],
+    corpus: els.corpus.value,
+  });
 
   // Strip query params so a refresh stays clean.
   window.history.replaceState(null, "", window.location.pathname);
@@ -1556,6 +1561,7 @@ function encodeModelFile(config: RunConfig, state: ArrayBuffer): Blob {
     version: MODEL_VERSION,
     savedAt: new Date().toISOString(),
     config,
+    corpus: els.corpus.value,
     manifest: buildManifest(config),
     includesOptimizerState: true, // current WASM export bundles Adam m, v
     stateByteLength: state.byteLength,
@@ -1899,6 +1905,7 @@ async function loadModelFromFile(file: File, label = file.name): Promise<void> {
       sample?: string;
       lossHistory?: { step: number; train: number; val: number | null }[];
       savedAt?: string;
+      corpus?: string;
     };
     if (meta.finalLoss) {
       const trainTxt = meta.finalLoss.train.toFixed(3);
@@ -1943,6 +1950,9 @@ async function loadModelFromFile(file: File, label = file.name): Promise<void> {
     if (meta.sample) {
       typewriteOutput(meta.sample);
     }
+    if (meta.corpus) {
+      els.corpus.value = meta.corpus;
+    }
     byId<HTMLInputElement>("layers").value = String(config.layers);
     const dSel = byId<HTMLSelectElement>("dModel");
     if (!Array.from(dSel.options).some((o) => o.value === String(config.dModel))) {
@@ -1964,10 +1974,15 @@ async function loadModelFromFile(file: File, label = file.name): Promise<void> {
     latestStateConfig = config;
     els.downloadModel.disabled = false;
     els.downloadSafetensors.disabled = false;
-    els.continueBtn.disabled = false;
-    worker.postMessage({ type: "restore", state, config }, [state]);
+    els.continueBtn.disabled = !meta.corpus;
+    worker.postMessage({ type: "restore", state, config, corpus: meta.corpus }, [state]);
     if (!els.modelStatus.classList.contains("ok")) {
-      setModelStatus(`✓ loaded ${label} — ready to sample or continue training`, "ok");
+      setModelStatus(
+        meta.corpus
+          ? `✓ loaded ${label} — ready to sample or continue training`
+          : `✓ loaded ${label} — ready to sample; continue training needs the original corpus`,
+        "ok",
+      );
     }
   } catch (err) {
     setModelStatus(`couldn't load: ${err instanceof Error ? err.message : String(err)}`, "error");
@@ -2617,6 +2632,7 @@ worker.onmessage = (e: MessageEvent<FromWorker>) => {
         savedAt: new Date().toISOString(),
         config: lastConfig ?? readConfig(),
         lossHistory: history,
+        corpus: els.corpus.value,
       });
       latestState = msg.state.slice(0); // copy — the original is now detached after transfer
       latestStateConfig = lastConfig ?? readConfig();
@@ -3234,15 +3250,23 @@ async function init(): Promise<void> {
   }
   if (prev && prevState) {
     lastConfig = prev.config as RunConfig;
+    if (prev.corpus) {
+      els.corpus.value = prev.corpus;
+    }
     const buffer = prevState.buffer as ArrayBuffer;
     // Stash a copy for download before transferring to the worker.
     latestState = buffer.slice(0);
     latestStateConfig = lastConfig;
     els.downloadModel.disabled = false;
     els.downloadSafetensors.disabled = false;
-    els.continueBtn.disabled = false;
+    els.continueBtn.disabled = !prev.corpus;
     const doRestore = () => {
-      worker.postMessage({ type: "restore", state: buffer, config: lastConfig as RunConfig }, [buffer]);
+      worker.postMessage({
+        type: "restore",
+        state: buffer,
+        config: lastConfig as RunConfig,
+        corpus: prev.corpus,
+      }, [buffer]);
       els.status.textContent = "restoring your last model from storage…";
     };
     const ric = (globalThis as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback;
