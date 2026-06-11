@@ -125,9 +125,9 @@ class ByteDataset:
         """Sample a random batch of (x, y) windows. Returns int64 tensors [B, C]."""
         data = self.train if split == "train" else self.val
         max_start = len(data) - context_length - 1
-        assert max_start >= 1, (
-            f"{split} split has {len(data)} tokens — need > context_length+1 "
-            f"({context_length + 1}); use a larger corpus or smaller context"
+        assert max_start >= 0, (
+            f"{split} split has {len(data)} tokens — need at least "
+            f"context_length+1 ({context_length + 1}); use a larger corpus or smaller context"
         )
         starts = torch.randint(0, max_start + 1, (batch_size,), generator=generator)
 
