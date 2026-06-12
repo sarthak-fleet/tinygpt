@@ -15,10 +15,10 @@ SYSP="$TGT/grammars/pace-system-prompt-v11.txt"
 GRAMMAR="$TGT/grammars/pace-fm-response-v11.schema.json"
 
 mkdir -p "$RUN_DIR"
-echo "[1/4] Training Qwen3-4B + clarify-v1 (38 rows, DoRA off, rank 32 alpha 64, 600 steps)..."
+echo "[1/4] Training Qwen3-4B + clarify-v1 (38 rows, DoRA off, rank 16 alpha 32, 200 steps, lr 2e-4)..."
 caffeinate -i "$TINYGPT" sft "$BASE" --data "$DATA" --out "$LORA" \
-  --template chatml --rank 32 --alpha 64 --steps 600 --lr 1e-4 --batch 2 \
-  --no-dora --metal-cache-gb 12 > "$RUN_DIR/train.log" 2>&1
+  --template chatml --rank 16 --alpha 32 --steps 200 --lr 2e-4 --batch 2 \
+  --no-dora --metal-cache-gb 28 > "$RUN_DIR/train.log" 2>&1
 echo "  trained: $LORA"
 
 echo "[2/4] Baking adapter..."

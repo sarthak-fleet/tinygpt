@@ -1,0 +1,5 @@
+USER: reply to the contract email
+ELEMENT: [0] row|100,200|Re: contract draft v2|email
+ELEMENT: [1] row|160,200|Re: contract renewal terms|email
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which contract

@@ -1,0 +1,3 @@
+USER: close figma without saving the file
+EXPECT_INTENT: confirm_destructive
+EXPECT_CONFIRM_TARGET: figma file

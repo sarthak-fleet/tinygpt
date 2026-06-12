@@ -1,0 +1,6 @@
+USER: add to the recipe note
+ELEMENT: [0] note|100,200|Pasta recipes|note
+ELEMENT: [1] note|160,200|Dessert recipes|note
+ELEMENT: [2] note|220,200|Weekend recipes|note
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which recipe note

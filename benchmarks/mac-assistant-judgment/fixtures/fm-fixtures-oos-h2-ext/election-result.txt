@@ -1,0 +1,3 @@
+USER: who won the france election
+EXPECT_INTENT: out_of_scope
+REASON: News/results need the web

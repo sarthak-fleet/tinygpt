@@ -1,0 +1,3 @@
+USER: what's the current pound to euro rate
+EXPECT_INTENT: out_of_scope
+REASON: Live FX rates

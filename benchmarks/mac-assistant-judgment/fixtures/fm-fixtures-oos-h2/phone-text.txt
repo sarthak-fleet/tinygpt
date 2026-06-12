@@ -1,0 +1,3 @@
+USER: text mom from my phone
+EXPECT_INTENT: out_of_scope
+REASON: Controlling phones is out of scope

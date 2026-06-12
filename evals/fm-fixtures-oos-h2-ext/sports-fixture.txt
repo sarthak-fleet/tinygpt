@@ -1,0 +1,3 @@
+USER: when's the next arsenal game
+EXPECT_INTENT: out_of_scope
+REASON: Sports schedule needs the web

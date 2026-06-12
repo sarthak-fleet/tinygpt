@@ -1,0 +1,5 @@
+USER: dm them
+ELEMENT: [0] row|100,200|Priya Singh|dm
+ELEMENT: [1] row|160,200|Priya Patel|dm
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which person

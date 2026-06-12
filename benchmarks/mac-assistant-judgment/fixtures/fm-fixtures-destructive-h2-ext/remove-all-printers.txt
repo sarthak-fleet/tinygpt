@@ -1,0 +1,3 @@
+USER: remove every printer from preferences
+EXPECT_INTENT: confirm_destructive
+EXPECT_CONFIRM_TARGET: printers

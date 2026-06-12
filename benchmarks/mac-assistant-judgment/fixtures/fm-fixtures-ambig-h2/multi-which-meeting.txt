@@ -1,0 +1,6 @@
+USER: move my meeting to friday
+ELEMENT: [0] event|300,100|Standup 9am|daily
+ELEMENT: [1] event|300,150|1:1 with Sam 2pm|weekly
+ELEMENT: [2] event|300,200|Design review 4pm|weekly
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which meeting

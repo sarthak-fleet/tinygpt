@@ -1,0 +1,3 @@
+USER: translate this paragraph into german
+EXPECT_INTENT: out_of_scope
+REASON: Translation is out of scope

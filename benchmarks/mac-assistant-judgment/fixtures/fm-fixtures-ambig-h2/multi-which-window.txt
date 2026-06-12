@@ -1,0 +1,6 @@
+USER: close the window
+ELEMENT: [0] window|400,300|Safari — Apple|web page
+ELEMENT: [1] window|500,400|Notes — Groceries|note
+ELEMENT: [2] window|600,500|Mail — Inbox|mail list
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which window

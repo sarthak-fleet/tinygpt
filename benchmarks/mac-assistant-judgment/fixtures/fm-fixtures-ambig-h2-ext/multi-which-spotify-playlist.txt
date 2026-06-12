@@ -1,0 +1,6 @@
+USER: queue the workout one
+ELEMENT: [0] row|100,200|Morning Workout|playlist
+ELEMENT: [1] row|160,200|Workout Hits|playlist
+ELEMENT: [2] row|220,200|Workout Wind-down|playlist
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which playlist

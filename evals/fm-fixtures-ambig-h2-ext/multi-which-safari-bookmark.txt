@@ -1,0 +1,6 @@
+USER: open the docs page
+ELEMENT: [0] bookmark|100,200|Swift docs|bookmark
+ELEMENT: [1] bookmark|160,200|Mac dev docs|bookmark
+ELEMENT: [2] bookmark|220,200|Cloudflare docs|bookmark
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which docs

@@ -1,0 +1,3 @@
+USER: watch this product page and tell me when the price drops
+EXPECT_INTENT: out_of_scope
+REASON: Background monitoring is out of scope

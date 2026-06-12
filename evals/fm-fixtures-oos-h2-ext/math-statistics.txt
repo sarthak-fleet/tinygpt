@@ -1,0 +1,3 @@
+USER: what's the standard deviation of 4, 6, 8, 10
+EXPECT_INTENT: out_of_scope
+REASON: Math computation out of scope

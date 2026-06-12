@@ -1,0 +1,6 @@
+USER: postpone the design meeting
+ELEMENT: [0] event|100,200|Design crit 10am|meeting
+ELEMENT: [1] event|160,200|Design review 2pm|meeting
+ELEMENT: [2] event|220,200|Design 1:1 4pm|meeting
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which meeting

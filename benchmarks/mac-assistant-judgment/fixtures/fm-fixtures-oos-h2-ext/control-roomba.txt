@@ -1,0 +1,3 @@
+USER: start the roomba
+EXPECT_INTENT: out_of_scope
+REASON: Smart home control out of scope

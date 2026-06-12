@@ -1,0 +1,3 @@
+USER: what's playing at the local theater tonight
+EXPECT_INTENT: out_of_scope
+REASON: Live showtimes need the web

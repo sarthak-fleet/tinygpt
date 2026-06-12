@@ -1,0 +1,3 @@
+USER: put lunch with nadia on my calendar
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: time

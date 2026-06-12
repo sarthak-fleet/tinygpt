@@ -1,0 +1,6 @@
+USER: open that spreadsheet
+ELEMENT: [0] file|100,100|budget-2026.xlsx|spreadsheet
+ELEMENT: [1] file|100,150|forecast-q3.xlsx|spreadsheet
+ELEMENT: [2] file|100,200|invoices.xlsx|spreadsheet
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which spreadsheet

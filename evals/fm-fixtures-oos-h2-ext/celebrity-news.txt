@@ -1,0 +1,3 @@
+USER: any news about taylor swift lately
+EXPECT_INTENT: out_of_scope
+REASON: Celebrity news from the web

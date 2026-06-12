@@ -1,0 +1,3 @@
+USER: is the delta flight to new york on time
+EXPECT_INTENT: out_of_scope
+REASON: Flight status needs the web

@@ -1,0 +1,3 @@
+USER: should i take ibuprofen or paracetamol for this headache
+EXPECT_INTENT: out_of_scope
+REASON: Medical advice is out of scope
