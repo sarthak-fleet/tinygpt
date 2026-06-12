@@ -1,0 +1,17 @@
+{
+  "comment": "Current Pace planner champion + the 4B floor, from the 2026-06-12 drilldown (docs/DRILLDOWN.md). eval_planner.sh compares new candidates against these. Update champion only when a candidate beats it on ALL three dims.",
+  "champion": {
+    "model": "google/gemma-3-12b",
+    "date": "2026-06-12",
+    "ambig": [9, 40],
+    "oos": [49, 60],
+    "destructive": [23, 30]
+  },
+  "floor": {
+    "model": "qwen3-4b-instruct-2507",
+    "date": "2026-06-12",
+    "ambig": [0, 40],
+    "oos": [47, 60],
+    "destructive": [20, 30]
+  }
+}
