@@ -205,6 +205,7 @@ public enum HFModelLoader {
         case unmappedTensor(String)
         case missingTensor(String)
         case shapeMismatch(name: String, expected: [Int], got: [Int])
+        case unsupportedQuantization(String)
 
         public var description: String {
             switch self {
@@ -213,6 +214,7 @@ public enum HFModelLoader {
             case .unmappedTensor(let n): return "HF tensor name '\(n)' has no mapping to our model"
             case .missingTensor(let n): return "expected tensor '\(n)' not present in safetensors"
             case .shapeMismatch(let n, let exp, let got): return "\(n) shape mismatch: model wants \(exp), file has \(got)"
+            case .unsupportedQuantization(let why): return "unsupported quantization: \(why)"
             }
         }
     }
@@ -221,6 +223,11 @@ public enum HFModelLoader {
         public let model: TinyGPTModelHF
         public let config: ModelConfig
         public let hfConfig: HuggingFaceConfig
+        /// Non-nil when the checkpoint was MLX-native quantized
+        /// (`mlx_lm convert -q` output) and loaded onto QuantizedLinear
+        /// modules. fp16/fp32 checkpoints (and GPTQ/AWQ, which dequantise
+        /// to dense at load) report nil.
+        public let quantization: (bits: Int, groupSize: Int)?
     }
 
     /// Load a HF model directory. Throws if architecture isn't supported
@@ -352,6 +359,118 @@ public enum HFModelLoader {
             dequantisedBases.insert(base)
         }
 
+        // MLX-native quantization pass (`mlx_lm convert -q` output / our
+        // own future baked-quantized checkpoints). The format stores each
+        // quantized layer as a packed-uint32 `{base}.weight` plus
+        // `{base}.scales` / `{base}.biases` peers, self-described by a
+        // `quantization` block in config.json ({bits, group_size}, with
+        // optional per-layer dict overrides keyed by module path).
+        //
+        // Unlike GPTQ/AWQ above we do NOT dequantise: each targeted
+        // Linear is swapped for an MLXNN.QuantizedLinear holding the
+        // packed payload directly, so inference runs `quantizedMM` — the
+        // same module type the in-memory `--quantize` path produces. The
+        // swap happens once here in the loader, so every entry point
+        // (sample, eval, serve) gets quantized inference for free.
+        //
+        // Embeddings are the one exception: mlx-swift's QuantizedEmbedding
+        // has no packed-init (its designated init re-quantises a dense
+        // weight), so a quantized embed_tokens is dequantised to dense
+        // fp32 at load. Numerically identical to QuantizedEmbedding's
+        // lookup (which dequantises gathered rows); costs RAM, not
+        // accuracy. Revisit if mlx-swift grows a packed init.
+        var quantGlobal: (bits: Int, groupSize: Int)? = nil
+        var quantOverrides: [String: (bits: Int, groupSize: Int)] = [:]
+        let quantDictRaw = (hfConfig.extras["quantization"] as? [String: Any])
+            ?? (hfConfig.extras["quantization_config"] as? [String: Any])
+        if let q = quantDictRaw {
+            // GPTQ/AWQ checkpoints also carry `quantization_config`
+            // (quant_method "gptq"/"awq") — those are handled by the
+            // dequant passes above. Only an absent or "mlx" method marks
+            // the MLX packed format.
+            let method = (q["quant_method"] as? String) ?? "mlx"
+            if method == "mlx" {
+                let mode = (q["mode"] as? String) ?? "affine"
+                guard mode == "affine" else {
+                    throw LoadError.unsupportedQuantization(
+                        "quantization mode '\(mode)' — only 'affine' is wired up")
+                }
+                if let bits = q["bits"] as? Int {
+                    quantGlobal = (bits, (q["group_size"] as? Int) ?? 64)
+                }
+                for (key, value) in q {
+                    if let d = value as? [String: Any], let b = d["bits"] as? Int {
+                        quantOverrides[key] =
+                            (b, (d["group_size"] as? Int) ?? quantGlobal?.groupSize ?? 64)
+                    }
+                }
+            }
+        }
+
+        var quantModuleSwaps: [(String, Module)] = []   // module path → QuantizedLinear
+        var quantDense: [String: MLXArray] = [:]        // hfName → dequantised dense (embeddings)
+        var quantConsumed: Set<String> = []             // hf tensor names folded into the above
+        if quantGlobal != nil || !quantOverrides.isEmpty {
+            let leafModules = Dictionary(
+                uniqueKeysWithValues: model.leafModules().flattened())
+            for (hfName, src) in sources
+            where src.info.dtype == "U32" && hfName.hasSuffix(".weight") {
+                let base = String(hfName.dropLast(".weight".count))
+                guard let scSrc = sources[base + ".scales"] else { continue }
+                guard let (bits, groupSize) = quantOverrides[base] ?? quantGlobal else {
+                    throw LoadError.unsupportedQuantization(
+                        "\(base) is packed-quantized but config.json's quantization "
+                        + "block carries no bits/group_size for it")
+                }
+                let bSrc = sources[base + ".biases"]
+                let packed = makeMLXArray(
+                    bytes: src.file.tensorData(hfName)!,
+                    dtype: src.info.dtype, shape: src.info.shape)
+                let scales = makeMLXArray(
+                    bytes: scSrc.file.tensorData(base + ".scales")!,
+                    dtype: scSrc.info.dtype, shape: scSrc.info.shape)
+                let qBiases = bSrc.map {
+                    makeMLXArray(bytes: $0.file.tensorData(base + ".biases")!,
+                                 dtype: $0.info.dtype, shape: $0.info.shape)
+                }
+                let path = base.hasPrefix("model.")
+                    ? String(base.dropFirst("model.".count))
+                    : base
+                guard let target = leafModules[path] else {
+                    throw LoadError.unmappedTensor(hfName)
+                }
+                if target is Embedding {
+                    quantDense[hfName] = dequantized(
+                        packed, scales: scales, biases: qBiases,
+                        groupSize: groupSize, bits: bits, dtype: .float32)
+                } else if target is Linear {
+                    // A quantized Linear may still carry a regular fp
+                    // `.bias` sibling (Qwen3 family ships none, but the
+                    // format allows it) — fold it in here because the
+                    // post-swap parameter update can't add a bias to a
+                    // module constructed without one.
+                    var linBias: MLXArray? = nil
+                    if let biasSrc = sources[base + ".bias"] {
+                        linBias = makeMLXArray(
+                            bytes: biasSrc.file.tensorData(base + ".bias")!,
+                            dtype: biasSrc.info.dtype, shape: biasSrc.info.shape)
+                        quantConsumed.insert(base + ".bias")
+                    }
+                    quantModuleSwaps.append((path, QuantizedLinear(
+                        weight: packed, bias: linBias,
+                        scales: scales, biases: qBiases,
+                        groupSize: groupSize, bits: bits)))
+                } else {
+                    throw LoadError.unsupportedQuantization(
+                        "\(hfName) targets a \(type(of: target)) — only Linear "
+                        + "and Embedding layers can be quantized")
+                }
+                quantConsumed.insert(hfName)
+                quantConsumed.insert(base + ".scales")
+                if bSrc != nil { quantConsumed.insert(base + ".biases") }
+            }
+        }
+
         // Build the flat update dict using OUR HFModel's parameter names.
         // TinyGPTModelHF's @ModuleInfo keys are HF-native ("embed_tokens",
         // "layers", "norm", "self_attn", "input_layernorm" …) so the only
@@ -363,6 +482,10 @@ public enum HFModelLoader {
         // in `dequantised`.
         let quantSuffixes = [".qweight", ".scales", ".qzeros", ".g_idx"]
         for (hfName, src) in sources {
+            // Skip tensors consumed by the MLX-native quantized pass —
+            // they live inside the swapped QuantizedLinear modules (or
+            // in quantDense for embeddings) already.
+            if quantConsumed.contains(hfName) { continue }
             // Skip quartet members that have been folded into a dense
             // .weight by the dequant pass.
             let base: String? = quantSuffixes.first(where: { hfName.hasSuffix($0) })
@@ -393,17 +516,38 @@ public enum HFModelLoader {
                 : hfName
             updates[key] = arr
         }
+        // Dequantised dense embeddings from the MLX-native pass — same
+        // prefix-stripping rule.
+        for (hfName, arr) in quantDense {
+            let key = hfName.hasPrefix("model.")
+                ? String(hfName.dropFirst("model.".count))
+                : hfName
+            updates[key] = arr
+        }
+
+        // Swap quantized Linears in BEFORE building the parameter tree:
+        // buildNested walks model.parameters(), and the swapped modules
+        // already hold their packed weight/scales/biases (constructed
+        // above from the loaded arrays), so the parameter update just
+        // leaves them untouched.
+        if !quantModuleSwaps.isEmpty {
+            model.update(modules: ModuleChildren.unflattened(quantModuleSwaps))
+        }
 
         // Apply the parameter updates to the model.
         let nested = buildNested(updates, model: model)
         try model.update(parameters: nested, verify: [])
 
-        return LoadResult(model: model, config: cfg, hfConfig: hfConfig)
+        let loadedQuant: (bits: Int, groupSize: Int)? =
+            quantConsumed.isEmpty ? nil : quantGlobal
+        return LoadResult(model: model, config: cfg, hfConfig: hfConfig,
+                          quantization: loadedQuant)
     }
 
     /// Construct an MLXArray from raw bytes + dtype + shape. Supports
     /// the dtypes HF actually emits: F32, F16, BF16, I8, I32. Up-converts
-    /// everything to fp32 for downstream training/sampling.
+    /// everything to fp32 for downstream training/sampling — except U32,
+    /// which is the packed MLX-quantized payload and stays uint32.
     private static func makeMLXArray(bytes: Data, dtype: String, shape: [Int]) -> MLXArray {
         let n = shape.reduce(1, *)
         switch dtype {
@@ -438,6 +582,15 @@ public enum HFModelLoader {
                 out[i] = Float(bitPattern: bits)
             }
             return MLXArray(out, shape)
+        case "U32":
+            // Packed MLX-quantized payload (8× int4 or 4× int8 per
+            // element). Stays uint32 — QuantizedLinear consumes it as-is.
+            let u32 = bytes.withUnsafeBytes { ptr -> [UInt32] in
+                Array(UnsafeBufferPointer<UInt32>(
+                    start: ptr.baseAddress?.assumingMemoryBound(to: UInt32.self),
+                    count: n))
+            }
+            return MLXArray(u32, shape)
         default:
             fatalError("unsupported HF safetensors dtype: \(dtype)")
         }
