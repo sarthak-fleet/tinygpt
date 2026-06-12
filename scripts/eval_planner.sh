@@ -37,6 +37,12 @@ if [ "$loaded" -ne 1 ]; then
 fi
 
 echo "[eval-planner] running 3 suites (n=130) as run-tag '$TAG'..."
-bash "$TGT/scripts/eval_combined.sh" "$TAG" "$URL" "$MODEL" "$SYSP" "$TAG"
+# Clear any previous run under this tag — a partial/aborted earlier run
+# must not survive to be misread as fresh results by the report.
+rm -rf "$HOME/.cache/tinygpt/runs/h2-combined-$TAG"
+if ! bash "$TGT/scripts/eval_combined.sh" "$TAG" "$URL" "$MODEL" "$SYSP" "$TAG"; then
+  echo "[eval-planner] eval aborted for $MODEL — no verdict (NOT a 0% score)." >&2
+  exit 1
+fi
 
 python3 "$TGT/scripts/eval_planner_report.py" "$TAG"

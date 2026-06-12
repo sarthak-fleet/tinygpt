@@ -85,6 +85,32 @@ JIT-loads the model, runs all three suites (n=130), prints the table vs
 the stored champion (`evals/planner-champion.json`) with a swap/no-swap
 verdict. ~30 min for a 12B on M5 Pro.
 
+## Challenger round — 2026-06-12 evening (first eval-planner outing)
+
+Same-day test of the post-drill model generation, run via
+`scripts/eval_planner.sh`:
+
+| Challenger | ambig | oos | destructive | verdict |
+|---|---|---|---|---|
+| Gemma-4-12B Unified (qat) | — | — | — | **blocked**: LM Studio MLX engine lacks `gemma4_unified` (mlx-engine#301); no GGUF published. Weights on disk; re-try each LM Studio update |
+| Qwen3.5-9B (no-think) | 18% | **97%** | 63% | champion stands, but 97% oos is best-in-matrix (beats Apple FM's 95%), ~1.8s/turn, 6 GB |
+| Qwen3.5-4B (no-think) | 15% | 55% | 70% | loses all dims; ambig 15% vs old floor's 0% shows gen-3.5 clarify emergence, but oos regressed hard |
+
+**Qwen3.5 thinking trap** (cost ~3 wasted hours): the small Qwen3.5
+models think by default *under LM Studio's template* with unbounded
+traces (>1024 tok on "open music"); content arrives empty and a naive
+eval scores a fake 0%. LM Studio's REST layer silently drops
+`chat_template_kwargs.enable_thinking`
+([bug #1559](https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1559)).
+Working fix: assistant-prefill `{"role":"assistant","content":"<think></think>\n"}` —
+wired into the scorer as `EVAL_NO_THINK=1`. 25.5s/turn → 1.0s/turn.
+
+**Harness hardening earned along the way**: `EVAL_MAX_TOKENS` env;
+fail-fast abort after 5 consecutive transport failures (dead endpoint ≠
+0% score); eval_planner clears its run dir and refuses to print a
+verdict from an aborted run. Operational rule, twice confirmed: never
+run `lms` commands while an eval is in flight — one server, one client.
+
 ## What stays open
 
 - **Ambig is the unsolved dimension.** Best score across 12 configs is

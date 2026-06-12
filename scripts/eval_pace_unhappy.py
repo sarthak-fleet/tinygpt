@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -124,8 +125,24 @@ def query_serve(url: str, model_id: str, sys_prompt: str, fx: dict,
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": format_user(fx)},
         ],
-        "temperature": 0.0, "max_tokens": 300, "stream": False,
+        # EVAL_MAX_TOKENS: bump to >=1024 for thinking-by-default models
+        # (Qwen3.5 etc.) whose reasoning otherwise eats the whole budget
+        # and yields empty content. Default stays 300 so historical runs
+        # remain comparable.
+        "temperature": 0.0,
+        "max_tokens": int(os.environ.get("EVAL_MAX_TOKENS", "300")),
+        "stream": False,
     }
+    if os.environ.get("EVAL_NO_THINK") == "1":
+        # Thinking-by-default models (Qwen3.5): disable the reasoning
+        # phase — this is the latency-viable config a voice planner
+        # would actually ship with. LM Studio's REST layer drops
+        # chat_template_kwargs (lmstudio-bug-tracker#1559), so use the
+        # assistant-prefill workaround: an empty think block makes the
+        # template treat reasoning as already finished.
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+        body["messages"] = body["messages"] + [
+            {"role": "assistant", "content": "<think></think>\n"}]
     req = urllib.request.Request(
         url, data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"}, method="POST",
@@ -324,6 +341,11 @@ def run(fixtures_dir: Path, serve_url: str | None, model_id: str,
 
     passed, failed = 0, 0
     rows = []
+    # Fail fast on a dead endpoint: N consecutive transport failures means
+    # the model/server is gone (the "LM Studio 1ms-failure trap") — abort
+    # with a hard error instead of scoring a fake 0%.
+    consecutive_transport_failures = 0
+    MAX_CONSECUTIVE_TRANSPORT_FAILURES = 5
     for fx_path in fxs:
         fx = parse_fixture(fx_path.read_text())
         if not fx["expect_intent"]:
@@ -338,6 +360,15 @@ def run(fixtures_dir: Path, serve_url: str | None, model_id: str,
                 err = str(e)[:80]
             else:
                 err = None
+            if content is None:
+                consecutive_transport_failures += 1
+                if consecutive_transport_failures >= MAX_CONSECUTIVE_TRANSPORT_FAILURES:
+                    sys.exit(
+                        f"ABORT: {consecutive_transport_failures} consecutive empty/"
+                        f"failed responses from {model_id} — endpoint is dead, not "
+                        f"scoring a fake 0%. Last error: {err}")
+            else:
+                consecutive_transport_failures = 0
             ok, reasons = score(fx, content, strict=strict,
                                 topic_pool=topic_pool)
         else:
