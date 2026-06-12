@@ -36,7 +36,7 @@ final class ConstrainedGenTests: XCTestCase {
         """
         let data = json.data(using: .utf8)!
         let node = try JSONSchemaNode.from(data: data)
-        if case .string(let e) = node {
+        if case .string(let e, _, _) = node {
             XCTAssertEqual(e, ["a", "b", "c"])
         } else {
             XCTFail("expected enum string, got \(node)")
@@ -78,7 +78,7 @@ final class ConstrainedGenTests: XCTestCase {
     }
 
     func test_fsmStringAllowsWhitespaceInContent() {
-        let node: JSONSchemaNode = .string(enumValues: nil)
+        let node: JSONSchemaNode = .string(enumValues: nil, minLength: nil, maxLength: nil)
         let fsm = JSONSchemaFSM(rootSchema: node)
         XCTAssertTrue(fsm.acceptString("\"hello world\""))
         XCTAssertTrue(fsm.isComplete)
