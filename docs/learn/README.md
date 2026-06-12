@@ -30,6 +30,7 @@ current LLMs. They're for someone who knows the basics and wants the
 "why" behind specific designs (RoPE, GQA, MoE, etc.).
 
 - [LLM mechanics fundamentals](./llm-mechanics-fundamentals.md) — RoPE, GQA, attention variants, MoE, expert routing
+- [Speech & systems topics](./speech-and-systems-topics.md) — voice-pipeline latency, WER, speech-to-speech, fine-tune debugging, feature selection, queues vs websockets, FSDP2 — each mapped to where this project does it
 - [Qwen3-VL mRoPE + DeepStack](./qwen3-vl-mrope-deepstack.md) — vision-language attention specifics; relevant to Pace's VLM pillar
 - [App Intents comparison](./app-intents-comparison.md) — how Pace's action surface relates to macOS App Intents
 - [External references](./external-references.md) — papers, blog posts, code-base reading list
