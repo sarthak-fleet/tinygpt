@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "note": "Tiny fixture gallery for quickstart-smoke.sh — not a real published manifest.",
+  "models": [
+    {
+      "id": "qwen3-0.6b-it",
+      "name": "Qwen3 0.6B Instruct",
+      "file": "qwen3-0.6b-it.safetensors",
+      "kind": "mac-safetensors-hf",
+      "param_count": 600000000,
+      "tags": ["chat", "instruct"]
+    },
+    {
+      "id": "qwen3-4b-tool",
+      "name": "Qwen3 4B (tool-tuned)",
+      "file": "qwen3-4b-tool.safetensors",
+      "kind": "mac-safetensors-hf",
+      "param_count": 4000000000,
+      "tags": ["tool", "agent", "function-calling"]
+    },
+    {
+      "id": "browser-toy",
+      "name": "Browser toy (not fine-tunable)",
+      "file": "browser-toy.bin",
+      "kind": "browser-bin",
+      "tags": ["chat"]
+    }
+  ]
+}
