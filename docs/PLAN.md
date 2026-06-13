@@ -424,6 +424,13 @@ Both fall out for free if E0 + E8 are designed in, not retrofitted.
 
 - ⬜ **B30. Prompt reasoning-depth classifier** — `tinygpt reasoning-classify` labels prompts as {single-hop, multi-hop, comparison, other}. Feeds B29's mix-balancing + the leaderboard's per-category breakdown. Bag-of-trigram softmax-4, factored from B10's classifier. PRD: `docs/prds/B30-prompt-reasoning-classifier.md`.
 
+**Market-landscape positioning (added 2026-06-13 — see `docs/sessions/2026-06-13-market-landscape-mac-first.md`):**
+
+The competitive scan found the whole field monetizes the cost a Mac-first tool zeroes out (cloud GPU rent / trace ingestion) and is consolidating into infra + frontier-lab acquirers. Three whitespaces: Mac-first *training* as a product (B6 + B31), eval+interp+local fused (already shipped — the moat), and academic agent benchmarks as a local CI gate (B32). These two items reframe shipped infra as product surfaces.
+
+- ⬜ **B32. `tinygpt eval` as a CI / pre-commit gate** — `tinygpt eval-gate` runs declared suites vs a baseline and exits non-zero on regression; GitHub Action + pre-commit recipe. Reframes the shipped E1/E2/E3/E5 harnesses as a developer-workflow primitive that never leaves the device. Near-zero new model code. PRD: `docs/prds/B32-eval-ci-gate.md`.
+- ⬜ **B33. `tinygpt quickstart` — data → trained specialist in one command** — CLI wizard: inspect data → auto-pick base from gallery → infer recipe → train → eval vs base → drop into chat. The CLI sibling of B6's GUI Factory tab; closes the gap between "MLX-LM can technically do this" and "a non-ML-engineer actually does it." PRD: `docs/prds/B33-laptop-finetune-onboarding.md`.
+
 **External-leaderboard arc (added 2026-06-05 — first public competitive submission target):**
 
 - ⬜ **B27. Mac SLM agentic leaderboard v0** (scaffolding shipped 2026-06-13) — one publication-shape artifact at `docs/research/mac_slm_leaderboard_v0.md` cross-cutting BFCL + τ-bench + Pace unhappy-paths + decode tok/s + peak RSS. `scripts/eval_slm_full.sh <model-id> <tag>` runs all four suites against one LM Studio model; `scripts/build_slm_leaderboard.py --manifest …` rebuilds the table. Composite = accuracy × speed × cost, citing `score_formula.py` (DRY — no re-derivation in the doc). **Status flips to ✅ when ≥2 models land on the board** so the table actually compares something. First-model target: gemma-3-12b-it (Run 5 in `docs/research/mac_decode_baseline_m5pro.md`).
