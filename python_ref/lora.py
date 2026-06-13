@@ -238,8 +238,16 @@ def apply_adapter(model: nn.Module, adapter_dir: str | Path,
     a = meta["adapter"]
     inject_lora(model, a["target_modules"], a["rank"], a["alpha"], a["dropout"])
     blob = torch.load(adapter_dir / "adapter.pt", map_location=device, weights_only=False)
-    missing, unexpected = model.load_state_dict(blob["lora"], strict=False)
+    expected = {
+        name for name, p in model.named_parameters()
+        if name.endswith(LORA_PARAM_SUFFIXES)
+    }
+    actual = set(blob["lora"])
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    assert not missing, f"missing adapter keys: {missing}"
     assert not unexpected, f"unexpected adapter keys: {unexpected}"
+    model.load_state_dict(blob["lora"], strict=False)
     return meta
 
 
