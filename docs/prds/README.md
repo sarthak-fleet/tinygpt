@@ -89,6 +89,12 @@ in `Sources/TinyGPT/TinyGPT.swift`) after reviewing your PR.
 | [B29 trace-to-training-data](B29-trace-to-training-data.md) | `.atraj` → SFT/DPO JSONL via dedupe + tool-echo-drop + LLM-judge | ~2d |
 | [B30 prompt-reasoning-classifier](B30-prompt-reasoning-classifier.md) | classify training prompts by reasoning depth; feeds B29 + leaderboard | ~half-day |
 
+### Distribution + project pinning
+
+| PRD | What | Effort |
+|---|---|---|
+| [B31 gallery-and-project-pins](B31-gallery-and-project-pins.md) | unified browser+Mac gallery manifest + `tinygpt.project.json` per-project model/dataset pins; flips the trace-loop dividend toward project-side serving | scaffolding shipped, CLI extensions pending |
+
 ### Polish + harness (Tier C)
 
 | PRD | What | Effort |

@@ -420,6 +420,8 @@ Both fall out for free if E0 + E8 are designed in, not retrofitted.
 
 - ⬜ **B29. Trace-to-training-data pipeline** — `tinygpt traces-to-data <atraj-dir> --task <t> --out <jsonl>` consumes B22 `.atraj` rollouts, runs shipped dedupe + tool-echo-drop + LLM-pivot-judge (E7) filters, emits SFT/DPO training JSONL. The bridge between B22 (substrate) and A1 (training). External observability ingest (Braintrust / Langfuse) is V2. PRD: `docs/prds/B29-trace-to-training-data.md`.
 
+- 🟡 **B31. Unified model gallery + project-level model pins** (scaffolding shipped 2026-06-13) — extends `browser/src/gallery-schema.ts` with a `kind` discriminator (`browser-bin` / `mac-tinygpt` / `mac-adapter` / `mac-gguf` / `mac-safetensors-hf`) so one published manifest covers browser + Mac models. New `tinygpt.project.json` per-project pin file (`package.json`-style). Swift mirrors + 11 unit tests pass in this PR (`GalleryManifest.swift`, `ProjectManifest.swift`); `tinygpt pull` + `tinygpt validate` CLI extensions + browser UI filter remain. PRD: `docs/prds/B31-gallery-and-project-pins.md`. **The trace-loop dividend:** project pins flip the Castform asymmetry — pinning + serving locally means the project owner naturally accumulates `.atraj` traces (B22) that B29 turns into training data. The substrate-refinement cycle closes here.
+
 - ⬜ **B30. Prompt reasoning-depth classifier** — `tinygpt reasoning-classify` labels prompts as {single-hop, multi-hop, comparison, other}. Feeds B29's mix-balancing + the leaderboard's per-category breakdown. Bag-of-trigram softmax-4, factored from B10's classifier. PRD: `docs/prds/B30-prompt-reasoning-classifier.md`.
 
 **External-leaderboard arc (added 2026-06-05 — first public competitive submission target):**

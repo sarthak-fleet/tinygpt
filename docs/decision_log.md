@@ -232,3 +232,14 @@ These are not the unknowns. These are the known unknowns that have a decision wa
 ---
 
 These three decisions reshape the next session: it's not a launch session. It's a perf-quest session. The gallery, the HN post, and the deploy all wait on it.
+
+---
+
+### Decision 21: Commission a brand-ambassador cartoon — pace + tinygpt-the-trainer
+**When:** 2026-06-13, during the castform.com market-scan thread.
+**Context:** Castform's landing page leads with a mascot character; the visual identity makes their fine-tune SaaS feel like a real product, not a side project. TinyGPT's current identity is the type word-mark only. With A1 specialist about to ship and B6 (Mac app Factory tab) on the roadmap, the platform needs a face.
+**The trigger:** Sarthak noting the castform mascot and asking whether we should have one.
+**The call:** Yes, two characters — distinct on purpose. **Pace-the-companion** is the menu-bar voice agent's caricature (the *product* face); **tinygpt-the-trainer** is the toolkit's caricature (the *platform* face). Two characters communicate the platform-vs-product distinction the framing already wants.
+**Why it's right:** A single mascot would conflate the toolkit and the specialist that runs on it — exactly the wrong message for a "Mac platform for individuals to build specialists" pitch. The distinction *is* the product story; the visual identity should mirror it. Pace has narrative shape ("voice companion in the menu bar") that's easy to caricature; tinygpt is the workshop, which is the harder design problem (the trainer character has to feel like infrastructure, not a personality competing with pace).
+**What it ships:** Not a feature, no PRD. Filed as an identity item. Next step is commissioning the art — that work is out-of-scope for the code agent; needs a human designer. Once landed, the illustrations show up on the landing hero, the docs site nav, and the Mac app's About panel.
+
