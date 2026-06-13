@@ -1,3 +1,42 @@
 {
-  "rows": []
+  "rows": [
+    {
+      "label": "google/gemma-3-12b",
+      "params": "12B",
+      "unhappy": {
+        "ambig": 27.5,
+        "oos": 85.0,
+        "destructive": 80.0,
+        "avg": 64.16666666666667
+      },
+      "bfcl": null,
+      "tau": null,
+      "decode": {
+        "ttft_p99": 187.8559160104487,
+        "decode_tok_s": 36.261295802098736,
+        "peak_rss_mb": 9097.296875
+      },
+      "accuracy": 64.16666666666667,
+      "composite": 0.10476117945397495
+    },
+    {
+      "label": "google/gemma-3-12b (v11-compact)",
+      "params": "12B",
+      "unhappy": {
+        "ambig": 17.5,
+        "oos": 78.33333333333333,
+        "destructive": 76.66666666666667,
+        "avg": 57.5
+      },
+      "bfcl": null,
+      "tau": null,
+      "decode": {
+        "ttft_p99": 187.8559160104487,
+        "decode_tok_s": 36.261295802098736,
+        "peak_rss_mb": 9097.296875
+      },
+      "accuracy": 57.5,
+      "composite": 0.09387690106914637
+    }
+  ]
 }

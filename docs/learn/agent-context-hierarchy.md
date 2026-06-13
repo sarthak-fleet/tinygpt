@@ -50,12 +50,37 @@ instance-specific detail (quoted strings, numbers) so identical failure
 modes group, but keep intent-mismatch reasons verbatim because the
 confusion direction (`got X, expected Y`) is the signal.
 
-### 2. L1 bloat biases behavior — experiment filed
+### 2. L1 bloat biases behavior — REFUTED on this surface (2026-06-13)
 
-If the always-resident action registry distorts non-action intents
-(OOS, ambig), a compact name-only index should *improve* unhappy-path
-dims. Filed as **E9** in [PLAN.md](../PLAN.md) — half-day A/B with the
-existing harness. The v9-compose regression is the prior evidence.
+Ran the A/B on google/gemma-3-12b across the n=130 unhappy drill.
+v11-compact (name-only action index) **regressed every dim**: ambig
+-10pp, oos -6.7pp, destructive -3.3pp vs v11 with full schemas. Steal
+#2's prediction was *strictly wrong* here. See PLAN.md E9 for the
+numbers and the post-hoc interpretation.
+
+What the negative result says about the framing, not just this run:
+
+- **Schemas are evidence, not just instructions.** At 12B/12-action
+  scale, the per-action `args:` lines plus example calls help the
+  model decide what pace *can't* do as much as what it *can*. Strip
+  them and "play a tune" stops sharply rejecting and starts
+  hallucinating into the nearest action.
+- **L1 budget is small here.** The full v11 prompt is ~2K tokens; a
+  12B model doesn't degrade meaningfully under that load. The
+  essay's "L1 bloat" effect is real at much larger catalogs (the
+  essay was written for a much bigger action surface) — the
+  mistake was assuming the effect scales down.
+- **The compact prompt isn't dead.** It's archived at
+  `grammars/pace-system-prompt-v11-compact.txt` for re-test if the
+  action surface grows past ~50 entries (e.g. App Intents catalog,
+  generic MCP front-door). At that scale the L1 budget argument may
+  flip back.
+
+The triage (Steal #1) was still the right tool — the A/B diff fits in
+one screen because the failure-pattern view tells you *which* intent
+shifts, not just that something moved. That's how this turned into a
+decisive negative result in 30 minutes instead of an inconclusive
+"the numbers moved a little, hard to tell."
 
 ### 3. Deferred tool schemas — feature filed
 

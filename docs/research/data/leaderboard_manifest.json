@@ -1,4 +1,19 @@
 {
   "_doc": "Manifest for scripts/build_slm_leaderboard.py — one entry per model. Required: label, unhappy_tag OR (bfcl_json AND tau_json AND decode_json). 'params' is display-only. Generate the per-model artifacts via `scripts/eval_slm_full.sh <model-id> <tag>` then append the suggested entry it prints.",
-  "rows": []
+  "rows": [
+    {
+      "label": "google/gemma-3-12b",
+      "params": "12B",
+      "unhappy_tag": "h2-gemma12b-e9",
+      "decode_json": "docs/research/data/decode-gemma-12b.json",
+      "_note": "v11 (full schemas) prompt. BFCL + τ-bench not run yet; columns render '—'."
+    },
+    {
+      "label": "google/gemma-3-12b (v11-compact)",
+      "params": "12B",
+      "unhappy_tag": "h2-gemma12b-e9-compact",
+      "decode_json": "docs/research/data/decode-gemma-12b.json",
+      "_note": "E9 A/B candidate-B — kept on the board as the negative-result anchor for the L1 bloat hypothesis. Same model, different system prompt."
+    }
+  ]
 }

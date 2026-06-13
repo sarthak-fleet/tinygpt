@@ -74,35 +74,46 @@ Workload: prompt=64, gen=64, n=10, warm=2
 | prefill tok/s | 14359.44 | 15048.52 | 15048.52 |
 | peak RSS (MB) | 687.0 | 687.2 | 687.2 |
 
-### Run 5 — gemma-3-12b-it (LM Studio, MLX, ~12B params) — PENDING
-
-Different shape from the from-scratch runs above: external base model served via
-LM Studio + MLX backend. Sets the upper edge of the leaderboard for the v0 SLM
-agentic table (`docs/research/mac_slm_leaderboard_v0.md`). Workload:
-prompt≈64 (default system + user template in `bench_decode.py`), gen=128,
-n=20, warm=3.
-
-Invocation:
-
-```
-lms server start
-lms load google/gemma-3-12b-it --identifier gemma-3-12b-it
-PID=$(pgrep -f 'lmlink-connector.*metal' | head -1)
-python3 scripts/bench_decode.py \
-  --url http://127.0.0.1:1234/v1/chat/completions \
-  --model google/gemma-3-12b-it --rss-pid "$PID" \
-  --jsonl docs/research/data/gemma-12b-decode.jsonl
-```
+### Run 5 — google/gemma-3-12b (LM Studio, MLX, 12B params, 8.07 GB on disk)
+Workload: prompt≈64 (default system+user template in `bench_decode.py`),
+gen=128 max (model stops at ~47 tokens — task is "three sentences"), n=20,
+warm=1. M5 Pro, macOS 26.5, gemma3 MLX runtime. RSS polled on the LM
+Studio inference worker (a node process; the lmlink-connector subprocess
+holds only the IPC bridge, ~38 MB — not the model).
 
 | metric | median | p95 | p99 |
 |---|---|---|---|
-| TTFT (ms) | TBD | TBD | TBD |
-| ITL (ms) | TBD | TBD | TBD |
-| decode tok/s | TBD | TBD | TBD |
-| peak RSS (MB) | TBD | TBD | TBD |
+| TTFT (ms) | 184.0 | 187.7 | 187.9 |
+| ITL (ms) | 28.5 | 85.1 | 90.9 |
+| decode tok/s | 36.3 | 36.7 | 36.9 |
+| peak RSS (MB) | 9097 | 9097 | 9097 |
 
-Paste numbers from `bench_decode.py`'s stdout JSON when the run completes;
-the `--jsonl` row is the input to the SLM leaderboard aggregator.
+Reproduce:
+
+```
+lms load google/gemma-3-12b --identifier google/gemma-3-12b
+WORKER=$(ps -axo pid,rss,comm | awk '/lmstudio.*node/ && $2>1000000 {print $1; exit}')
+python3 scripts/bench_decode.py \
+  --url http://127.0.0.1:1234/v1/chat/completions \
+  --model google/gemma-3-12b --rss-pid "$WORKER" \
+  --jsonl docs/research/data/gemma-12b-decode.jsonl \
+  > docs/research/data/decode-gemma-12b.json
+```
+
+**Takeaways (verified against this row, not the from-scratch ones above):**
+
+- **TTFT 184 ms p99 is 30× the from-scratch flagship's 5.83 ms** —
+  Gemma-12B at this scale spends most of its TTFT in the model's
+  per-token compute, not Mac/MLX overhead. The realtime <50 ms TTFT
+  target is broken here; expect 1–2 visible "thinking" beats at the
+  start of every reply.
+- **Decode tok/s 36 < the 50 tok/s realtime floor** that the SLM
+  leaderboard composite uses (`scripts/score_formula.py`). A
+  user-facing word every ~28 ms is on the lower edge of "feels
+  realtime" — usable but visibly slower than smaller models.
+- **9.1 GB resident** for a 12B-Q4-class model: leaves ~38 GB for
+  everything else on a 48 GB Mac. Fine for development, tight if a
+  second model is loaded for cascade/cloud-escalate routing.
 
 ## Implications for the cider decision
 

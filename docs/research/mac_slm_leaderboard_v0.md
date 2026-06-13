@@ -50,7 +50,10 @@ python3 scripts/build_slm_leaderboard.py \
 
 <!-- TABLE START -->
 
-(no rows yet — run `eval_slm_full.sh` against a model and re-run `build_slm_leaderboard.py`.)
+| rank | model | params | decode tok/s | TTFT p99 (ms) | RSS p99 (MB) | BFCL avg | τ-bench avg | unhappy avg | composite |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | google/gemma-3-12b | 12B | 36.3 | 187.9 | 9097 | — | — | 64.2 | 0.105 |
+| 2 | google/gemma-3-12b (v11-compact) | 12B | 36.3 | 187.9 | 9097 | — | — | 57.5 | 0.094 |
 
 <!-- TABLE END -->
 
