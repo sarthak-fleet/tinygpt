@@ -1,0 +1,3 @@
+{"messages":[{"role":"user","content":"What's 2+2?"},{"role":"assistant","content":"4"}]}
+{"messages":[{"role":"user","content":"Capital of France?"},{"role":"assistant","content":"Paris"}]}
+{"messages":[{"role":"user","content":"Say hi"},{"role":"assistant","content":"Hi there!"}]}

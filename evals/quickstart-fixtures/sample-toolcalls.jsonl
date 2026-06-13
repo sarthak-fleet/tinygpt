@@ -1,0 +1,2 @@
+{"tools":[{"name":"get_weather"}],"messages":[{"role":"user","content":"weather in SF?"},{"role":"assistant","tool_calls":[{"function":{"name":"get_weather","arguments":"{\"city\":\"SF\"}"}}]}]}
+{"tools":[{"name":"get_time"}],"messages":[{"role":"user","content":"what time is it?"},{"role":"assistant","tool_calls":[{"function":{"name":"get_time","arguments":"{}"}}]}]}
