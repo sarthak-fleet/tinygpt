@@ -27,12 +27,14 @@ def main():
     run_dir = Path.home() / ".cache" / "tinygpt" / "runs" / f"h2-combined-{args.run_tag}"
 
     candidate = {}
+    patterns = {}
     for suite in SUITES:
         f = run_dir / f"{suite}.json"
         if not f.exists():
             sys.exit(f"missing result: {f} — did the eval finish?")
         d = json.loads(f.read_text())
         candidate[suite] = (d["passed"], d["total"])
+        patterns[suite] = d.get("failure_patterns", [])
 
     champ, floor = base["champion"], base["floor"]
     name_w = max(len(args.run_tag), len(champ["model"]), len(floor["model"]), 5) + 2
@@ -60,6 +62,20 @@ def main():
         if delta >= 0:
             wins.append(suite)
         print(f"  {suite:<12} {mark}{delta:5.1f}pp vs champion  ({verdict})")
+
+    # Triage: don't make the reader mine 130 raw rows — lead with the
+    # grouped failure modes (written by eval_pace_unhappy.py since 2026-06-12;
+    # absent on older runs).
+    if any(patterns.values()):
+        print("--- candidate failure patterns (top 3 per suite) ---")
+        for suite in SUITES:
+            for p in patterns[suite][:3]:
+                print(f"  {suite:<12} {p['count']:>3}×  {p['pattern']}"
+                      f"  (e.g. {p['fixtures'][0]})")
+            rest = patterns[suite][3:]
+            if rest:
+                print(f"  {suite:<12}      … and {sum(p['count'] for p in rest)}"
+                      f" more across {len(rest)} patterns")
 
     print()
     if len(wins) == len(SUITES) and any(

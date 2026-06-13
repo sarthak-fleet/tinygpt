@@ -33,6 +33,7 @@ current LLMs. They're for someone who knows the basics and wants the
 - [Speech & systems topics](./speech-and-systems-topics.md) — voice-pipeline latency, WER, speech-to-speech, fine-tune debugging, feature selection, queues vs websockets, FSDP2 — each mapped to where this project does it
 - [Qwen3-VL mRoPE + DeepStack](./qwen3-vl-mrope-deepstack.md) — vision-language attention specifics; relevant to Pace's VLM pillar
 - [App Intents comparison](./app-intents-comparison.md) — how Pace's action surface relates to macOS App Intents
+- [Agent context as a memory hierarchy](./agent-context-hierarchy.md) — the L1/L2/L3 framing for agent context engineering, and the steals it produced (eval failure triage, E9 prompt-tiering A/B, B26 deferred tools)
 - [External references](./external-references.md) — papers, blog posts, code-base reading list
 
 ## I want session-specific decisions + project state

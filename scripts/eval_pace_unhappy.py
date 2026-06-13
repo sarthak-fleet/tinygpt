@@ -56,6 +56,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -116,7 +117,7 @@ def format_user(fx: dict) -> str:
 
 # ----- model query ----------------------------------------------------------
 def query_serve(url: str, model_id: str, sys_prompt: str, fx: dict,
-                timeout: int = 180) -> str:
+                timeout: int = 180) -> tuple[str, float, int]:
     """Call serve. No grammar constraint — we WANT to see whether the
     model spontaneously emits the right intent field."""
     body = {
@@ -147,8 +148,15 @@ def query_serve(url: str, model_id: str, sys_prompt: str, fx: dict,
         url, data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"}, method="POST",
     )
+    t0 = time.monotonic()
     r = urllib.request.urlopen(req, timeout=timeout).read()
-    return json.loads(r)["choices"][0]["message"]["content"]
+    dt_ms = (time.monotonic() - t0) * 1000.0
+    payload = json.loads(r)
+    content = payload["choices"][0]["message"]["content"]
+    # output token count if the server reports it (LM Studio + tinygpt serve
+    # both do); else fall back to the OpenAI-style usage block.
+    out_toks = (payload.get("usage") or {}).get("completion_tokens") or 0
+    return content, dt_ms, int(out_toks)
 
 
 def extract_json(content: str) -> dict | None:
@@ -319,6 +327,34 @@ def score(fx: dict, response: str | None, strict: bool = False,
     return True, []
 
 
+def reason_pattern(reason: str) -> str:
+    """Collapse instance-specific detail so identical failure modes group.
+
+    Intent mismatches stay verbatim — the confusion direction (got X,
+    expected Y) is the signal. Everything else gets quoted strings,
+    bracketed lists, and numbers replaced with placeholders.
+    """
+    if reason.startswith("intent="):
+        return reason
+    r = re.sub(r"\[[^\]]*\]", "[…]", reason)
+    r = re.sub(r"'[^']*'", "'…'", r)
+    r = re.sub(r'"[^"]*"', "'…'", r)
+    r = re.sub(r"\d+(?:\.\d+)?", "N", r)
+    return r
+
+
+def failure_patterns(rows: list[dict]) -> list[dict]:
+    """Group failed rows by normalized first reason, most frequent first."""
+    groups: dict[str, list[str]] = {}
+    for row in rows:
+        if row["ok"]:
+            continue
+        key = reason_pattern(row["reasons"][0]) if row["reasons"] else "(no reason)"
+        groups.setdefault(key, []).append(row["fixture"])
+    return [{"pattern": k, "count": len(v), "fixtures": v}
+            for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))]
+
+
 # ----- runner ---------------------------------------------------------------
 def run(fixtures_dir: Path, serve_url: str | None, model_id: str,
         sys_prompt_path: Path, verbose: bool = False,
@@ -352,9 +388,12 @@ def run(fixtures_dir: Path, serve_url: str | None, model_id: str,
             print(f"{fx_path.stem:<36} | (no EXPECT_INTENT — skipping)")
             continue
 
+        latency_ms = None
+        out_toks = None
         if serve_url:
             try:
-                content = query_serve(serve_url, model_id, sysp, fx)
+                content, latency_ms, out_toks = query_serve(
+                    serve_url, model_id, sysp, fx)
             except Exception as e:
                 content = None
                 err = str(e)[:80]
@@ -395,10 +434,21 @@ def run(fixtures_dir: Path, serve_url: str | None, model_id: str,
             "ok": ok,
             "reasons": reasons,
             "raw_response": content,
+            "latency_ms": latency_ms,
+            "completion_tokens": out_toks,
         })
 
     total = passed + failed
     pct = (passed / total * 100.0) if total else 0.0
+    patterns = failure_patterns(rows)
+    if patterns:
+        print(f"\n--- failure patterns ({failed} fails, "
+              f"{len(patterns)} patterns) ---")
+        for p in patterns:
+            sample = ", ".join(p["fixtures"][:3])
+            more = f" +{p['count'] - 3} more" if p["count"] > 3 else ""
+            print(f"  {p['count']:>3}×  {p['pattern']}")
+            print(f"        e.g. {sample}{more}")
     print()
     print(f"=== {passed}/{total} passed = {pct:.1f}% on {fixtures_dir.name} ===")
     return {
@@ -407,6 +457,7 @@ def run(fixtures_dir: Path, serve_url: str | None, model_id: str,
         "passed": passed,
         "total": total,
         "pct": pct,
+        "failure_patterns": patterns,
         "rows": rows,
     }
 
