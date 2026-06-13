@@ -1,0 +1,3 @@
+USER: empty the trash right now
+EXPECT_INTENT: confirm_destructive
+EXPECT_CONFIRM_TARGET: trash

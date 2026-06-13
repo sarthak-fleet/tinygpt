@@ -1,0 +1,3 @@
+USER: you know what to do
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: target

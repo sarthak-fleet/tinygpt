@@ -1,0 +1,6 @@
+USER: open the project
+ELEMENT: [0] folder|100,200|client-app|folder
+ELEMENT: [1] folder|160,200|server-app|folder
+ELEMENT: [2] folder|220,200|shared-lib|folder
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which project

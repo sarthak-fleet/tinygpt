@@ -1,5 +1,19 @@
 import Foundation
 
+/// How the tool catalog is presented to the model.
+///
+/// - `.full`: every tool's full JSON schema is injected into the system
+///   prompt at boot (the original behavior; default for back-compat).
+/// - `.deferred`: only a one-line-per-tool index is injected; schemas are
+///   fetched on demand via the built-in `get_tool_info(name)` meta-tool.
+///   Serve intercepts that call (non-streaming chat completions only),
+///   appends the schema, and re-prompts (capped at 3 hops).
+///   See docs/prds/B26-deferred-tools.md.
+enum ServeToolMode: String {
+    case full
+    case deferred
+}
+
 struct ServeToolsSpec {
     struct Tool {
         let name: String
@@ -70,18 +84,83 @@ struct ServeToolsSpec {
         """
     }
 
+    /// Deferred-mode system prompt (B26): emits only a one-line-per-tool
+    /// index plus the `get_tool_info(name)` meta-tool contract. The full
+    /// schema for each tool is fetched on demand — serve intercepts the
+    /// `verb=get_tool_info` reply, appends a synthetic tool result with
+    /// the schema, and re-prompts the model. See docs/prds/B26-deferred-tools.md.
+    func compactSystemPrompt() -> String {
+        let index = tools
+            .sorted { $0.name < $1.name }
+            .map { tool -> String in
+                let first = tool.description
+                    .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+                    .first.map(String.init) ?? ""
+                let desc = first.isEmpty ? "(no description)" : first
+                return "  \(tool.name) — \(desc)"
+            }
+            .joined(separator: "\n")
+        return """
+        You have these tools available. Use exactly one tool call to fulfill the user intent.
+
+        Tool index (name — purpose):
+        \(index)
+          get_tool_info — fetch the full JSON schema for one tool by name. The result is appended to the conversation before you act.
+
+        If the index entry is enough to call the tool correctly, call it directly. Otherwise call get_tool_info first; the next assistant turn carries the schema.
+
+        Emit exactly one JSON object:
+        {
+          "verb": "<tool name from the index above, or 'get_tool_info'>",
+          "args": { ... arguments for that tool ... },
+          "spoken_text": "<brief text to say to the user, optional>"
+        }
+        For get_tool_info: args = {"name": "<tool name from the index>"}.
+        Do not include Markdown or explanatory text outside the JSON object.
+        """
+    }
+
     func grammarSpec() throws -> ServeGrammarSpec {
         try ServeGrammarSpec.parse(outputSchemaJSON())
     }
 
+    /// Deferred-mode grammar: same envelope as `grammarSpec()` but the
+    /// verb enum is extended with `get_tool_info`.
+    func compactGrammarSpec() throws -> ServeGrammarSpec {
+        try ServeGrammarSpec.parse(compactOutputSchemaJSON())
+    }
+
+    /// JSON schema for one tool by name. Returns nil for unknown names —
+    /// caller emits an error sentinel back to the model so it retries
+    /// with a name from the index.
+    func toolInfo(name: String) -> String? {
+        guard let tool = tools.first(where: { $0.name == name }) else { return nil }
+        let payload: [String: Any] = [
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+        ]
+        return try? Self.jsonString(payload)
+    }
+
     func outputSchemaJSON() throws -> String {
+        try outputSchemaJSON(verbEnum: tools.map(\.name).sorted())
+    }
+
+    func compactOutputSchemaJSON() throws -> String {
+        var verbs = tools.map(\.name)
+        verbs.append("get_tool_info")
+        return try outputSchemaJSON(verbEnum: verbs.sorted())
+    }
+
+    private func outputSchemaJSON(verbEnum: [String]) throws -> String {
         let schema: [String: Any] = [
             "type": "object",
             "required": ["verb", "args"],
             "properties": [
                 "verb": [
                     "type": "string",
-                    "enum": tools.map(\.name).sorted()
+                    "enum": verbEnum
                 ],
                 "args": [
                     "type": "object",

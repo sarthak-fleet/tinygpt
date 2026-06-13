@@ -1,0 +1,3 @@
+USER: ping the team about lunch
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which team channel

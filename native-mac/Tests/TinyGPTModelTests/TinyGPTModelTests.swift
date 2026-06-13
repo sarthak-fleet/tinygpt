@@ -11,11 +11,11 @@ import XCTest
 private extension Data {
     mutating func append(u32 value: UInt32) {
         var v = value.littleEndian
-        withUnsafeBytes(of: &v) { self.append(contentsOf: $0) }
+        Swift.withUnsafeBytes(of: &v) { self.append(contentsOf: $0) }
     }
     mutating func append(u64 value: UInt64) {
         var v = value.littleEndian
-        withUnsafeBytes(of: &v) { self.append(contentsOf: $0) }
+        Swift.withUnsafeBytes(of: &v) { self.append(contentsOf: $0) }
     }
     mutating func appendGGUFString(_ s: String) {
         let bytes = Array(s.utf8)

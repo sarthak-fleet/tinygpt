@@ -49,6 +49,7 @@ public enum Serve {
         var quantizeGroup: Int = 64
         var grammarPath: String? = nil
         var toolsPath: String? = nil
+        var toolMode: ServeToolMode = .full
         var promptCacheDir: String? = nil
         var traceDir: String? = nil
         var eosStopEnabled = true
@@ -84,6 +85,15 @@ public enum Serve {
             case "--tools":
                 guard i + 1 < args.count else { exitUsage() }
                 toolsPath = args[i + 1]; i += 2
+            case "--tool-mode":
+                guard i + 1 < args.count else { exitUsage() }
+                switch args[i + 1] {
+                case "full": toolMode = .full
+                case "deferred": toolMode = .deferred
+                default:
+                    fputs("--tool-mode must be full or deferred\n", stderr); exitUsage()
+                }
+                i += 2
             case "--prompt-cache-dir":
                 guard i + 1 < args.count else { exitUsage() }
                 promptCacheDir = args[i + 1]; i += 2
@@ -117,6 +127,9 @@ public enum Serve {
         do {
             let grammarText = try grammarPath.map { try String(contentsOfFile: $0, encoding: .utf8) }
             let toolsSpec = try toolsPath.map { try ServeToolsSpec.load(path: $0) }
+            if toolsSpec == nil && toolMode == .deferred {
+                fputs("warning: --tool-mode deferred is a no-op without --tools.\n", stderr)
+            }
             let server = try Server.boot(modelPath: modelPath, host: host, port: port,
                                           maxContextOverride: maxContext,
                                           loraPath: loraPath,
@@ -124,6 +137,7 @@ public enum Serve {
                                           quantizeGroup: quantizeGroup,
                                           grammarText: grammarText,
                                           toolsSpec: toolsSpec,
+                                          toolMode: toolMode,
                                           promptCacheDir: promptCacheDir,
                                           traceDir: traceDir,
                                           eosStopEnabled: eosStopEnabled)
@@ -134,7 +148,7 @@ public enum Serve {
                 print("quantized: int\(qb) (group=\(quantizeGroup))")
             }
             if let gp = grammarPath { print("grammar: \(gp)") }
-            if let tp = toolsPath { print("tools: \(tp)") }
+            if let tp = toolsPath { print("tools: \(tp)  (mode: \(toolMode.rawValue))") }
             if let dir = promptCacheDir { print("prompt cache: \(dir)") }
             if let dir = traceDir {
                 print("inference traces: \(dir)")
@@ -185,6 +199,15 @@ public enum Serve {
                               tool catalog into the system prompt and constrains
                               output to {"verb","args","spoken_text"} with
                               verb limited to the provided tool names.
+        --tool-mode MODE      full (default) — full schemas in the system prompt.
+                              deferred — only a one-line-per-tool index in the
+                              prompt + a built-in get_tool_info(name) meta-tool.
+                              Serve intercepts verb=get_tool_info on
+                              /v1/chat/completions (non-streaming), appends the
+                              fetched schema, and re-prompts (capped at 3 hops).
+                              Streaming + Ollama endpoints emit get_tool_info
+                              verbatim — the client owns that round-trip there.
+                              See docs/prds/B26-deferred-tools.md.
         --prompt-cache-dir <dir>
                               Auto-cache repeated prompt-prefix KV state.
         --trace-infer          Write per-request inference traces to /tmp/tinygpt-traces.
@@ -233,6 +256,10 @@ extension Serve {
         let tokenizer: TokenizerBox
         let defaultGrammar: ServeGrammarSpec?
         let toolsSystemPrompt: String?
+        // Held only for deferred-mode get_tool_info interception. nil
+        // when serve was booted without --tools.
+        let toolsSpec: ServeToolsSpec?
+        let toolMode: ServeToolMode
         let eosTokenIds: Set<Int>
         let promptCacheDir: URL?
         let traceDir: URL?
@@ -249,6 +276,8 @@ extension Serve {
              model: AnyModel, config: ModelConfig, tokenizer: TokenizerBox,
              maxContext: Int, defaultGrammar: ServeGrammarSpec?,
              toolsSystemPrompt: String?,
+             toolsSpec: ServeToolsSpec?,
+             toolMode: ServeToolMode,
              eosTokenIds: Set<Int>, promptCacheDir: URL?,
              traceDir: URL?,
              modelFingerprint: String,
@@ -263,6 +292,8 @@ extension Serve {
             self.maxContext = maxContext
             self.defaultGrammar = defaultGrammar
             self.toolsSystemPrompt = toolsSystemPrompt
+            self.toolsSpec = toolsSpec
+            self.toolMode = toolMode
             self.eosTokenIds = eosTokenIds
             self.promptCacheDir = promptCacheDir
             self.traceDir = traceDir
@@ -277,6 +308,7 @@ extension Serve {
                           quantizeGroup: Int = 64,
                           grammarText: String? = nil,
                           toolsSpec: ServeToolsSpec? = nil,
+                          toolMode: ServeToolMode = .full,
                           promptCacheDir: String? = nil,
                           traceDir: String? = nil,
                           eosStopEnabled: Bool = true) throws -> Server
@@ -340,7 +372,9 @@ extension Serve {
             if let grammarText {
                 defaultGrammar = try ServeGrammarSpec.parse(grammarText)
             } else if let toolsSpec {
-                defaultGrammar = try toolsSpec.grammarSpec()
+                defaultGrammar = try (toolMode == .deferred
+                    ? toolsSpec.compactGrammarSpec()
+                    : toolsSpec.grammarSpec())
             } else {
                 defaultGrammar = nil
             }
@@ -372,10 +406,15 @@ extension Serve {
             }
             let tokenBytesMs = Date().timeIntervalSince(tokenBytesStart) * 1000
             fputs("serve: token-bytes table built (\(cfg.vocabSize) entries, \(String(format: "%.0f", tokenBytesMs))ms)\n", stderr)
+            let renderedToolsSystemPrompt: String? = toolsSpec.map {
+                toolMode == .deferred ? $0.compactSystemPrompt() : $0.systemPrompt()
+            }
             let server = Server(listenFd: fd, host: host, port: boundPort,
                                  model: load.model, config: cfg, tokenizer: tok,
                                  maxContext: maxCtx, defaultGrammar: defaultGrammar,
-                                 toolsSystemPrompt: toolsSpec?.systemPrompt(),
+                                 toolsSystemPrompt: renderedToolsSystemPrompt,
+                                 toolsSpec: toolsSpec,
+                                 toolMode: toolMode,
                                  eosTokenIds: eosIds,
                                  promptCacheDir: promptCacheURL,
                                  traceDir: traceURL,
@@ -383,6 +422,23 @@ extension Serve {
                                  cachedTokenBytes: tokenBytes)
             server.startAcceptLoop()
             return server
+        }
+
+        /// Parse a serve response payload (the JSON the model emitted under
+        /// the tools grammar) and, if it is a `get_tool_info` meta-tool
+        /// call, return the requested tool name. nil for any other shape
+        /// — non-JSON output, a different verb, or a malformed args block.
+        ///
+        /// Internal so unit tests can hit it without a running server.
+        static func parseGetToolInfoCall(_ text: String) -> String? {
+            guard let data = text.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (obj["verb"] as? String) == "get_tool_info",
+                  let args = obj["args"] as? [String: Any],
+                  let name = args["name"] as? String,
+                  !name.isEmpty
+            else { return nil }
+            return name
         }
 
         private static func detectEOSTokenIds(tokenizerDir: URL, tokenizer: TokenizerBox) -> Set<Int> {
@@ -715,12 +771,42 @@ extension Serve {
                     return
                 }
 
-                let (text, promptTokens, completionTokens) = try inferenceQueue.sync {
+                var (text, promptTokens, completionTokens) = try inferenceQueue.sync {
                     try self.generate(prompt: prompt, maxTokens: maxTokens,
                                        temperature: temperature, stop: stopParam,
                                        grammar: grammar, extraStopTokenIds: stopTokenIds,
                                        cachePrefix: cachePrefix,
                                        tracer: tracer)
+                }
+                // Deferred-mode interception (B26): if the model emitted
+                // verb=get_tool_info, look up the schema, append a synthetic
+                // turn carrying it, and re-prompt. Cap re-entry to bound
+                // runaway loops on a misbehaving model.
+                if toolMode == .deferred, toolsSpec != nil {
+                    var working = messages
+                    var hops = 0
+                    while let toolName = Self.parseGetToolInfoCall(text), hops < 3 {
+                        hops += 1
+                        let toolResult = toolsSpec?.toolInfo(name: toolName)
+                            ?? "{\"error\":\"unknown tool '\(toolName)' — pick a name from the index\"}"
+                        working.append(["role": "assistant", "content": text])
+                        working.append(["role": "tool",
+                                        "content": toolResult,
+                                        "name": "get_tool_info"])
+                        let nextPrompt = renderChatMessages(working)
+                        let nextCache = renderChatPromptCachePrefix(working)
+                        let (t2, p2, c2) = try inferenceQueue.sync {
+                            try self.generate(prompt: nextPrompt, maxTokens: maxTokens,
+                                               temperature: temperature, stop: stopParam,
+                                               grammar: grammar,
+                                               extraStopTokenIds: stopTokenIds,
+                                               cachePrefix: nextCache,
+                                               tracer: tracer)
+                        }
+                        text = t2
+                        promptTokens = p2
+                        completionTokens += c2
+                    }
                 }
                 tracer?.setTokenCounts(prompt: promptTokens, generated: completionTokens)
 

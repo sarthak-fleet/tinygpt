@@ -1,0 +1,3 @@
+USER: show me the doorbell camera
+EXPECT_INTENT: out_of_scope
+REASON: Smart home device out of scope

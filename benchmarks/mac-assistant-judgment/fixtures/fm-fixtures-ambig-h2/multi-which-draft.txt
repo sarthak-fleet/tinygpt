@@ -1,0 +1,6 @@
+USER: send the draft
+ELEMENT: [0] row|200,150|Draft to Priya|quarterly update
+ELEMENT: [1] row|200,200|Draft to Alex|invoice question
+ELEMENT: [2] row|200,250|Draft to Team|standup notes
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which draft

@@ -1,0 +1,6 @@
+USER: rename the screenshot
+ELEMENT: [0] file|100,200|Screenshot 2026-06-10.png|image
+ELEMENT: [1] file|160,200|Screenshot 2026-06-11 a.png|image
+ELEMENT: [2] file|220,200|Screenshot 2026-06-11 b.png|image
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which screenshot

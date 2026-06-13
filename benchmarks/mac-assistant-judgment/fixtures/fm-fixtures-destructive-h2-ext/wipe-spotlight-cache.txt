@@ -1,0 +1,3 @@
+USER: clear out the spotlight index
+EXPECT_INTENT: confirm_destructive
+EXPECT_CONFIRM_TARGET: spotlight cache

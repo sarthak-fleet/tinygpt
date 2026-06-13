@@ -1,0 +1,6 @@
+USER: play my playlist
+ELEMENT: [0] row|150,100|Focus Mix|playlist
+ELEMENT: [1] row|150,150|Workout|playlist
+ELEMENT: [2] row|150,200|Evening Jazz|playlist
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: which playlist

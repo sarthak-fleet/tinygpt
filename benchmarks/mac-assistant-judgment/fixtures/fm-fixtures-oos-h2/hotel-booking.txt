@@ -1,0 +1,3 @@
+USER: find me a hotel in tokyo next month
+EXPECT_INTENT: out_of_scope
+REASON: Travel booking needs the web

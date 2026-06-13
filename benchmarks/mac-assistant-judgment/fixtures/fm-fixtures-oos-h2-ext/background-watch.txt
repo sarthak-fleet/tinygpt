@@ -1,0 +1,3 @@
+USER: alert me when the build finishes
+EXPECT_INTENT: out_of_scope
+REASON: Background monitoring out of scope

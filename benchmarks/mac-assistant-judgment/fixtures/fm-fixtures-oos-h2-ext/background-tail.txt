@@ -1,0 +1,3 @@
+USER: watch the server logs and let me know if errors
+EXPECT_INTENT: out_of_scope
+REASON: Background monitoring out of scope

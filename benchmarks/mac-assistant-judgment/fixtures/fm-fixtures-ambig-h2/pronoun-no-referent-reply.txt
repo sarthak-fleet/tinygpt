@@ -1,0 +1,3 @@
+USER: tell her i said yes
+EXPECT_INTENT: clarify
+EXPECT_CLARIFY_TOPIC: recipient

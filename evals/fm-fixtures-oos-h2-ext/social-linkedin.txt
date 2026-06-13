@@ -1,0 +1,3 @@
+USER: update my linkedin status to say new job
+EXPECT_INTENT: out_of_scope
+REASON: Social posting out of scope

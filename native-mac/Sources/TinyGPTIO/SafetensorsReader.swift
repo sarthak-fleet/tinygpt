@@ -73,8 +73,12 @@ public enum SafetensorsReader {
         var tensors: [String: TensorInfo] = [:]
         let dataBase = 8 + headerSize
         for (key, value) in json {
-            if key == "__metadata__", let dict = value as? [String: String] {
-                metadata = dict
+            if key == "__metadata__" {
+                // Reserved metadata key per the safetensors spec — never a
+                // tensor. Spec says values are strings, but writers vary
+                // (MLX.save emits non-string values), so harvest what casts
+                // and skip the rest rather than failing the whole file.
+                metadata = (value as? [String: String]) ?? [:]
                 continue
             }
             guard let entry = value as? [String: Any],

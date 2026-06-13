@@ -1,0 +1,3 @@
+USER: convert one ethereum to dollars
+EXPECT_INTENT: out_of_scope
+REASON: Live market data
