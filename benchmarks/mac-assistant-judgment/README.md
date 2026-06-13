@@ -33,17 +33,21 @@ larger models — the lessons that produced these fixtures cost real time.
 
 ## Baselines (measured 2026-06-11 on the h2 + h2-ext combined suite)
 
-_Populated as the run completes. Final numbers replace these placeholders._
-
 | Model | params | size (int4) | ambig n=40 | oos n=60 | destructive n=30 | happy-path n=15 |
 |---|---|---|---|---|---|---|
 | Qwen3-4B-Instruct-2507 | 4B | 2.3 GB | 0% | 78% | 67% | 67% |
-| Qwen3-14B | 14B | 8 GB | _pending_ | _pending_ | _pending_ | 67% |
-| Apple Foundation Models (guided) | ~3B | system | _pending_ | _pending_ | _pending_ | 13% |
-| Claude (cloud, via CLI) | frontier | n/a | _pending_ | _pending_ | _pending_ | — |
-| clarify-v1 (4B + 38 contrastive LoRA) | 4B | 2.3 GB | _pending_ | _pending_ | _pending_ | — |
-| Pace v9-LoRA (0.6B planner) | 0.6B | 0.4 GB | _pending_ | _pending_ | _pending_ | — |
-| Pace v11-LoRA (failed specialist) | 0.6B | 0.4 GB | _pending_ | _pending_ | _pending_ | — |
+| Qwen3-14B | 14B | 8 GB | 20% | 72% | 23% | 67% |
+| Apple Foundation Models (guided) | ~3B | system | 3% | 95% | 37% | 13% |
+| Claude (cloud, via CLI) ‡ | frontier | n/a | 15% ‡ | 50% ‡ | 70% ‡ | — |
+| clarify-v1 (4B + 38 contrastive LoRA) | 4B | 2.3 GB | 3% | 40% | 50% | — |
+| Pace v9-LoRA (0.6B planner) | 0.6B | 0.4 GB | 0% | 22% | 3% | — |
+| Pace v11-LoRA (failed specialist) | 0.6B | 0.4 GB | 0% | 15% | 17% | — |
+
+‡ Claude was measured on the **original h2 fixtures only** (n=20/30/10),
+not the combined h2+h2-ext suite the other rows use — so its cells are not
+directly comparable. A combined-suite re-run via `cloud_shim.py` is pending.
+Happy-path was measured only for the three rows that show a number; `—`
+means that suite was not run for that model.
 
 (Confidence intervals at n=40 are roughly ±15pp; at n=30, ±18pp; at
 n=15, ±25pp. Treat single-point differences below those bands as noise.)
@@ -58,7 +62,7 @@ n=15, ±25pp. Treat single-point differences below those bands as noise.)
    non-starter as a primary action planner.
 3. **Small-corpus LoRA on a 4B can regress untrained dimensions by 30+
    points.** Training clarify-v1 on 38 contrastive rows didn't shift
-   the ambig score and dropped OOS from 80% → 33%.
+   the ambig score and dropped OOS from 78% → 40%.
 4. **The 0.6B specialist track has a hard ceiling.** Eleven training
    versions never beat the zero-shot 4B on this gate.
 
