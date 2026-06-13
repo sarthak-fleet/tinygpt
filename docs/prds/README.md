@@ -81,6 +81,14 @@ in `Sources/TinyGPT/TinyGPT.swift`) after reviewing your PR.
 | [B23 agent-eval-protocol](B23-agent-eval-protocol.md) | repeated pass@1 with fixed budgets; mean ± σ + ci95 | ~1d |
 | [B26 deferred-tools](B26-deferred-tools.md) | `--tool-mode {full,deferred}` + `get_tool_info` meta-tool | shipped, BFCL gate pending |
 
+### RL-finetune trio (Tier B — Castform discipline)
+
+| PRD | What | Effort |
+|---|---|---|
+| [B28 composite-reward-framework](B28-composite-reward-framework.md) | typed multi-dim reward (correctness + conciseness + ... → total) | scaffolding shipped, integrations pending |
+| [B29 trace-to-training-data](B29-trace-to-training-data.md) | `.atraj` → SFT/DPO JSONL via dedupe + tool-echo-drop + LLM-judge | ~2d |
+| [B30 prompt-reasoning-classifier](B30-prompt-reasoning-classifier.md) | classify training prompts by reasoning depth; feeds B29 + leaderboard | ~half-day |
+
 ### Polish + harness (Tier C)
 
 | PRD | What | Effort |
