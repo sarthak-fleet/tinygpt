@@ -54,6 +54,23 @@ const post = (msg: FromWorker, transfer?: Transferable[]) =>
   ctx.postMessage(msg, transfer);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+function mix32(x: number): number {
+  x ^= x >>> 16;
+  x = Math.imul(x, 0x7feb352d);
+  x ^= x >>> 15;
+  x = Math.imul(x, 0x846ca68b);
+  x ^= x >>> 16;
+  return x >>> 0;
+}
+
+function batchStart(seed: number, step: number, batchIndex: number, maxStart: number): number {
+  const span = maxStart + 1;
+  const mixed = mix32(
+    seed ^ Math.imul(step + 1, 0x9e3779b9) ^ Math.imul(batchIndex + 1, 0x85ebca6b),
+  );
+  return mixed % span;
+}
+
 ctx.onmessage = (e: MessageEvent<ToWorker>) => {
   const msg = e.data;
   switch (msg.type) {
@@ -136,8 +153,8 @@ async function runWasm(text: string, cfg: RunConfig): Promise<void> {
   if (model) { model.free(); model = null; }
 
   const tokens = encode(text);
-  if (tokens.length < cfg.ctx + 2) {
-    post({ type: "error", message: `corpus is ${tokens.length} bytes — need > ${cfg.ctx + 2}` });
+  if (tokens.length < cfg.ctx + 1) {
+    post({ type: "error", message: `corpus is ${tokens.length} bytes — need at least ${cfg.ctx + 1}` });
     return;
   }
   model = backend.createModel({
@@ -211,8 +228,8 @@ async function runWebGpu(text: string, cfg: RunConfig): Promise<void> {
   disposeGpuModel();
 
   const tokens = encode(text);
-  if (tokens.length < cfg.ctx + 2) {
-    post({ type: "error", message: `corpus is ${tokens.length} bytes — need > ${cfg.ctx + 2}` });
+  if (tokens.length < cfg.ctx + 1) {
+    post({ type: "error", message: `corpus is ${tokens.length} bytes — need at least ${cfg.ctx + 1}` });
     return;
   }
   gpuModel = new GpuModel(gpuCtxLocal, {
@@ -226,11 +243,11 @@ async function runWebGpu(text: string, cfg: RunConfig): Promise<void> {
   });
 
   const maxStart = tokens.length - cfg.ctx - 1;
-  const sampleBatch = () => {
+  const sampleBatch = (stepIndex: number) => {
     const ids = new Float32Array(cfg.batchSize * cfg.ctx);
     const targets = new Float32Array(cfg.batchSize * cfg.ctx);
     for (let b = 0; b < cfg.batchSize; b++) {
-      const s = Math.floor(Math.random() * (maxStart + 1));
+      const s = batchStart(cfg.seed, stepIndex, b, maxStart);
       for (let t = 0; t < cfg.ctx; t++) {
         ids[b * cfg.ctx + t] = tokens[s + t];
         targets[b * cfg.ctx + t] = tokens[s + t + 1];
@@ -257,7 +274,7 @@ async function runWebGpu(text: string, cfg: RunConfig): Promise<void> {
     if (paused) { await sleep(60); continue; }
     let trainLoss = 0;
     for (let i = 0; i < chunk && step < cfg.maxSteps; i++) {
-      const { ids, targets } = sampleBatch();
+      const { ids, targets } = sampleBatch(step);
       trainLoss = await gpuModel.trainStep(ids, targets, cfg.batchSize, cfg.learningRate);
       tokensProcessed += cfg.batchSize * cfg.ctx;
       step++;
@@ -440,11 +457,11 @@ async function continueWebgpu(extraSteps: number, startStep: number, newTotal: n
   post({ type: "status", message: `continuing for ${extraSteps} more steps on WebGPU…` });
 
   const maxStart = tokens.length - cfg.ctx - 1;
-  const sampleBatch = () => {
+  const sampleBatch = (stepIndex: number) => {
     const ids = new Float32Array(cfg.batchSize * cfg.ctx);
     const targets = new Float32Array(cfg.batchSize * cfg.ctx);
     for (let b = 0; b < cfg.batchSize; b++) {
-      const s = Math.floor(Math.random() * (maxStart + 1));
+      const s = batchStart(cfg.seed, stepIndex, b, maxStart);
       for (let t = 0; t < cfg.ctx; t++) {
         ids[b * cfg.ctx + t] = tokens[s + t];
         targets[b * cfg.ctx + t] = tokens[s + t + 1];
@@ -461,7 +478,7 @@ async function continueWebgpu(extraSteps: number, startStep: number, newTotal: n
     if (paused) { await sleep(60); continue; }
     let trainLoss = 0;
     for (let i = 0; i < chunk && step < newTotal; i++) {
-      const { ids, targets } = sampleBatch();
+      const { ids, targets } = sampleBatch(step);
       trainLoss = await gpuModel.trainStep(ids, targets, cfg.batchSize, cfg.learningRate);
       tokensProcessed += cfg.batchSize * cfg.ctx;
       step++;
@@ -586,7 +603,7 @@ async function doInspect(prompt: Uint8Array, topK: number): Promise<void> {
 // the loaded model streaming generation + lower TTFT, vs the synchronous
 // per-token WASM path. Falls back to WASM if WebGPU isn't available, so
 // older Safari etc. still works.
-async function doRestore(state: ArrayBuffer, cfg: RunConfig): Promise<void> {
+async function doRestore(state: ArrayBuffer, cfg: RunConfig, corpus?: string): Promise<void> {
   try {
     // Try WebGPU first if the saved file was a WebGPU run.
     if (cfg.backend === "webgpu") {
@@ -602,6 +619,9 @@ async function doRestore(state: ArrayBuffer, cfg: RunConfig): Promise<void> {
           dModel: cfg.dModel, dMlp: cfg.dMlp, seed: cfg.seed,
         });
         gpuModel.importState(state);
+        lastCfg = cfg;
+        lastTokens = corpus ? encode(corpus) : null;
+        lastStep = gpuModel.step();
         post({ type: "restored" });
         post({ type: "status", message: "restored on WebGPU — warming up inference pipelines…" });
         // Warm up the B=1 inference pipelines so the first Generate click
@@ -627,6 +647,9 @@ async function doRestore(state: ArrayBuffer, cfg: RunConfig): Promise<void> {
       dModel: cfg.dModel, dMlp: cfg.dMlp, seed: cfg.seed,
     });
     model.importState(new Uint8Array(state));
+    lastCfg = cfg;
+    lastTokens = corpus ? encode(corpus) : null;
+    lastStep = model.step();
     post({ type: "restored" });
     post({
       type: "status",
@@ -908,7 +931,7 @@ async function doBenchmark(id: string): Promise<void> {
       const promptIds = [...encode(prompt)];
       const seed = (Date.now() & 0xffff) >>> 0;
       const out = await gm.generate(promptIds, maxNew, temperature, 40, seed);
-      return decode(Uint8Array.from(out));
+      return decode(Uint8Array.from(out.slice(promptIds.length)));
     },
   };
 

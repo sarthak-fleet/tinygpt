@@ -58,7 +58,7 @@ export type ToWorker =
   | { type: "resume" }
   | { type: "sample"; prompt: string; tokens: number; temperature: number }
   | { type: "stop" }
-  | { type: "restore"; state: ArrayBuffer; config: RunConfig }
+  | { type: "restore"; state: ArrayBuffer; config: RunConfig; corpus?: string }
   // "Watch the model think" — single introspection forward over `prompt`.
   // Returns top-K next-token probabilities per position + last-layer attention.
   | { type: "inspect"; prompt: Uint8Array; topK: number }
