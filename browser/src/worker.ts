@@ -542,7 +542,7 @@ async function doSample(prompt: string, tokens: number, temperature: number): Pr
     const tStart = performance.now();
     const out = model.generate(encode(prompt), tokens, temperature, 40, seed);
     const elapsed = (performance.now() - tStart) / 1000;
-    const text = prompt + decode(out);
+    const text = decode(out);
     const tokensPerSecond = elapsed > 0 ? out.length / elapsed : 0;
     post({ type: "sample_done", text, tokensPerSecond, firstTokenMs: 0, totalMs: elapsed * 1000 });
     return;
