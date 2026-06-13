@@ -1,0 +1,27 @@
+{
+  "_doc": "Example tinygpt.project.json — per-project model + dataset pins. Read by `tinygpt pull` and `tinygpt validate`. See docs/prds/B31-gallery-and-project-pins.md for the schema.",
+  "name": "example-pace-project",
+  "tinygpt_version": ">=2026.06",
+  "models": [
+    {
+      "id": "qwen3-4b-instruct-2507",
+      "role": "base"
+    },
+    {
+      "id": "a1-tool-caller",
+      "role": "adapter",
+      "applies_to": "qwen3-4b-instruct-2507"
+    },
+    {
+      "id": "qwen3-9b",
+      "role": "judge",
+      "optional": true
+    }
+  ],
+  "datasets": [
+    {
+      "id": "hermes-function-calling-v1",
+      "optional": false
+    }
+  ]
+}

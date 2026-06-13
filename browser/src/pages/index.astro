@@ -3,8 +3,8 @@ import Default from "../layouts/Default.astro";
 ---
 
 <Default
-  title="TinyGPT — a transformer playground, in the browser and on your Mac"
-  description="Train, fine-tune, distil, interpret. Every modern architectural idea has a clean one-file implementation here — runnable in your browser via WebGPU or on your Mac via MLX."
+  title="TinyGPT — train a GPT-2 in your browser tab, 2.6× → 12.1× faster on WebGPU"
+  description="A GPT-2-shaped transformer trained from scratch in a browser tab via hand-written WebGPU kernels — 2.6× → 12.1× faster than multi-thread WASM SIMD as d_model grows. Same architecture on Apple Silicon via MLX. MIT licensed."
 >
   <main class="landing">
     <header class="hero">
@@ -12,25 +12,25 @@ import Default from "../layouts/Default.astro";
         <span class="brand-mark">T</span>
         <span class="brand-name">TinyGPT</span>
       </div>
-      <p class="eyebrow">Open-source transformer lab</p>
-      <h1><span>TinyGPT</span> trains a real transformer in your browser, then scales up on your Mac.</h1>
+      <p class="eyebrow">Open-source transformer lab &middot; 2.6&times; &rarr; 12.1&times; faster on WebGPU</p>
+      <h1><span>TinyGPT</span> trains a GPT-2 from scratch in your browser tab.</h1>
       <p class="lede">
-        Train an LLM from scratch in your browser via WebGPU, or run the
-        same architecture natively on Apple Silicon via MLX. Every
-        modern technique &mdash; <em>MoE</em>, <em>MTP</em>,
-        <em>ALiBi</em>, <em>differential attention</em>,
-        <em>distillation</em>, <em>DoRA</em>, <em>StreamingLLM</em>
-        &mdash; ships as a single clean Swift or TypeScript file, with
-        a paper link next to it.
+        Hand-written WebGPU kernels run <strong>2.6&times; &rarr; 12.1&times; faster</strong>
+        than the multi-thread WASM SIMD baseline as <code>d_model</code> climbs
+        from 96 to 256. Parity-tested to within 2.5% loss drift. Every modern
+        technique &mdash; <em>MoE</em>, <em>MTP</em>, <em>ALiBi</em>,
+        <em>differential attention</em>, <em>distillation</em>, <em>DoRA</em>,
+        <em>StreamingLLM</em> &mdash; ships as a single clean Swift or
+        TypeScript file, with a paper link next to it.
       </p>
       <div class="cta-row">
         <a class="cta primary" href="/playground">
-          <span class="cta-label">Train in your browser</span>
-          <span class="cta-sub">WebGPU · works on M-series Macs + modern Chrome</span>
+          <span class="cta-label">Train a transformer in your browser</span>
+          <span class="cta-sub">WebGPU · ~15 min to readable pseudo-Shakespeare on M-series + Chrome 113+</span>
         </a>
         <a class="cta secondary" href="https://github.com/sarthak-fleet/tinygpt/tree/main/native-mac" rel="noopener">
-          <span class="cta-label">Run on your Mac</span>
-          <span class="cta-sub">CLI + SwiftUI app · MLX-Swift, Apple-native</span>
+          <span class="cta-label">Build the Mac CLI &amp; app</span>
+          <span class="cta-sub">MLX-Swift &middot; trains up to 1.3B params on unified memory</span>
         </a>
       </div>
       <p class="hero-fineprint">
@@ -227,9 +227,14 @@ import Default from "../layouts/Default.astro";
         <a href="https://github.com/sarthak-fleet/tinygpt" rel="noopener">GitHub</a>
       </p>
       <p class="footnote">
-        Built as a study of "what does every modern LLM idea actually
-        look like as one file?". MIT licensed. The browser playground
+        Built as a study of &ldquo;what does every modern LLM idea actually
+        look like as one file?&rdquo;. MIT licensed. The browser playground
         runs everything client-side &mdash; no server, no inference API.
+      </p>
+      <p class="signed">
+        &mdash; <a href="https://github.com/sarthakagrawal927" rel="noopener">Sarthak Agrawal</a>,
+        building TinyGPT in the open. Every backward pass derived by hand,
+        every kernel parity-checked.
       </p>
     </footer>
   </main>
@@ -565,4 +570,5 @@ import Default from "../layouts/Default.astro";
   }
   .landing-footer p { margin: 0 0 12px; font-size: 13.5px; color: var(--muted); }
   .landing-footer .footnote { font-size: 12px; color: var(--faint); max-width: 560px; margin: 0 auto; line-height: 1.6; }
+  .landing-footer .signed { font-size: 12.5px; color: var(--fg-soft); max-width: 560px; margin: 14px auto 0; line-height: 1.6; }
 </style>
