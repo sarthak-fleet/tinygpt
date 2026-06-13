@@ -45,6 +45,9 @@ in `Sources/TinyGPT/TinyGPT.swift`) after reviewing your PR.
 | PRD | What | Effort | Blocks / blocked-by |
 |---|---|---|---|
 | [A1 first-specialist-tool-caller](A1-first-specialist-tool-caller.md) | qwen3-4b + LoRA tool-calling specialist; +3pp BFCL ship gate | 3-5d | north-star validator; consumes E1/E8 + B23 |
+| [B1 second-specialist-shell-or-sql](B1-second-specialist-shell-or-sql.md) | cookie-cut A1 onto a 2nd domain to prove platform generality | 3-5d | blocked-by A1 |
+| [B6 mac-app-demo](B6-mac-app-demo.md) | Factory tab in the Mac app: drop data → train → eval → deploy a specialist end-to-end | 1w | blocked-by A1 + C10 |
+| [B8 multilingual-specialist](B8-multilingual-specialist.md) | Indic-focused specialist on Sarvam-Edge/Airavata base | 1-2w | blocked-by A7 (Indic eval baseline) |
 | [B25 scaledown-specialist](B25-scaledown-specialist.md) | extractive context-compression specialist; submit to ScaleDown leaderboard | 3-5d | needs E6 harness |
 
 ### Training-quality + optimizer (Tier B)
@@ -53,8 +56,11 @@ in `Sources/TinyGPT/TinyGPT.swift`) after reviewing your PR.
 |---|---|---|
 | [B10 quality-classifier](B10-quality-classifier.md) | FineWeb-Edu-style scorer + corpus filter | ~2d |
 | [B11 wsd-schedule](B11-wsd-schedule.md) | warmup-stable-decay LR; replaces cosine default | ~half-day |
+| [B12 loss-spike-recovery](B12-loss-spike-recovery.md) | auto-rollback on grad-norm spikes (uses adam-state-persist + C9) | ~1d |
 | [B14 speculative-decoding](B14-speculative-decoding.md) | Mini-Llama draft → Mega target; T=0 byte-equality gate | ~2-3d |
 | [B15 layerwise-lr-decay-sft](B15-layerwise-lr-decay-sft.md) | `--llrd γ` on sft/dpo/finetune; γ^k depth decay | ~half-day |
+| [B16 m5-na-prefill-bench](B16-m5-na-prefill-bench.md) | verify Apple's claimed M5 NA prefill speedup on our path | ~half-day |
+| [B18 nanochat-depth-knob](B18-nanochat-depth-knob.md) | `--depth N` auto-derives all pretrain HPs | ~1d |
 | [B21 micro-automixer](B21-micro-automixer.md) | Dirichlet+EI ratio search before specialist training | ~2-3d |
 
 ### Interpretability (Tier B)
@@ -69,6 +75,8 @@ in `Sources/TinyGPT/TinyGPT.swift`) after reviewing your PR.
 
 | PRD | What | Effort |
 |---|---|---|
+| [B2-B7 router-family](B2-B7-router-family.md) | mini-router on real BFCL + bake-off + FSM-injection + specialist routing (bundled) | 1-2w |
+| [B5 cloud-escalate-training](B5-cloud-escalate-training.md) | train the specialist to emit `defer_to_cloud` instead of regex-trigger | ~1w |
 | [B22 trajectory-recorder](B22-trajectory-recorder.md) | `.atraj` files preserve input_ids/output_ids/rewards | ~2d |
 | [B23 agent-eval-protocol](B23-agent-eval-protocol.md) | repeated pass@1 with fixed budgets; mean ± σ + ci95 | ~1d |
 | [B26 deferred-tools](B26-deferred-tools.md) | `--tool-mode {full,deferred}` + `get_tool_info` meta-tool | shipped, BFCL gate pending |
@@ -83,6 +91,13 @@ in `Sources/TinyGPT/TinyGPT.swift`) after reviewing your PR.
 | [C9 determinism-harness](C9-determinism-harness.md) | bit-exact replay of step N (uses Adam-state-persist) | ~2d |
 | [C10 train-run-dashboard](C10-train-run-dashboard.md) | `/train-viewer.astro` drag-drop live charts | ~1d |
 
+### Operations + measurement (Tier B / E)
+
+| PRD | What | Effort |
+|---|---|---|
+| [B9 energy-per-token](B9-energy-per-token.md) | J/token via powermetrics sidecar; leaderboard column | ~1d |
+| [E6 eval-scaledown](E6-eval-scaledown.md) | wrap ScaleBench into `tinygpt eval-scaledown`; unblocks B25 | ~half-day |
+
 ### Tier 5 — research frontier
 
 | PRD | What | Order |
@@ -90,6 +105,7 @@ in `Sources/TinyGPT/TinyGPT.swift`) after reviewing your PR.
 | [5.1 reasoning-on-22M](5.1-reasoning-on-22M.md) | GRPO/DAPO at 22M; publishable negative-result-shaped artifact | 5-7d |
 | [5.2 testtime-compute-scaling](5.2-testtime-compute-scaling.md) | Snell quality-vs-FLOPs curve at 22M (+ stretch cross-size) | 3-5d |
 | [5.3 vision-language-toy](5.3-vision-language-toy.md) | LLaVA-style from-scratch VL on consumer hardware | ~2w |
+| [5.4 diffusion-lm-micro](5.4-diffusion-lm-micro.md) | discrete-masked-denoising 22M from-scratch | 1-2w |
 | [5.5 sparse-moe-kernels](5.5-sparse-moe-kernels.md) | Metal kernels for hard MoE routing (blocked upstream) | 2-3w when unblocked |
 | [5.6 tts-toy](5.6-tts-toy.md) | EnCodec + autoregressive over codebook IDs (after 5.3) | 2-4w |
 | [5.7 explainer-video-model](5.7-explainer-video-model.md) | structured DSL + renderer; visual-planner specialist (after A1-B8 + 5.3) | 3-6w |
