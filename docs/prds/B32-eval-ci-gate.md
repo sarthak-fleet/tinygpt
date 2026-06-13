@@ -1,6 +1,6 @@
 ---
 name: B32 `tinygpt eval` as a CI / pre-commit gate
-status: not-started
+status: scaffolding-shipped
 owner: unassigned
 created: 2026-06-13
 parent_plan: docs/PLAN.md §3 Tier B (B32)
@@ -9,6 +9,19 @@ related_prds: E1-bfcl-eval.md, E2-tau-bench-eval.md (the shipped harnesses this 
 ---
 
 # PRD — Reframe the eval harnesses as a developer-workflow gate
+
+> **Status (2026-06-13): scaffolding shipped.** Pure gate logic
+> (`TinyGPTModel/EvalGate.swift`: direction heuristic, pp thresholds,
+> per-suite override, missing-baseline handling, K-pass mean) with 13 unit
+> tests in `EvalGateTests.swift`. CLI (`Sources/TinyGPT/EvalGate.swift`):
+> `--spec` / `eval-gate.json` / `tinygpt.project.json` `eval` block
+> resolution, `--candidate` (no-GPU path), `--baseline`, `--threshold`,
+> `--passes`, `--update-baseline`, `gate-result.json`, exit 0/1. Action at
+> `.github/actions/tinygpt-eval-gate/`, recipe `docs/recipes/eval-gate.md`,
+> smoke `evals/eval-gate-smoke.sh` (asserts both exit codes against committed
+> fixtures). **Remaining to flip to ✅:** run a real specialist's suites end
+> to end through the gate (the `command`-driven path) on a self-hosted Mac
+> runner — exercised by the user, not by CI.
 
 ## Goal
 

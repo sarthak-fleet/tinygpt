@@ -22,6 +22,9 @@ public struct ProjectManifest: Codable, Sendable {
     /// Dataset pins. Order is not significant. Optional —
     /// pure-inference projects don't ship datasets.
     public let datasets: [ProjectDatasetPin]?
+    /// Optional eval-gate spec (B32). When present, `tinygpt eval-gate`
+    /// reads it as zero-config; a standalone `eval-gate.json` overrides it.
+    public let eval: EvalGate.Spec?
 
     public static let jsonDecoder: JSONDecoder = {
         let d = JSONDecoder()

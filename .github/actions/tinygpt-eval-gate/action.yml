@@ -1,0 +1,55 @@
+name: "tinygpt eval-gate"
+description: >
+  Run a project's declared eval suites against a baseline and fail the job
+  when any suite regresses past threshold. Runs the MLX path, so it must
+  execute on a self-hosted macOS (Apple-silicon) runner — the model never
+  leaves the device.
+inputs:
+  spec:
+    description: "Path to the eval-gate spec (eval-gate.json or a tinygpt.project.json with an `eval` block)."
+    required: false
+    default: ""
+  candidate:
+    description: "Optional candidate JSONL to compare instead of running the suites (skips the GPU path)."
+    required: false
+    default: ""
+  passes:
+    description: "Run each suite K times and gate on the mean."
+    required: false
+    default: "1"
+  working-directory:
+    description: "Directory to run the gate from (where the spec/project file lives)."
+    required: false
+    default: "."
+outputs:
+  passed:
+    description: "true if the gate passed, false otherwise."
+    value: ${{ steps.gate.outputs.passed }}
+runs:
+  using: "composite"
+  steps:
+    - name: Build tinygpt (release)
+      shell: bash
+      run: |
+        cd "${{ github.action_path }}/../../../native-mac"
+        DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift build -c release
+    - name: Run eval-gate
+      id: gate
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set +e
+        BIN="${{ github.workspace }}/native-mac/.build/release/tinygpt"
+        ARGS=(eval-gate --out gate-result.json --passes "${{ inputs.passes }}")
+        [ -n "${{ inputs.spec }}" ] && ARGS+=(--spec "${{ inputs.spec }}")
+        [ -n "${{ inputs.candidate }}" ] && ARGS+=(--candidate "${{ inputs.candidate }}")
+        "$BIN" "${ARGS[@]}" | tee gate-output.txt
+        CODE=${PIPESTATUS[0]}
+        if [ "$CODE" -eq 0 ]; then echo "passed=true" >> "$GITHUB_OUTPUT"; else echo "passed=false" >> "$GITHUB_OUTPUT"; fi
+        {
+          echo "## tinygpt eval-gate"
+          echo '```'
+          cat gate-output.txt
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit "$CODE"

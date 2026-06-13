@@ -1,0 +1,2 @@
+{"baseline":true,"harness_version":"bfcl","metric":"accuracy","model_name":"qwen3-4b-base","model_path":"/models/qwen3-4b","model_step":null,"n_examples":200,"run_id":"base-bfcl","score":0.80,"subtask":null,"task":"bfcl","timestamp":"2026-06-13T00:00:00Z","wall_seconds":120.0}
+{"baseline":true,"harness_version":"tau-bench","metric":"pass@1","model_name":"qwen3-4b-base","model_path":"/models/qwen3-4b","model_step":null,"n_examples":100,"run_id":"base-tau","score":0.55,"subtask":null,"task":"tau","timestamp":"2026-06-13T00:00:00Z","wall_seconds":300.0}

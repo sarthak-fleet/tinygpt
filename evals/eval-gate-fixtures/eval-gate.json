@@ -1,0 +1,8 @@
+{
+  "baseline": "evals/eval-gate-fixtures/baseline.jsonl",
+  "default_threshold": 2.0,
+  "suites": [
+    { "name": "bfcl", "task": "bfcl" },
+    { "name": "tau", "task": "tau", "threshold": 3.0 }
+  ]
+}

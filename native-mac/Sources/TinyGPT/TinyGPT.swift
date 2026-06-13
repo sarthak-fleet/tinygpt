@@ -120,6 +120,8 @@ struct TinyGPT {
             Filter.run(args: Array(args.dropFirst()))
         case "eval-compare":
             EvalCompare.run(args: Array(args.dropFirst()))
+        case "eval-gate":
+            EvalGateCommand.run(args: Array(args.dropFirst()))
         case "run-lm-eval":
             RunLmEval.run(args: Array(args.dropFirst()))
         case "eval-mteb":
