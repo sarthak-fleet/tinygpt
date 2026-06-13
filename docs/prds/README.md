@@ -118,7 +118,7 @@ Reframes shipped infra as product surfaces. See `docs/sessions/2026-06-13-market
 
 | PRD | What | Effort |
 |---|---|---|
-| [B32 eval-ci-gate](B32-eval-ci-gate.md) | `tinygpt eval-gate` exits non-zero on regression; GitHub Action + pre-commit recipe | ~2d |
+| [B32 eval-ci-gate](B32-eval-ci-gate.md) | `tinygpt eval-gate` exits non-zero on regression; GitHub Action + pre-commit recipe | 🟡 shipped; live GPU run pending |
 | [B33 laptop-finetune-onboarding](B33-laptop-finetune-onboarding.md) | `tinygpt quickstart <data>` — data → trained specialist in one command (CLI sibling of B6) | ~3d |
 
 ### Tier 5 — research frontier

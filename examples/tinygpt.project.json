@@ -23,5 +23,23 @@
       "id": "hermes-function-calling-v1",
       "optional": false
     }
-  ]
+  ],
+  "eval": {
+    "_doc": "Optional B32 eval-gate spec. `tinygpt eval-gate` reads this as zero-config. threshold/default_threshold are in percentage points; per-suite `command` writes EvalCompare.Row JSONL to $TINYGPT_EVAL_OUT.",
+    "baseline": "evals/baseline.jsonl",
+    "default_threshold": 2.0,
+    "suites": [
+      {
+        "name": "bfcl",
+        "task": "bfcl",
+        "command": ["tinygpt", "eval-bfcl", "model.tinygpt", "--out", "$TINYGPT_EVAL_OUT"]
+      },
+      {
+        "name": "tau",
+        "task": "tau",
+        "threshold": 3.0,
+        "command": ["tinygpt", "eval-tau-bench", "model.tinygpt", "--out", "$TINYGPT_EVAL_OUT"]
+      }
+    ]
+  }
 }
