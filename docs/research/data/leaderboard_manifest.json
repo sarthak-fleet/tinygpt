@@ -1,0 +1,4 @@
+{
+  "_doc": "Manifest for scripts/build_slm_leaderboard.py — one entry per model. Required: label, unhappy_tag OR (bfcl_json AND tau_json AND decode_json). 'params' is display-only. Generate the per-model artifacts via `scripts/eval_slm_full.sh <model-id> <tag>` then append the suggested entry it prints.",
+  "rows": []
+}

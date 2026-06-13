@@ -74,6 +74,36 @@ Workload: prompt=64, gen=64, n=10, warm=2
 | prefill tok/s | 14359.44 | 15048.52 | 15048.52 |
 | peak RSS (MB) | 687.0 | 687.2 | 687.2 |
 
+### Run 5 — gemma-3-12b-it (LM Studio, MLX, ~12B params) — PENDING
+
+Different shape from the from-scratch runs above: external base model served via
+LM Studio + MLX backend. Sets the upper edge of the leaderboard for the v0 SLM
+agentic table (`docs/research/mac_slm_leaderboard_v0.md`). Workload:
+prompt≈64 (default system + user template in `bench_decode.py`), gen=128,
+n=20, warm=3.
+
+Invocation:
+
+```
+lms server start
+lms load google/gemma-3-12b-it --identifier gemma-3-12b-it
+PID=$(pgrep -f 'lmlink-connector.*metal' | head -1)
+python3 scripts/bench_decode.py \
+  --url http://127.0.0.1:1234/v1/chat/completions \
+  --model google/gemma-3-12b-it --rss-pid "$PID" \
+  --jsonl docs/research/data/gemma-12b-decode.jsonl
+```
+
+| metric | median | p95 | p99 |
+|---|---|---|---|
+| TTFT (ms) | TBD | TBD | TBD |
+| ITL (ms) | TBD | TBD | TBD |
+| decode tok/s | TBD | TBD | TBD |
+| peak RSS (MB) | TBD | TBD | TBD |
+
+Paste numbers from `bench_decode.py`'s stdout JSON when the run completes;
+the `--jsonl` row is the input to the SLM leaderboard aggregator.
+
 ## Implications for the cider decision
 
 ### What cider would buy us
