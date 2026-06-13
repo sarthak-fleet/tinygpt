@@ -112,6 +112,15 @@ in `Sources/TinyGPT/TinyGPT.swift`) after reviewing your PR.
 | [B9 energy-per-token](B9-energy-per-token.md) | J/token via powermetrics sidecar; leaderboard column | ~1d |
 | [E6 eval-scaledown](E6-eval-scaledown.md) | wrap ScaleBench into `tinygpt eval-scaledown`; unblocks B25 | ~half-day |
 
+### Market-landscape positioning (Tier B)
+
+Reframes shipped infra as product surfaces. See `docs/sessions/2026-06-13-market-landscape-mac-first.md`.
+
+| PRD | What | Effort |
+|---|---|---|
+| [B32 eval-ci-gate](B32-eval-ci-gate.md) | `tinygpt eval-gate` exits non-zero on regression; GitHub Action + pre-commit recipe | ~2d |
+| [B33 laptop-finetune-onboarding](B33-laptop-finetune-onboarding.md) | `tinygpt quickstart <data>` — data → trained specialist in one command (CLI sibling of B6) | ~3d |
+
 ### Tier 5 — research frontier
 
 | PRD | What | Order |
