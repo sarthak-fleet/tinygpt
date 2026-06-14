@@ -42,6 +42,8 @@ current LLMs. They're for someone who knows the basics and wants the
 - [App Intents comparison](./app-intents-comparison.md) — how Pace's action surface relates to macOS App Intents
 - [Agent context as a memory hierarchy](./agent-context-hierarchy.md) — the L1/L2/L3 framing for agent context engineering, and the steals it produced (eval failure triage, E9 prompt-tiering A/B, B26 deferred tools)
 - [Castform's RL fine-tune platform — what we stole](./castform-rl-finetune.md) — composite reward functions (B28), trace-driven data synthesis (B29), reasoning-depth classification (B30)
+- [Tool-calling: how close can a Mac-local small model get to frontier?](./tool-calling-frontier-parity.md) — broken-eval → frontier-validated BFCL gate, the honest size curve, the distillation result (1.7B avg 56→76), and where RL takes over
+- [Small-model tool-calling: the SOTA playbook (what others do)](./small-model-tool-calling-playbook.md) — survey of data synthesis, SFT tricks (function masking), RL (ToolRL graded reward, DAPO), eval traps, and on-device serving, with a prioritized steal list
 - [Model vs agent — what's actually different](./model-vs-agent.md) — the architectural distinction; "what makes a model into an agent" beyond tools + loop; mapped onto this repo's layers
 - [Competitive landscape (2026)](./competitive-landscape.md) — map of fine-tune + eval + interp players, the Mac-first whitespace, and the consolidation signal
 - [External references](./external-references.md) — papers, blog posts, code-base reading list

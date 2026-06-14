@@ -193,3 +193,54 @@ One real-hardware pair (WebGPU + WASM-SIMD) closes the evidence gap this doc
 currently flags. Multiple pairs across vendors (Apple, NVIDIA discrete, Intel
 integrated, AMD) would let the WebGPU section quote a range instead of a
 single anecdotal number.
+
+## Register + cache-blocked matmul — and why the microbench lied (2026-06-14)
+
+`wasm/src/matmul.cpp` `matmul_forward` was rewritten from the naive ikn loop to a
+register-blocked (MR×NR C-tile in registers, B reused across rows) + cache-blocked
+(KC/NC panels resident in L2) micro-kernel. The k-accumulation order is preserved,
+so it is **bit-identical** to the naive kernel — the native parity gate
+(`wasm/build_native.sh`) passes with zero drift.
+
+**The cautionary result.** An isolated, single-threaded native microbench
+(`clang++ -O3`) showed **3–4×** on 256³–1024³ matmuls. But the clean end-to-end WASM
+*training* A/B (`tests/bench_wasm.mjs`, idle CPU) was only **~1.03–1.06×**:
+
+| config | naive ms/step | blocked ms/step | speedup |
+|---|---|---|---|
+| small 0.37M | 99.2 | 94.0 | 1.06× |
+| medium 0.84M | 352.8 | 334.0 | 1.06× |
+| large 2.74M | 1182.6 | 1152.7 | 1.03× |
+| xl 6.42M | 1850.2 | 1800.0 | 1.03× |
+
+Why the gap between microbench and reality:
+1. The WASM build is **8-threaded** — the naive matmul is already split across cores,
+   so it isn't the single-threaded bottleneck the microbench measured.
+2. emcc **already autovectorizes** the naive kernel (`-msimd128`); the prior "1.6×
+   SIMD" was already banked.
+3. **Only `matmul_forward` was optimized.** A *training* step is dominated by
+   `matmul_backward` (dA + dB ≈ 2× the forward FLOPs), still naive — so the training
+   bench barely moves.
+
+**Kept anyway**, because the browser's product path is *inference*: token-by-token
+generation uses M=1, which takes the single-threaded path (`MIN_M_FOR_THREADS=64`),
+where the 3–4× per-token matmul win applies in full. The change is bit-exact and
+free of downside. Lesson worth keeping: *measure on the real workload (threaded,
+real model sizes, forward+backward), not an isolated microbench.*
+
+**Backward pass too (2026-06-14).** `backward_dA` (dA = dC·Bᵀ, a dot-product per
+output) was register-blocked KR=4 k-rows per pass so `dc_row[n]` is loaded once and
+reused across 4 dot-products (was re-streamed per k). Same n-order → bit-identical
+(native gate passes). Since a *training* step is dominated by backward (dA + dB ≈ 2×
+forward FLOPs), this roughly **doubled** the end-to-end training speedup:
+
+| config | naive | fwd-blocked | **fwd+bwd-blocked** |
+|---|---|---|---|
+| small 0.37M | 99.2 | 94.0 | **90.3** |
+| medium 0.84M | 352.8 | 334.0 | **317.6** |
+| large 2.74M | 1182.6 | 1152.7 | **1057.4** |
+| xl 6.42M | 1850.2 | 1800.0 | **1643.6** |
+
+End-to-end WASM training is now **~1.10–1.13× over naive** (was ~1.05× forward-only).
+`backward_dB` is already SAXPY-autovectorized; blocking it (rank-1 update over m) is
+the remaining increment.
