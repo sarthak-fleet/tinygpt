@@ -1,0 +1,261 @@
+---
+import Default from "../layouts/Default.astro";
+
+const layoutProps = {
+  title: "TinyGPT — in-browser inference",
+  description:
+    "Run real LLMs fully client-side in your browser via WebGPU (transformers.js). Pull any ONNX model from Hugging Face by id, or pick a curated one — no server, no upload, weights stay on your machine.",
+  ogType: "website",
+  ogTitle: "Run an LLM in your browser — no server",
+  ogDescription:
+    "Client-side WebGPU inference. Pull a model from Hugging Face and chat with it; the weights never leave your device.",
+  twitterTitle: "In-browser LLM inference (WebGPU)",
+  twitterDescription:
+    "Pull a Hugging Face model and run it client-side via WebGPU. No server.",
+  themeColor: "#08090a",
+};
+
+// Curated models known to run under transformers.js + WebGPU (onnx-community
+// exports). The "custom" path lets the user pull ANY HF repo that ships an
+// onnx/ folder. The A1 entry is wired but disabled until the trained
+// tool-caller is exported to ONNX (Phase 2 — gated on the eval verdict).
+const CURATED = [
+  { id: "onnx-community/Qwen2.5-0.5B-Instruct", label: "Qwen2.5-0.5B-Instruct (~0.5 GB q4) — fast", dtype: "q4f16" },
+  { id: "HuggingFaceTB/SmolLM2-1.7B-Instruct", label: "SmolLM2-1.7B-Instruct (~1.1 GB q4)", dtype: "q4f16" },
+  { id: "onnx-community/Qwen2.5-1.5B-Instruct", label: "Qwen2.5-1.5B-Instruct (~1 GB q4)", dtype: "q4f16" },
+  { id: "onnx-community/Llama-3.2-1B-Instruct-ONNX", label: "Llama-3.2-1B-Instruct (~0.9 GB q4)", dtype: "q4f16" },
+];
+
+const pageStyle = `
+:root{color-scheme:dark;--base:#08090a;--panel:#0d0e10;--panel-2:#141518;--line:#1d1f23;--line-strong:#2c2f35;--fg:#e7e8ea;--muted:#9296a0;--faint:#787d88;--accent:#48e5c2;--accent-dim:#1f6f5f;--gold:#f5b14a;--err:#ff6b6b;}
+*{box-sizing:border-box}
+.wrap{max-width:880px;margin:0 auto;padding:32px 20px 80px}
+h1{font-size:1.6rem;margin:0 0 6px}
+.sub{color:var(--muted);margin:0 0 24px;line-height:1.5}
+.sub code{color:var(--accent)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+label{display:block;font-size:.8rem;color:var(--muted);margin:0 0 6px;text-transform:uppercase;letter-spacing:.04em}
+select,input,textarea,button{font:inherit;color:var(--fg);background:var(--panel-2);border:1px solid var(--line-strong);border-radius:8px;padding:10px 12px;width:100%}
+textarea{min-height:84px;resize:vertical}
+.row{display:flex;gap:12px;flex-wrap:wrap}
+.row>*{flex:1;min-width:180px}
+button{cursor:pointer;background:var(--accent-dim);border-color:var(--accent);color:#eafff9;font-weight:600;width:auto;padding:10px 20px}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.ghost{background:var(--panel-2);border-color:var(--line-strong);color:var(--muted);font-weight:500}
+.status{font-size:.85rem;color:var(--muted);min-height:1.2em;margin-top:10px}
+.status.err{color:var(--err)}
+.bar{height:6px;background:var(--panel-2);border-radius:3px;overflow:hidden;margin-top:8px}
+.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+#out{white-space:pre-wrap;line-height:1.55;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:14px;min-height:120px;margin-top:14px;font-size:.95rem}
+.meta{display:flex;gap:16px;color:var(--faint);font-size:.8rem;margin-top:8px}
+.adv{margin-top:12px}
+.adv summary{cursor:pointer;color:var(--muted);font-size:.85rem}
+.note{color:var(--faint);font-size:.8rem;margin-top:6px;line-height:1.5}
+`;
+---
+
+<Default {...layoutProps}>
+  <style set:html={pageStyle}></style>
+  <div class="wrap">
+    <h1>Run an LLM in your browser</h1>
+    <p class="sub">
+      Fully client-side inference via <strong>WebGPU</strong> (transformers.js).
+      Pick a model or pull any Hugging Face repo that ships an <code>onnx/</code>
+      folder. Weights download to your machine and run locally — no server, no
+      upload. First load downloads the model (cached after).
+    </p>
+
+    <div class="panel">
+      <label for="model">Model</label>
+      <div class="row">
+        <select id="model">
+          {CURATED.map((m) => <option value={m.id} data-dtype={m.dtype}>{m.label}</option>)}
+          <option value="__a1__" disabled>A1 tool-caller — available after training + ONNX export</option>
+          <option value="__custom__">Custom: pull from Hugging Face by id…</option>
+        </select>
+        <select id="device">
+          <option value="webgpu">WebGPU (GPU, fast)</option>
+          <option value="wasm">WASM (CPU fallback)</option>
+        </select>
+      </div>
+      <details class="adv" id="customWrap">
+        <summary>Custom Hugging Face model</summary>
+        <div style="margin-top:10px">
+          <input id="customId" placeholder="e.g. onnx-community/gemma-3-1b-it-ONNX" />
+          <p class="note">
+            Must be a repo with an <code>onnx/</code> folder (transformers.js format).
+            Browse <a href="https://huggingface.co/models?library=transformers.js" target="_blank" rel="noopener" style="color:var(--accent)">transformers.js models</a>.
+            Big models (&gt;~2 GB) may exhaust browser memory.
+          </p>
+        </div>
+      </details>
+      <div style="margin-top:14px">
+        <button id="load">Load model</button>
+        <span class="status" id="loadStatus"></span>
+        <div class="bar"><i id="loadBar"></i></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" placeholder="Ask anything…">List three uses for a paperclip.</textarea>
+      <div class="row" style="margin-top:12px">
+        <div>
+          <label for="temp">Temperature</label>
+          <input id="temp" type="number" min="0" max="2" step="0.1" value="0.7" />
+        </div>
+        <div>
+          <label for="maxtok">Max new tokens</label>
+          <input id="maxtok" type="number" min="16" max="2048" step="16" value="256" />
+        </div>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+        <button id="gen" disabled>Generate</button>
+        <button id="stop" class="ghost" disabled>Stop</button>
+        <span class="status" id="genStatus"></span>
+      </div>
+      <div id="out"></div>
+      <div class="meta">
+        <span id="tps"></span>
+        <span id="ttft"></span>
+      </div>
+    </div>
+
+    <p class="note">
+      How it works: transformers.js loads ONNX weights from the Hugging Face hub
+      and runs them through the ONNX Runtime Web WebGPU backend, entirely in this
+      tab. The repo's own hand-written WebGPU kernels (the
+      <a href="/playground" style="color:var(--accent)">playground</a>) run the
+      tiny from-scratch models; this page runs real pretrained LLMs.
+    </p>
+  </div>
+
+  <script>
+    // transformers.js v3 via CDN (avoids bundling the ONNX-runtime wasm).
+    const TX = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5";
+
+    const $ = (id: string) => document.getElementById(id)!;
+    const modelSel = $("model") as HTMLSelectElement;
+    const deviceSel = $("device") as HTMLSelectElement;
+    const customWrap = $("customWrap") as HTMLDetailsElement;
+    const customId = $("customId") as HTMLInputElement;
+    const loadBtn = $("load") as HTMLButtonElement;
+    const genBtn = $("gen") as HTMLButtonElement;
+    const stopBtn = $("stop") as HTMLButtonElement;
+    const loadStatus = $("loadStatus");
+    const genStatus = $("genStatus");
+    const loadBar = $("loadBar") as HTMLElement;
+    const out = $("out");
+    const tpsEl = $("tps");
+    const ttftEl = $("ttft");
+
+    let generator: any = null;
+    let TextStreamer: any = null;
+    let loadedId = "";
+    let stopFlag = false;
+
+    function setLoadStatus(msg: string, err = false) {
+      loadStatus.textContent = msg;
+      loadStatus.classList.toggle("err", err);
+    }
+    function resolveModel(): { id: string; dtype: string } {
+      if (modelSel.value === "__custom__") {
+        return { id: customId.value.trim(), dtype: "q4f16" };
+      }
+      const opt = modelSel.selectedOptions[0];
+      return { id: modelSel.value, dtype: opt?.dataset.dtype || "q4f16" };
+    }
+
+    modelSel.addEventListener("change", () => {
+      customWrap.open = modelSel.value === "__custom__";
+    });
+
+    loadBtn.addEventListener("click", async () => {
+      const { id, dtype } = resolveModel();
+      if (!id) { setLoadStatus("Enter a Hugging Face model id.", true); return; }
+      if (!(navigator as any).gpu && deviceSel.value === "webgpu") {
+        setLoadStatus("WebGPU unavailable in this browser — switch device to WASM.", true);
+        return;
+      }
+      loadBtn.disabled = true; genBtn.disabled = true;
+      setLoadStatus(`Loading ${id}… (first time downloads weights)`);
+      loadBar.style.width = "0%";
+      try {
+        const { pipeline, TextStreamer: TS, env } = await import(/* @vite-ignore */ TX);
+        TextStreamer = TS;
+        env.allowLocalModels = false; // always pull from the HF hub
+        generator = await pipeline("text-generation", id, {
+          device: deviceSel.value,
+          dtype,
+          progress_callback: (p: any) => {
+            if (p.status === "progress" && p.total) {
+              const pct = Math.round((p.loaded / p.total) * 100);
+              loadBar.style.width = pct + "%";
+              setLoadStatus(`Downloading ${p.file?.split("/").pop() ?? ""} — ${pct}%`);
+            } else if (p.status === "ready") {
+              setLoadStatus("");
+            }
+          },
+        });
+        loadedId = id;
+        loadBar.style.width = "100%";
+        setLoadStatus(`Ready: ${id} on ${deviceSel.value.toUpperCase()}.`);
+        genBtn.disabled = false;
+      } catch (e: any) {
+        setLoadStatus(`Load failed: ${e?.message ?? e}. (If it's a CORS/COEP error, the model couldn't be fetched cross-origin.)`, true);
+        generator = null;
+      } finally {
+        loadBtn.disabled = false;
+      }
+    });
+
+    genBtn.addEventListener("click", async () => {
+      if (!generator) return;
+      stopFlag = false;
+      genBtn.disabled = true; stopBtn.disabled = false;
+      out.textContent = ""; tpsEl.textContent = ""; ttftEl.textContent = "";
+      genStatus.textContent = "Generating…";
+
+      const prompt = ($("prompt") as HTMLTextAreaElement).value;
+      const temperature = parseFloat(($("temp") as HTMLInputElement).value) || 0.7;
+      const max_new_tokens = parseInt(($("maxtok") as HTMLInputElement).value) || 256;
+      const messages = [{ role: "user", content: prompt }];
+
+      let nTokens = 0;
+      const t0 = performance.now();
+      let tFirst = 0;
+      const streamer = new TextStreamer((generator as any).tokenizer, {
+        skip_prompt: true,
+        skip_special_tokens: true,
+        callback_function: (text: string) => {
+          if (stopFlag) return;
+          if (!tFirst) { tFirst = performance.now(); ttftEl.textContent = `TTFT ${Math.round(tFirst - t0)} ms`; }
+          out.textContent += text;
+          nTokens++;
+          const secs = (performance.now() - (tFirst || t0)) / 1000;
+          if (secs > 0) tpsEl.textContent = `${(nTokens / secs).toFixed(1)} tok/s`;
+        },
+      });
+
+      try {
+        await generator(messages, {
+          max_new_tokens,
+          do_sample: temperature > 0,
+          temperature: temperature > 0 ? temperature : undefined,
+          streamer,
+        });
+        genStatus.textContent = "Done.";
+      } catch (e: any) {
+        genStatus.textContent = `Error: ${e?.message ?? e}`;
+      } finally {
+        genBtn.disabled = false; stopBtn.disabled = true;
+      }
+    });
+
+    stopBtn.addEventListener("click", () => {
+      stopFlag = true;
+      genStatus.textContent = "Stopped (current request finishes in the background).";
+      stopBtn.disabled = true;
+    });
+  </script>
+</Default>

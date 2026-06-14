@@ -12,6 +12,20 @@
   Cross-Origin-Embedder-Policy: require-corp
   Cross-Origin-Resource-Policy: same-origin
 
+# /inference runs transformers.js, which fetches model weights + the ONNX
+# runtime wasm cross-origin (Hugging Face hub + jsDelivr). require-corp blocks
+# those unless the origin sends CORP, which they don't reliably do.
+# `credentialless` keeps the page cross-origin-isolated (SharedArrayBuffer
+# stays available for ORT threads in Chromium) while allowing cross-origin
+# no-CORP subresource loads. WebGPU is Chromium-first anyway, where
+# credentialless is supported.
+/inference
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
+/inference.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
+
 # The compiled WASM module + glue need to be loadable across this isolated
 # context. Public/ ships them as-is; they're our own assets so cors is fine.
 /tinygpt.js
