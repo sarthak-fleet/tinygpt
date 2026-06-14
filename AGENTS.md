@@ -40,6 +40,43 @@ How this shapes the work:
 > Owner preference: durable goal/context like this lives **here in AGENTS.md**
 > (owner-readable, version-controlled), not in agent-private memory.
 
+## Eval philosophy (owner's call — recorded 2026-06-14)
+
+**The goal is not to *beat* frontier models — it's to *reach frontier capability
+at a fraction of the cost* (compute, RAM, $).** Frontier is the capability
+*ceiling we approach cheaply*, not an opponent. So the headline metric for any
+Mac model is "% of frontier capability retained per unit of compute/RAM," not
+raw accuracy in isolation.
+
+This makes frontier models the **calibration anchor for every benchmark**:
+
+- **Frontier-ceiling gate.** Before any benchmark is used to grade Mac models, a
+  frontier model (strongest authed teacher available — `claude -p`, or the
+  `free-ai` gateway when keyed) must score **~100%** on it. If frontier can't ace
+  it, the benchmark is broken — **fix or drop it; never report Mac-model accuracy
+  on it.** Rationale: an eval that penalizes a frontier model's correct-or-better
+  answers will penalize our small models the same way — we'd be optimizing
+  against noise, and any "gap" we measure is the ruler, not the model.
+- **Why this is load-bearing:** the hermes-fc tool-call set fails this gate hard —
+  frontier scored ~12% on its difficult cases because ~29% of golds are
+  *ungroundable* (device IDs, txn codes, JSON payloads, even a literal
+  `unique_nft_identifier` placeholder that appear nowhere in the prompt), and the
+  frontier answers were often *more* correct than the gold. Hard exact-match
+  ceiling ≈71%. → hermes-fc is **training-only**; never a reported metric.
+- **What passes:** BFCL (AST matching, verified-groundable golds) — frontier aces
+  it, so 80–90% is a real, reachable target there and a measured Mac-vs-frontier
+  cost ratio is meaningful. Prefer benchmarks with verified golds + AST/semantic
+  matching + per-call partial credit over single-reference exact-string match.
+- **Tool-calling target (owner, 2026-06-14): smallest model that reaches
+  frontier-parity, not the biggest available.** Push the **1.7B** as far as it
+  goes first; step up to **4B only if 1.7B plateaus below the bar**. Reference
+  points (BFCL slice, this harness): frontier (Claude) ~99%; **30B-A3B local ≈
+  frontier on multi-call** (parallel/parallel_multiple ~96%, only ~3B active
+  params — the cost-compression proof); distilled 1.7B ~60–84% single/multi-call
+  but ~24% on `live_multiple` (real-user, many-distractor function *selection* is
+  the genuine gap — attack via multi-call/selection distillation data or GRPO with
+  the AST matcher as the verifiable reward, not raw size).
+
 ## Working rules specific to this repo
 
 - **Respect the build order.** Python reference → WASM → WebGPU. Do not implement a
@@ -52,6 +89,26 @@ How this shapes the work:
   docs should reference them rather than restating numbers.
 - **Stubs.** Code files are currently documented stubs. When implementing one, follow
   the interface described in its header and the linked `docs/` section.
+- **Steal first, improve where we can (standing policy, reaffirmed 2026-06-14).**
+  Default to adopting the best existing tool / benchmark / kernel / library rather
+  than rebuilding it; only hand-roll when nothing good exists or we can measurably
+  beat it. (Why: limited Mac compute — spend effort on the deltas that matter, not
+  reinventing solved problems. E.g. use BFCL's scorer, MLX's QuantizedLinear, the
+  Rust `tokenizers` crate — don't reimplement them.)
+- **Best tool for the job (owner pref, 2026-06-14).** Use the ultimate best tool for
+  each task that runs on this Mac — **Go is in the set** alongside C/C++, Rust,
+  hand-written Metal, Swift+MLX, PyTorch (MPS), Accelerate/vDSP. **CUDA is dropped
+  for now** — not available on this Apple-Silicon host; it only re-enters when
+  boundary-mapping the distributed/cluster side or future non-Mac scale.
+- **Performance latitude.** Once correctness is established (reference path passes
+  its gates), hot paths MAY drop to a faster language where it *measurably* boosts
+  performance. Keep the readable reference impl as the correctness oracle; the fast
+  path must match it numerically. Pick the lever by bottleneck: compute-bound local
+  math → Metal/MLX/SIMD-C/Rust; **eval/orchestration speed is I/O- and model-bound
+  → the win is parallelism + batching + a warm model server, NOT the orchestration
+  language.** A Go (or Rust) concurrent driver only pays off once an eval becomes a
+  high-throughput, server-hammering harness; for small slices, async fan-out in the
+  existing language gets the same speedup with no rewrite.
 
 ## Layout
 

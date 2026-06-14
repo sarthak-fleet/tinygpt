@@ -40,17 +40,72 @@ static int chosen_threads(int M) {
 
 // ---------------------------------------------------------------------------
 // C = A @ B    A:[M,K]  B:[K,N]  C:[M,N]
-// ---------------------------------------------------------------------------
+//
+// Register- + cache-blocked. An MR×NR tile of C is held in registers and a B
+// value is reused across MR rows, lifting the kernel from memory-bandwidth-bound
+// toward compute-bound (the autovectoriser then fills NR with SIMD lanes). KC/NC
+// keep the active B panel [KC×NC] resident in L2 across the M sweep. For any
+// fixed (m,n) the k-accumulation still runs k = 0..K-1 in order, so the result
+// is BIT-IDENTICAL to the naive ikn loop — the parity gate sees zero drift.
+// (~3-4× over the naive kernel natively; see docs/performance.md.)
+static constexpr int MR = 4;     // C-tile rows held in registers
+static constexpr int NR = 16;    // C-tile cols (4 SIMD lanes × 4)
+static constexpr int KC = 256;   // K-panel (B panel height)
+static constexpr int NC = 256;   // N-panel (B panel width) — [KC×NC] ≈ 256 KB fits L2
+
 static void matmul_forward_serial(const float* A, const float* B, float* C,
                                    int m_lo, int m_hi, int K, int N) {
+  // Micro-kernels accumulate into C across k-panels, so zero the slice first.
   for (int m = m_lo; m < m_hi; ++m) {
     float* c_row = C + static_cast<long>(m) * N;
     for (int n = 0; n < N; ++n) c_row[n] = 0.0f;
-    const float* a_row = A + static_cast<long>(m) * K;
-    for (int k = 0; k < K; ++k) {
-      const float a = a_row[k];
-      const float* b_row = B + static_cast<long>(k) * N;
-      for (int n = 0; n < N; ++n) c_row[n] += a * b_row[n];
+  }
+  const int m_full = m_lo + ((m_hi - m_lo) / MR) * MR;  // last MR-aligned row
+  for (int n0 = 0; n0 < N; n0 += NC) {
+    const int nmax = (n0 + NC < N) ? n0 + NC : N;
+    for (int k0 = 0; k0 < K; k0 += KC) {
+      const int kmax = (k0 + KC < K) ? k0 + KC : K;
+      // Full MR×NR register tiles.
+      for (int m = m_lo; m < m_full; m += MR) {
+        int n = n0;
+        for (; n + NR <= nmax; n += NR) {
+          float acc[MR][NR];
+          for (int i = 0; i < MR; ++i) {
+            const float* c = C + static_cast<long>(m + i) * N + n;
+            for (int j = 0; j < NR; ++j) acc[i][j] = c[j];
+          }
+          for (int k = k0; k < kmax; ++k) {
+            const float* b = B + static_cast<long>(k) * N + n;
+            const float a0 = A[static_cast<long>(m + 0) * K + k];
+            const float a1 = A[static_cast<long>(m + 1) * K + k];
+            const float a2 = A[static_cast<long>(m + 2) * K + k];
+            const float a3 = A[static_cast<long>(m + 3) * K + k];
+            for (int j = 0; j < NR; ++j) {
+              const float bv = b[j];
+              acc[0][j] += a0 * bv; acc[1][j] += a1 * bv;
+              acc[2][j] += a2 * bv; acc[3][j] += a3 * bv;
+            }
+          }
+          for (int i = 0; i < MR; ++i) {
+            float* c = C + static_cast<long>(m + i) * N + n;
+            for (int j = 0; j < NR; ++j) c[j] = acc[i][j];
+          }
+        }
+        // N remainder (< NR) for this MR row group.
+        for (; n < nmax; ++n)
+          for (int i = 0; i < MR; ++i) {
+            float s = C[static_cast<long>(m + i) * N + n];
+            for (int k = k0; k < kmax; ++k) s += A[static_cast<long>(m + i) * K + k] * B[static_cast<long>(k) * N + n];
+            C[static_cast<long>(m + i) * N + n] = s;
+          }
+      }
+      // M remainder rows (< MR).
+      for (int m = m_full; m < m_hi; ++m)
+        for (int n = n0; n < nmax; ++n) {
+          float s = C[static_cast<long>(m) * N + n];
+          for (int k = k0; k < kmax; ++k) s += A[static_cast<long>(m) * K + k] * B[static_cast<long>(k) * N + n];
+          C[static_cast<long>(m) * N + n] = s;
+        }
     }
   }
 }
@@ -81,13 +136,30 @@ WASM_EXPORT void matmul_forward(const float* A, const float* B, float* C,
 // dA: each row dA[m,:] is independent — splittable like forward.
 // dB: each cell dB[k,n] accumulates over m. Per-thread scratch + reduction.
 // ---------------------------------------------------------------------------
+// dA[m,k] = sum_n dC[m,n]·B[k,n]. Register-block KR k-rows per pass so dc_row[n]
+// is loaded once and reused across KR dot-products (was re-streamed per k). Same
+// n-order accumulation → bit-identical to the naive reduction.
+static constexpr int KR = 4;
 static void backward_dA_serial(const float* B, const float* dC, float* dA,
                                 int m_lo, int m_hi, int K, int N) {
+  const int k_full = (K / KR) * KR;
   for (int m = m_lo; m < m_hi; ++m) {
     float* da_row = dA + static_cast<long>(m) * K;
-    for (int k = 0; k < K; ++k) da_row[k] = 0.0f;
     const float* dc_row = dC + static_cast<long>(m) * N;
-    for (int k = 0; k < K; ++k) {
+    int k = 0;
+    for (; k < k_full; k += KR) {
+      const float* b0 = B + static_cast<long>(k + 0) * N;
+      const float* b1 = B + static_cast<long>(k + 1) * N;
+      const float* b2 = B + static_cast<long>(k + 2) * N;
+      const float* b3 = B + static_cast<long>(k + 3) * N;
+      float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+      for (int n = 0; n < N; ++n) {
+        const float dn = dc_row[n];
+        a0 += dn * b0[n]; a1 += dn * b1[n]; a2 += dn * b2[n]; a3 += dn * b3[n];
+      }
+      da_row[k + 0] = a0; da_row[k + 1] = a1; da_row[k + 2] = a2; da_row[k + 3] = a3;
+    }
+    for (; k < K; ++k) {  // remainder k
       const float* b_row = B + static_cast<long>(k) * N;
       float acc = 0.0f;
       for (int n = 0; n < N; ++n) acc += dc_row[n] * b_row[n];
