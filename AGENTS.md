@@ -10,6 +10,36 @@ A **learning project**, not a deployed product: build a browser-capable TinyGPT 
 trains from scratch and adapts a small base model with LoRA. Priority is correctness
 and understanding over output quality or shipping.
 
+## North-star (owner's goal — recorded 2026-06-14)
+
+The owner is **not** trying to win at the large-scale / frontier paradigm — no
+money, no compute, and that's fully accepted. The actual goal:
+
+1. **Win on the Mac** — be best-in-class at Mac-local AI specifically.
+2. **Learn the whole space like a sponge** — including the *single-machine ↔
+   distributed boundary*: what a cluster/distributed system can do that one Mac
+   can't, and the physics + economics of why.
+3. **Build everything that's buildable on a Mac** — "if it can be built on this
+   Mac, build it."
+4. **Position for the future** — get the foundation, knowledge, and assets done
+   now, so when money/opportunity to expand arrives we scale from a running start.
+
+How this shapes the work:
+- Value **completeness, depth, and learning as first-class outcomes**, not only
+  commercial ROI. Coverage of the Mac-local surface IS the goal.
+- Treat "failed" experiments as **learning wins** — e.g., A1 (a fine-tune not
+  beating the base) mapped the fine-tuning frontier; the distillation result (a
+  0.6B matching a 4B at 1/7th size on tool-calling) is a validated recipe.
+- The eval/judgment "turnaround" is *one* valuable piece, not the sole focus —
+  don't over-narrow to a single commercial niche.
+- When scaled/distributed approaches come up (Prime Intellect, oMLX, teale),
+  explaining them is **boundary-mapping**, not a detour.
+- Tactically, ROI-scope per task still applies; strategically the north-star is
+  comprehensive Mac mastery + future optionality.
+
+> Owner preference: durable goal/context like this lives **here in AGENTS.md**
+> (owner-readable, version-controlled), not in agent-private memory.
+
 ## Working rules specific to this repo
 
 - **Respect the build order.** Python reference → WASM → WebGPU. Do not implement a

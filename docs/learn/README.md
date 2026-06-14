@@ -7,6 +7,8 @@ description: TinyGPT's learning corpus — a ground-up curriculum from "what's a
 
 A reading map for the `docs/learn/` directory. Three reading paths depending on what you want.
 
+**Start here:** [Mac-local AI mastery map](./mac-mastery-map.md) — the living agenda: everything buildable on a Mac, what's already covered, and the single-machine ↔ distributed boundary. The spine for "learn everything + build everything buildable on this Mac."
+
 ## I want to learn ML from scratch
 
 Read these in order — the curriculum is designed as a single arc from
